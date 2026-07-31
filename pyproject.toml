@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "drone-mission-planner"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fully local multi-UAV mission planning and dynamic simulation desktop application"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -56,4 +56,3 @@ exclude = ["build", "dist", "artifacts"]
 [[tool.mypy.overrides]]
 module = ["PySide6.*", "pyqtgraph.*"]
 ignore_missing_imports = true
-

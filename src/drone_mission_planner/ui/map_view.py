@@ -25,7 +25,14 @@ from PySide6.QtWidgets import (
 )
 
 from drone_mission_planner.domain.geometry import Point
-from drone_mission_planner.domain.models import BaseStation, Drone, MapModel, MissionTask, Obstacle
+from drone_mission_planner.domain.models import (
+    BaseStation,
+    Drone,
+    MapModel,
+    MissionTask,
+    NoFlyZone,
+    Obstacle,
+)
 
 
 class ToolMode(StrEnum):
@@ -33,13 +40,14 @@ class ToolMode(StrEnum):
     BASE = "base"
     DRONE = "drone"
     OBSTACLE = "obstacle"
+    NO_FLY = "no_fly"
     TASK = "task"
     DELETE = "delete"
 
 
 class MapView(QGraphicsView):
     create_point_requested = Signal(str, float, float)
-    create_rect_requested = Signal(float, float, float, float)
+    create_rect_requested = Signal(str, float, float, float, float)
     object_selected = Signal(str)
     delete_requested = Signal(str)
     coordinates_changed = Signal(float, float)
@@ -97,6 +105,11 @@ class MapView(QGraphicsView):
         self._scene.clear()
         for obstacle in self._model.obstacles:
             self._add_obstacle_item(obstacle)
+        for zone in self._model.no_fly_zones:
+            self._add_no_fly_item(zone)
+        for index, drone in enumerate(self._model.drones):
+            if drone.planned_path:
+                self._add_route(drone, index)
         for base in self._model.bases:
             self._add_base_item(base)
         for task in self._model.tasks:
@@ -177,7 +190,7 @@ class MapView(QGraphicsView):
                 self.create_point_requested.emit(self._mode.value, world.x, world.y)
                 event.accept()
                 return
-            if self._mode == ToolMode.OBSTACLE:
+            if self._mode in {ToolMode.OBSTACLE, ToolMode.NO_FLY}:
                 self._drag_origin = QPointF(world.x, world.y)
                 self._preview = self._scene.addRect(
                     QRectF(self._drag_origin, self._drag_origin),
@@ -228,7 +241,9 @@ class MapView(QGraphicsView):
             self._preview = None
             self._drag_origin = None
             if rect.width() >= 5 and rect.height() >= 5:
-                self.create_rect_requested.emit(rect.x(), rect.y(), rect.width(), rect.height())
+                self.create_rect_requested.emit(
+                    self._mode.value, rect.x(), rect.y(), rect.width(), rect.height()
+                )
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -308,3 +323,44 @@ class MapView(QGraphicsView):
         self._tag(item, obstacle.id)
         self._scene.addItem(item)
         self._add_label(obstacle.id, bounds.x + 6, bounds.y + 5, "#ff9aa6")
+
+    def _add_no_fly_item(self, zone: NoFlyZone) -> None:
+        bounds = zone.bounds.normalized
+        item = QGraphicsRectItem(bounds.x, bounds.y, bounds.width, bounds.height)
+        item.setPen(QPen(QColor("#c77dff"), 2, Qt.PenStyle.DashLine))
+        item.setBrush(QColor(100, 45, 135, 100))
+        self._tag(item, zone.id)
+        self._scene.addItem(item)
+        self._add_label(zone.id, bounds.x + 6, bounds.y + 5, "#dda8ff")
+
+    def _add_route(self, drone: Drone, index: int) -> None:
+        if len(drone.planned_path) < 2:
+            return
+        colors = ["#4d8df7", "#55d6be", "#f9ca5b", "#c77dff", "#ff7a90"]
+        route = QPainterPath(QPointF(drone.planned_path[0].x, drone.planned_path[0].y))
+        for point in drone.planned_path[1:]:
+            route.lineTo(point.x, point.y)
+        halo = QGraphicsPathItem(route)
+        halo.setPen(
+            QPen(
+                QColor(7, 12, 20, 210),
+                6.5,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        halo.setZValue(-1)
+        self._scene.addItem(halo)
+        item = QGraphicsPathItem(route)
+        item.setPen(
+            QPen(
+                QColor(colors[index % len(colors)]),
+                2.8,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        item.setZValue(0)
+        self._scene.addItem(item)

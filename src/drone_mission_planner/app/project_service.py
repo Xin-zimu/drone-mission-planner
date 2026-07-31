@@ -10,6 +10,7 @@ from drone_mission_planner.domain.models import (
     Drone,
     MapObject,
     MissionTask,
+    NoFlyZone,
     Obstacle,
     ProjectModel,
 )
@@ -24,13 +25,19 @@ class ProjectService:
         self.project = ProjectModel()
         self.path: Path | None = None
         self.dirty = False
-        self._counters: dict[str, int] = {"base": 0, "drone": 0, "obstacle": 0, "task": 0}
+        self._counters: dict[str, int] = {
+            "base": 0,
+            "drone": 0,
+            "obstacle": 0,
+            "no_fly": 0,
+            "task": 0,
+        }
 
     def new_project(self, name: str = "Untitled mission") -> ProjectModel:
         self.project = ProjectModel(name=name)
         self.path = None
         self.dirty = False
-        self._counters = {"base": 0, "drone": 0, "obstacle": 0, "task": 0}
+        self._counters = {"base": 0, "drone": 0, "obstacle": 0, "no_fly": 0, "task": 0}
         return self.project
 
     def load(self, path: str | Path) -> ProjectModel:
@@ -77,6 +84,13 @@ class ProjectService:
         self.dirty = True
         return item
 
+    def add_no_fly_zone(self, bounds: Rect) -> NoFlyZone:
+        index = self._next("no_fly")
+        item = NoFlyZone(f"N-{index:02d}", f"No-fly zone {index}", bounds=bounds.normalized)
+        self.project.map.no_fly_zones.append(item)
+        self.dirty = True
+        return item
+
     def remove(self, object_id: str) -> MapObject | None:
         removed = self.project.map.remove(object_id)
         if removed is not None:
@@ -103,5 +117,6 @@ class ProjectService:
             "base": len(self.project.map.bases),
             "drone": len(self.project.map.drones),
             "obstacle": len(self.project.map.obstacles),
+            "no_fly": len(self.project.map.no_fly_zones),
             "task": len(self.project.map.tasks),
         }

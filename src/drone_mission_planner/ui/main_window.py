@@ -34,8 +34,9 @@ from PySide6.QtWidgets import (
 
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.geometry import Point, Rect
-from drone_mission_planner.domain.models import MapObject
+from drone_mission_planner.domain.models import Drone, MapObject, MissionTask
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
+from drone_mission_planner.planning.route_planner import RoutePlanner
 
 from .map_view import MapView, ToolMode
 from .property_panel import PropertyPanel
@@ -46,6 +47,7 @@ TYPE_COLORS = {
     "base": "#55d6be",
     "drone": "#4d8df7",
     "obstacle": "#ef6a79",
+    "no_fly": "#c77dff",
     "task": "#f9ca5b",
     "delete": "#ff6b81",
     "select": "#a7b6ca",
@@ -84,6 +86,7 @@ class MainWindow(QMainWindow):
     def __init__(self, service: ProjectService | None = None) -> None:
         super().__init__()
         self.service = service or ProjectService()
+        self.route_planner = RoutePlanner()
         self._selected_id: str | None = None
         self._tool_actions: dict[ToolMode, QAction] = {}
         self.setWindowTitle("Drone Mission Planner")
@@ -115,6 +118,8 @@ class MainWindow(QMainWindow):
         self.delete_action.setShortcut(QKeySequence.StandardKey.Delete)
         self.reset_view_action = QAction("Fit map", self)
         self.reset_view_action.setShortcut("F")
+        self.plan_route_action = QAction("Plan selected route", self)
+        self.plan_route_action.setShortcut("Ctrl+P")
         self.about_action = QAction("About Drone Mission Planner", self)
 
     def _build_menu(self) -> None:
@@ -128,7 +133,8 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.delete_action)
         map_menu = self.menuBar().addMenu("Map")
         map_menu.addAction(self.reset_view_action)
-        self.menuBar().addMenu("Planning")
+        planning_menu = self.menuBar().addMenu("Planning")
+        planning_menu.addAction(self.plan_route_action)
         self.menuBar().addMenu("Simulation")
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.reset_view_action)
@@ -149,6 +155,7 @@ class MainWindow(QMainWindow):
             (ToolMode.BASE, "Base", "B", "#55d6be", "B"),
             (ToolMode.DRONE, "Drone", "D", "#4d8df7", "D"),
             (ToolMode.OBSTACLE, "Obstacle", "O", "#ef6a79", "O"),
+            (ToolMode.NO_FLY, "No-fly", "N", "#c77dff", "N"),
             (ToolMode.TASK, "Mission", "T", "#f9ca5b", "T"),
             (ToolMode.DELETE, "Delete", "X", "#ff6b81", "X"),
         ]
@@ -249,9 +256,10 @@ class MainWindow(QMainWindow):
         self.exit_action.triggered.connect(self.close)
         self.delete_action.triggered.connect(self.delete_selected)
         self.reset_view_action.triggered.connect(self.map_view.reset_view)
+        self.plan_route_action.triggered.connect(self.plan_selected_route)
         self.about_action.triggered.connect(self.show_about)
         self.map_view.create_point_requested.connect(self.create_point_object)
-        self.map_view.create_rect_requested.connect(self.create_obstacle)
+        self.map_view.create_rect_requested.connect(self.create_rect_object)
         self.map_view.object_selected.connect(self.select_object)
         self.map_view.delete_requested.connect(self.delete_object)
         self.map_view.coordinates_changed.connect(
@@ -327,10 +335,54 @@ class MainWindow(QMainWindow):
         LOGGER.info("Added %s %s at (%.1f, %.1f)", type(item).__name__, item.id, x, y)
         self._refresh_all(select_id=item.id)
 
-    def create_obstacle(self, x: float, y: float, width: float, height: float) -> None:
-        item = self.service.add_obstacle(Rect(x, y, width, height))
-        LOGGER.info("Added obstacle %s (%.1f x %.1f m)", item.id, width, height)
+    def create_rect_object(
+        self, kind: str, x: float, y: float, width: float, height: float
+    ) -> None:
+        item: MapObject
+        if kind == ToolMode.NO_FLY:
+            item = self.service.add_no_fly_zone(Rect(x, y, width, height))
+            LOGGER.info("Added no-fly zone %s (%.1f x %.1f m)", item.id, width, height)
+        else:
+            item = self.service.add_obstacle(Rect(x, y, width, height))
+            LOGGER.info("Added obstacle %s (%.1f x %.1f m)", item.id, width, height)
         self._refresh_all(select_id=item.id)
+
+    def plan_selected_route(self) -> None:
+        selected = self.service.project.map.find(self._selected_id or "")
+        drones = self.service.project.map.drones
+        tasks = self.service.project.map.tasks
+        drone = selected if isinstance(selected, Drone) else (drones[0] if drones else None)
+        task = selected if isinstance(selected, MissionTask) else (tasks[0] if tasks else None)
+        if drone is None or task is None:
+            QMessageBox.information(
+                self,
+                "Nothing to plan",
+                "Add at least one drone and one mission point, then try again.",
+            )
+            return
+        LOGGER.info("Planning route for %s to %s", drone.id, task.id)
+        result = self.route_planner.plan(self.service.project.map, drone, task.position)
+        if not result.success:
+            LOGGER.error("Route %s → %s failed: %s", drone.id, task.id, result.failure_reason)
+            QMessageBox.warning(self, "Planning failed", result.failure_reason or "Unknown error")
+            return
+        drone.planned_path = result.waypoints
+        self.service.dirty = True
+        self.map_view.render_model()
+        self._update_title()
+        self.statusBar().showMessage(
+            f"{drone.id} route: {result.total_distance:.1f} m, "
+            f"{result.estimated_time:.1f} s, {result.expanded_nodes} nodes",
+            8000,
+        )
+        LOGGER.info(
+            "Route ready: %.1f m, %.1f s, %.2f energy, %d→%d waypoints",
+            result.total_distance,
+            result.estimated_time,
+            result.estimated_energy,
+            result.raw_waypoint_count,
+            len(result.waypoints),
+        )
 
     def delete_selected(self) -> None:
         if self._selected_id:
@@ -390,6 +442,7 @@ class MainWindow(QMainWindow):
             ("Bases", list(self.service.project.map.bases), "base"),
             ("Drones", list(self.service.project.map.drones), "drone"),
             ("Obstacles", list(self.service.project.map.obstacles), "obstacle"),
+            ("No-fly zones", list(self.service.project.map.no_fly_zones), "no_fly"),
             ("Tasks", list(self.service.project.map.tasks), "task"),
         ]
         for label, objects, kind in groups:
@@ -409,7 +462,8 @@ class MainWindow(QMainWindow):
         self.object_summary.setText(
             f"{map_model.width} x {map_model.height} m map     •     "
             f"{len(map_model.drones)} drones     •     {len(map_model.tasks)} missions     •     "
-            f"{len(map_model.obstacles)} obstacles"
+            f"{len(map_model.obstacles)} obstacles     •     "
+            f"{len(map_model.no_fly_zones)} no-fly zones"
         )
 
     def _update_title(self) -> None:
@@ -435,9 +489,9 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 0.1.0</b><br><br>"
+            "<b>Drone Mission Planner 0.2.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Phase 1: foundation and map editor.",
+            "Phase 2: deterministic A* route planning.",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:

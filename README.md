@@ -6,15 +6,16 @@ Drone Mission Planner is a fully local desktop application for composing 2D mult
 
 ## Current milestone
 
-Phase 1 — foundation and map editor.
+Phase 2 — single-drone route planning.
 
-- Polished PySide6 desktop shell
-- Zoomable and pannable grid map
-- Base, drone, rectangular obstacle, and mission-point editing
+- Polished PySide6 desktop shell and zoomable map editor
+- Base, drone, obstacle, no-fly-zone, and mission-point editing
 - Object tree and editable property inspector
 - Versioned `.dmproj` JSON save/load
 - Structured logging and deterministic IDs
-- Automated domain, persistence, coordinate, and UI smoke tests
+- Deterministic 8-connected A* with Octile heuristic
+- Per-drone obstacle inflation, line-of-sight smoothing, and final validation
+- Distance, time, energy, expanded-node, and clear failure reporting
 
 ## Quick start
 
@@ -54,4 +55,3 @@ The project follows eight independently archived phases: editor, A* planning, mu
 ## License
 
 MIT
-
