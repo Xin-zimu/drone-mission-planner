@@ -6,7 +6,7 @@ Drone Mission Planner is a fully local desktop application for composing 2D mult
 
 ## Current milestone
 
-Phase 3 — multi-drone task assignment.
+Phase 4 — fixed-step dynamic simulation.
 
 - Polished PySide6 desktop shell and zoomable map editor
 - Base, drone, obstacle, no-fly-zone, and mission-point editing
@@ -19,6 +19,10 @@ Phase 3 — multi-drone task assignment.
 - Priority-first multi-drone greedy assignment
 - Payload and safe-return battery validation for every candidate
 - Simultaneous color-coded routes, assignment table, and manual reassignment field
+- Deterministic 0.05 s simulation steps independent from UI frame rate
+- Takeoff, flight, task execution, return, and completion state transitions
+- Play, pause, single-step, reset, and 0.5x–10x wall-clock speed controls
+- Live position, battery, task status, distance, and timing statistics
 
 ## Quick start
 

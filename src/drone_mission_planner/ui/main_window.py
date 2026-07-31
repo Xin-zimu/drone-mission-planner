@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QElapsedTimer, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -17,6 +17,7 @@ from PySide6.QtGui import (
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
+    QComboBox,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -41,6 +42,7 @@ from drone_mission_planner.domain.models import Drone, MapObject, MissionTask
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
 from drone_mission_planner.planning.assignment import AssignmentResult, GreedyAssignmentPlanner
 from drone_mission_planner.planning.route_planner import RoutePlanner
+from drone_mission_planner.simulation.engine import SimulationEngine
 
 from .map_view import MapView, ToolMode
 from .property_panel import PropertyPanel
@@ -92,6 +94,10 @@ class MainWindow(QMainWindow):
         self.service = service or ProjectService()
         self.route_planner = RoutePlanner()
         self.assignment_planner = GreedyAssignmentPlanner(self.route_planner)
+        self.simulation_engine: SimulationEngine | None = None
+        self.simulation_timer = QTimer(self)
+        self.simulation_timer.setInterval(16)
+        self.simulation_clock = QElapsedTimer()
         self._selected_id: str | None = None
         self._tool_actions: dict[ToolMode, QAction] = {}
         self.setWindowTitle("Drone Mission Planner")
@@ -100,6 +106,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_menu()
         self._build_toolbar()
+        self._build_simulation_toolbar()
         self._build_central()
         self._build_docks()
         self._connect_signals()
@@ -127,6 +134,12 @@ class MainWindow(QMainWindow):
         self.plan_route_action.setShortcut("Ctrl+P")
         self.auto_assign_action = QAction("Auto assign all missions", self)
         self.auto_assign_action.setShortcut("Ctrl+Shift+P")
+        self.play_action = QAction("Play", self)
+        self.play_action.setShortcut("Ctrl+Space")
+        self.pause_action = QAction("Pause", self)
+        self.step_action = QAction("Step", self)
+        self.step_action.setShortcut(".")
+        self.reset_sim_action = QAction("Reset", self)
         self.about_action = QAction("About Drone Mission Planner", self)
 
     def _build_menu(self) -> None:
@@ -202,6 +215,35 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.map_view)
         self._overlay = overlay
 
+    def _build_simulation_toolbar(self) -> None:
+        toolbar = QToolBar("Simulation controls", self)
+        toolbar.setObjectName("SimulationControls")
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(20, 20))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, toolbar)
+        self.play_action.setIcon(_color_icon("#55d6be", "▶"))
+        self.pause_action.setIcon(_color_icon("#f9ca5b", "Ⅱ"))
+        self.step_action.setIcon(_color_icon("#4d8df7", ">"))
+        self.reset_sim_action.setIcon(_color_icon("#ef6a79", "↺"))
+        toolbar.addActions(
+            [self.play_action, self.pause_action, self.step_action, self.reset_sim_action]
+        )
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("Speed"))
+        self.speed_combo = QComboBox()
+        for value in (0.5, 1.0, 2.0, 5.0, 10.0):
+            self.speed_combo.addItem(f"{value:g}x", value)
+        self.speed_combo.setCurrentText("1x")
+        self.speed_combo.setFixedWidth(75)
+        toolbar.addWidget(self.speed_combo)
+        toolbar.addSeparator()
+        self.simulation_time_label = QLabel("T+ 00:00.00")
+        self.simulation_time_label.setStyleSheet(
+            "color: #75a7ff; font-family: 'Cascadia Mono', monospace; font-weight: 700; padding: 0 8px;"
+        )
+        toolbar.addWidget(self.simulation_time_label)
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if hasattr(self, "_overlay"):
@@ -275,6 +317,12 @@ class MainWindow(QMainWindow):
         self.reset_view_action.triggered.connect(self.map_view.reset_view)
         self.plan_route_action.triggered.connect(self.plan_selected_route)
         self.auto_assign_action.triggered.connect(self.auto_assign_tasks)
+        self.play_action.triggered.connect(self.play_simulation)
+        self.pause_action.triggered.connect(self.pause_simulation)
+        self.step_action.triggered.connect(self.step_simulation)
+        self.reset_sim_action.triggered.connect(self.reset_simulation)
+        self.speed_combo.currentIndexChanged.connect(self._speed_changed)
+        self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
         self.map_view.create_point_requested.connect(self.create_point_object)
         self.map_view.create_rect_requested.connect(self.create_rect_object)
@@ -297,6 +345,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         self.service.new_project()
+        self._discard_simulation()
         self._selected_id = None
         self._refresh_all()
         LOGGER.info("Created a new empty mission")
@@ -316,6 +365,7 @@ class MainWindow(QMainWindow):
             LOGGER.error("Project load failed: %s", exc)
             return
         self._selected_id = None
+        self._discard_simulation()
         self._refresh_all()
         LOGGER.info("Opened project %s", path)
 
@@ -416,6 +466,7 @@ class MainWindow(QMainWindow):
             len(self.service.project.map.tasks),
         )
         result = self.assignment_planner.assign(self.service.project.map)
+        self._discard_simulation()
         self._apply_assignment_result(result)
         self._render_assignment_table(result)
         self._populate_tree()
@@ -481,6 +532,106 @@ class MainWindow(QMainWindow):
                 self.assignment_table.setItem(row, column, item)
             row += 1
         self.assignment_table.resizeColumnsToContents()
+
+    def play_simulation(self) -> None:
+        if not self._ensure_simulation_engine():
+            return
+        assert self.simulation_engine is not None
+        self.simulation_engine.start()
+        self.simulation_clock.start()
+        self.simulation_timer.start()
+        self.health_badge.setText("●  SIMULATION RUNNING")
+        self.health_badge.setStyleSheet("color: #55d6be; font-weight: 700;")
+        LOGGER.info("Simulation started at %.1fx", self.simulation_engine.speed_multiplier)
+
+    def pause_simulation(self) -> None:
+        if self.simulation_engine is None:
+            return
+        self.simulation_engine.pause()
+        self.simulation_timer.stop()
+        self.health_badge.setText("●  SIMULATION PAUSED")
+        self.health_badge.setStyleSheet("color: #f9ca5b; font-weight: 700;")
+        LOGGER.info("Simulation paused at T+%.2f s", self.simulation_engine.time)
+
+    def step_simulation(self) -> None:
+        if not self._ensure_simulation_engine():
+            return
+        self.pause_simulation()
+        assert self.simulation_engine is not None
+        self.simulation_engine.step_once()
+        self._sync_simulation_state()
+
+    def reset_simulation(self) -> None:
+        if self.simulation_engine is None:
+            return
+        self.simulation_timer.stop()
+        self.simulation_engine.reset()
+        self._sync_simulation_state()
+        self.health_badge.setText("●  SIMULATION READY")
+        self.health_badge.setStyleSheet("color: #75a7ff; font-weight: 700;")
+        LOGGER.info("Simulation reset")
+
+    def _speed_changed(self) -> None:
+        if self.simulation_engine is not None:
+            self.simulation_engine.set_speed(float(self.speed_combo.currentData()))
+
+    def _ensure_simulation_engine(self) -> bool:
+        if not any(drone.planned_path for drone in self.service.project.map.drones):
+            self.auto_assign_tasks()
+        if not any(drone.planned_path for drone in self.service.project.map.drones):
+            QMessageBox.warning(
+                self,
+                "Simulation unavailable",
+                "No executable drone routes are available. Resolve planning failures first.",
+            )
+            return False
+        if self.simulation_engine is None:
+            fixed_dt = float(self.service.project.simulation_settings.get("fixed_dt", 0.05))
+            self.simulation_engine = SimulationEngine(self.service.project.map, fixed_dt=fixed_dt)
+            self.simulation_engine.set_speed(float(self.speed_combo.currentData()))
+            self._sync_simulation_state()
+            LOGGER.info("Fixed-step simulation initialized (dt=%.3f s)", fixed_dt)
+        return True
+
+    def _simulation_tick(self) -> None:
+        if self.simulation_engine is None:
+            return
+        elapsed = min(0.25, self.simulation_clock.restart() / 1000.0)
+        if self.simulation_engine.advance(elapsed):
+            self._sync_simulation_state()
+        if self.simulation_engine.is_complete:
+            self.pause_simulation()
+            self.health_badge.setText("●  MISSION COMPLETE")
+            self.health_badge.setStyleSheet("color: #55d6be; font-weight: 700;")
+            LOGGER.info("Simulation complete at T+%.2f s", self.simulation_engine.time)
+
+    def _sync_simulation_state(self) -> None:
+        if self.simulation_engine is None:
+            return
+        snapshot = self.simulation_engine.snapshot()
+        for drone_state in snapshot.drones:
+            drone = self.service.project.map.find(drone_state.id)
+            if isinstance(drone, Drone):
+                drone.position = drone_state.position
+                drone.status = drone_state.status
+                drone.remaining_battery = drone_state.remaining_battery
+        for task_id, status in snapshot.task_statuses.items():
+            task = self.service.project.map.find(task_id)
+            if isinstance(task, MissionTask):
+                task.status = status
+        minutes, seconds = divmod(snapshot.time, 60.0)
+        self.simulation_time_label.setText(f"T+ {int(minutes):02d}:{seconds:05.2f}")
+        self.map_view.render_model()
+        self._populate_tree()
+        if self._selected_id:
+            selected = self.service.project.map.find(self._selected_id)
+            if selected is not None:
+                self.property_panel.set_object(selected)
+
+    def _discard_simulation(self) -> None:
+        self.simulation_timer.stop()
+        self.simulation_engine = None
+        self.simulation_time_label.setText("T+ 00:00.00")
 
     def delete_selected(self) -> None:
         if self._selected_id:
@@ -549,7 +700,10 @@ class MainWindow(QMainWindow):
             self.object_tree.addTopLevelItem(root)
             root.setExpanded(True)
             for item in objects:
-                child = QTreeWidgetItem([item.name, item.id])
+                display_name = item.name
+                if isinstance(item, Drone | MissionTask):
+                    display_name += f"  ·  {item.status.value.replace('_', ' ')}"
+                child = QTreeWidgetItem([display_name, item.id])
                 child.setData(0, Qt.ItemDataRole.UserRole, item.id)
                 child.setIcon(0, _color_icon(TYPE_COLORS[kind]))
                 root.addChild(child)
@@ -587,10 +741,11 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 0.3.0</b><br><br>"
+            "<b>Drone Mission Planner 0.4.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Phase 3: multi-drone task assignment.",
+            "Phase 4: deterministic dynamic simulation.",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.simulation_timer.stop()
         event.accept() if self._confirm_discard() else event.ignore()
