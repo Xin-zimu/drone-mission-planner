@@ -32,6 +32,7 @@ EDITABLE = {
     "priority",
     "required_payload",
     "execution_duration",
+    "assigned_drone_id",
 }
 
 DISPLAY_NAMES = {
@@ -52,6 +53,7 @@ DISPLAY_NAMES = {
     "required_payload": "Required payload (kg)",
     "execution_duration": "Execution time (s)",
     "home_base_id": "Home base",
+    "assigned_drone_id": "Assigned drone",
     "bounds": "Bounds (m)",
     "shape": "Shape",
 }
@@ -116,6 +118,15 @@ class PropertyPanel(QScrollArea):
         self._layout.addStretch()
 
     def _editor(self, object_id: str, name: str, value: Any) -> QWidget:
+        if name == "assigned_drone_id":
+            edit = QLineEdit(value or "")
+            edit.setPlaceholderText("Unassigned")
+            edit.editingFinished.connect(
+                lambda edit=edit: self.property_changed.emit(
+                    object_id, name, edit.text().strip() or None
+                )
+            )
+            return edit
         if name in EDITABLE and isinstance(value, str):
             edit = QLineEdit(value)
             edit.editingFinished.connect(

@@ -6,7 +6,7 @@ Drone Mission Planner is a fully local desktop application for composing 2D mult
 
 ## Current milestone
 
-Phase 2 — single-drone route planning.
+Phase 3 — multi-drone task assignment.
 
 - Polished PySide6 desktop shell and zoomable map editor
 - Base, drone, obstacle, no-fly-zone, and mission-point editing
@@ -16,6 +16,9 @@ Phase 2 — single-drone route planning.
 - Deterministic 8-connected A* with Octile heuristic
 - Per-drone obstacle inflation, line-of-sight smoothing, and final validation
 - Distance, time, energy, expanded-node, and clear failure reporting
+- Priority-first multi-drone greedy assignment
+- Payload and safe-return battery validation for every candidate
+- Simultaneous color-coded routes, assignment table, and manual reassignment field
 
 ## Quick start
 

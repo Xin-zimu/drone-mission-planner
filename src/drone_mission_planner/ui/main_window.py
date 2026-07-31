@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QToolBar,
     QTreeWidget,
@@ -33,9 +35,11 @@ from PySide6.QtWidgets import (
 )
 
 from drone_mission_planner.app.project_service import ProjectService
+from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import Drone, MapObject, MissionTask
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
+from drone_mission_planner.planning.assignment import AssignmentResult, GreedyAssignmentPlanner
 from drone_mission_planner.planning.route_planner import RoutePlanner
 
 from .map_view import MapView, ToolMode
@@ -87,6 +91,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.service = service or ProjectService()
         self.route_planner = RoutePlanner()
+        self.assignment_planner = GreedyAssignmentPlanner(self.route_planner)
         self._selected_id: str | None = None
         self._tool_actions: dict[ToolMode, QAction] = {}
         self.setWindowTitle("Drone Mission Planner")
@@ -120,6 +125,8 @@ class MainWindow(QMainWindow):
         self.reset_view_action.setShortcut("F")
         self.plan_route_action = QAction("Plan selected route", self)
         self.plan_route_action.setShortcut("Ctrl+P")
+        self.auto_assign_action = QAction("Auto assign all missions", self)
+        self.auto_assign_action.setShortcut("Ctrl+Shift+P")
         self.about_action = QAction("About Drone Mission Planner", self)
 
     def _build_menu(self) -> None:
@@ -135,6 +142,7 @@ class MainWindow(QMainWindow):
         map_menu.addAction(self.reset_view_action)
         planning_menu = self.menuBar().addMenu("Planning")
         planning_menu.addAction(self.plan_route_action)
+        planning_menu.addAction(self.auto_assign_action)
         self.menuBar().addMenu("Simulation")
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.reset_view_action)
@@ -235,7 +243,16 @@ class MainWindow(QMainWindow):
         self.health_badge.setStyleSheet("color: #64dfc7; font-weight: 700;")
         welcome_layout.addWidget(self.health_badge)
         tabs = QTabWidget()
+        self.workspace_tabs = tabs
         tabs.addTab(welcome, "Overview")
+        self.assignment_table = QTableWidget(0, 6)
+        self.assignment_table.setHorizontalHeaderLabels(
+            ["Priority", "Mission", "Drone", "Distance", "Energy", "Status"]
+        )
+        self.assignment_table.setAlternatingRowColors(True)
+        self.assignment_table.verticalHeader().setVisible(False)
+        self.assignment_table.horizontalHeader().setStretchLastSection(True)
+        tabs.addTab(self.assignment_table, "Assignments")
         tabs.addTab(self.log_view, "Activity log")
         bottom_dock = QDockWidget("Workspace", self)
         bottom_dock.setObjectName("WorkspaceDock")
@@ -257,6 +274,7 @@ class MainWindow(QMainWindow):
         self.delete_action.triggered.connect(self.delete_selected)
         self.reset_view_action.triggered.connect(self.map_view.reset_view)
         self.plan_route_action.triggered.connect(self.plan_selected_route)
+        self.auto_assign_action.triggered.connect(self.auto_assign_tasks)
         self.about_action.triggered.connect(self.show_about)
         self.map_view.create_point_requested.connect(self.create_point_object)
         self.map_view.create_rect_requested.connect(self.create_rect_object)
@@ -384,6 +402,86 @@ class MainWindow(QMainWindow):
             len(result.waypoints),
         )
 
+    def auto_assign_tasks(self) -> None:
+        if not self.service.project.map.drones or not self.service.project.map.tasks:
+            QMessageBox.information(
+                self,
+                "Nothing to assign",
+                "Add at least one drone and one mission before automatic assignment.",
+            )
+            return
+        LOGGER.info(
+            "Starting greedy assignment for %d drones and %d missions",
+            len(self.service.project.map.drones),
+            len(self.service.project.map.tasks),
+        )
+        result = self.assignment_planner.assign(self.service.project.map)
+        self._apply_assignment_result(result)
+        self._render_assignment_table(result)
+        self._populate_tree()
+        self.map_view.render_model()
+        self._update_title()
+        self.statusBar().showMessage(
+            f"Assigned {result.assigned_count}/{len(self.service.project.map.tasks)} missions; "
+            f"{len(result.failures)} unresolved",
+            8000,
+        )
+
+    def _apply_assignment_result(self, result: AssignmentResult) -> None:
+        for drone in self.service.project.map.drones:
+            drone.assigned_tasks.clear()
+            drone.planned_path = result.drone_paths.get(drone.id, [])
+        for task in self.service.project.map.tasks:
+            if task.status.value != "completed":
+                task.assigned_drone_id = None
+                task.status = TaskStatus.PENDING
+        for decision in result.decisions:
+            found_task = self.service.project.map.find(decision.task_id)
+            found_drone = self.service.project.map.find(decision.drone_id)
+            if isinstance(found_task, MissionTask) and isinstance(found_drone, Drone):
+                found_task.assigned_drone_id = found_drone.id
+                found_task.status = TaskStatus.ASSIGNED
+                found_drone.assigned_tasks.append(found_task.id)
+                LOGGER.info(
+                    "%s assigned to %s: %.1f m, %.1f required energy",
+                    found_task.id,
+                    found_drone.id,
+                    decision.route.total_distance,
+                    decision.energy.total_required,
+                )
+        for failure in result.failures:
+            LOGGER.warning("%s could not be assigned — %s", failure.task_id, failure.summary())
+        self.service.dirty = True
+
+    def _render_assignment_table(self, result: AssignmentResult) -> None:
+        rows = len(result.decisions) + len(result.failures)
+        self.assignment_table.setRowCount(rows)
+        row = 0
+        for decision in result.decisions:
+            task = self.service.project.map.find(decision.task_id)
+            priority = task.priority if isinstance(task, MissionTask) else 0
+            values = [
+                str(priority),
+                decision.task_id,
+                decision.drone_id,
+                f"{decision.route.total_distance:.1f} m",
+                f"{decision.energy.total_required:.1f}",
+                "Assigned",
+            ]
+            for column, value in enumerate(values):
+                self.assignment_table.setItem(row, column, QTableWidgetItem(value))
+            row += 1
+        for failure in result.failures:
+            task = self.service.project.map.find(failure.task_id)
+            priority = task.priority if isinstance(task, MissionTask) else 0
+            values = [str(priority), failure.task_id, "—", "—", "—", failure.summary()]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setForeground(QColor("#ff8997"))
+                self.assignment_table.setItem(row, column, item)
+            row += 1
+        self.assignment_table.resizeColumnsToContents()
+
     def delete_selected(self) -> None:
         if self._selected_id:
             self.delete_object(self._selected_id)
@@ -489,9 +587,9 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 0.2.0</b><br><br>"
+            "<b>Drone Mission Planner 0.3.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Phase 2: deterministic A* route planning.",
+            "Phase 3: multi-drone task assignment.",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
