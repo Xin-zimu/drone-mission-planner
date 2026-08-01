@@ -19,7 +19,7 @@ def test_main_window_renders_project(qtbot: object) -> None:
     window.show()
 
     assert window.isVisible()
-    assert window.object_tree.topLevelItemCount() == 5
+    assert window.object_tree.topLevelItemCount() == 6
     assert len(window.map_view.scene().items()) >= 8
 
 

@@ -33,6 +33,9 @@ EDITABLE = {
     "required_payload",
     "execution_duration",
     "assigned_drone_id",
+    "scan_spacing",
+    "boundary_margin",
+    "target_coverage",
 }
 
 DISPLAY_NAMES = {
@@ -56,6 +59,9 @@ DISPLAY_NAMES = {
     "assigned_drone_id": "Assigned drone",
     "bounds": "Bounds (m)",
     "shape": "Shape",
+    "scan_spacing": "Scan spacing (m)",
+    "boundary_margin": "Boundary margin (m)",
+    "target_coverage": "Target coverage",
 }
 
 
@@ -96,7 +102,10 @@ class PropertyPanel(QScrollArea):
 
     def set_object(self, item: MapObject) -> None:
         self._clear()
-        heading = QLabel(type(item).__name__.replace("Station", " station").upper())
+        heading_text = (
+            type(item).__name__.replace("Station", " station").replace("SearchArea", "Search area")
+        )
+        heading = QLabel(heading_text.upper())
         heading.setObjectName("SectionLabel")
         self._layout.addWidget(heading)
         title = QLabel(item.name)

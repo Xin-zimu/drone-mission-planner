@@ -38,10 +38,12 @@ from PySide6.QtWidgets import (
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point, Rect
-from drone_mission_planner.domain.models import Drone, MapObject, MissionTask
+from drone_mission_planner.domain.models import Drone, MapObject, MissionTask, SearchArea
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
 from drone_mission_planner.planning.assignment import AssignmentResult, GreedyAssignmentPlanner
+from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePlanResult
 from drone_mission_planner.planning.route_planner import RoutePlanner
+from drone_mission_planner.simulation.coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from drone_mission_planner.simulation.engine import SimulationEngine
 
 from .map_view import MapView, ToolMode
@@ -55,6 +57,7 @@ TYPE_COLORS = {
     "obstacle": "#ef6a79",
     "no_fly": "#c77dff",
     "task": "#f9ca5b",
+    "search_area": "#4ce0d2",
     "delete": "#ff6b81",
     "select": "#a7b6ca",
 }
@@ -94,6 +97,8 @@ class MainWindow(QMainWindow):
         self.service = service or ProjectService()
         self.route_planner = RoutePlanner()
         self.assignment_planner = GreedyAssignmentPlanner(self.route_planner)
+        self.coverage_planner = CoveragePlanner(self.route_planner)
+        self.coverage_results: dict[str, CoveragePlanResult] = {}
         self.simulation_engine: SimulationEngine | None = None
         self.simulation_timer = QTimer(self)
         self.simulation_timer.setInterval(16)
@@ -134,6 +139,8 @@ class MainWindow(QMainWindow):
         self.plan_route_action.setShortcut("Ctrl+P")
         self.auto_assign_action = QAction("Auto assign all missions", self)
         self.auto_assign_action.setShortcut("Ctrl+Shift+P")
+        self.plan_coverage_action = QAction("Plan area coverage", self)
+        self.plan_coverage_action.setShortcut("Ctrl+Shift+C")
         self.play_action = QAction("Play", self)
         self.play_action.setShortcut("Ctrl+Space")
         self.pause_action = QAction("Pause", self)
@@ -156,6 +163,7 @@ class MainWindow(QMainWindow):
         planning_menu = self.menuBar().addMenu("Planning")
         planning_menu.addAction(self.plan_route_action)
         planning_menu.addAction(self.auto_assign_action)
+        planning_menu.addAction(self.plan_coverage_action)
         self.menuBar().addMenu("Simulation")
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.reset_view_action)
@@ -178,6 +186,7 @@ class MainWindow(QMainWindow):
             (ToolMode.OBSTACLE, "Obstacle", "O", "#ef6a79", "O"),
             (ToolMode.NO_FLY, "No-fly", "N", "#c77dff", "N"),
             (ToolMode.TASK, "Mission", "T", "#f9ca5b", "T"),
+            (ToolMode.SEARCH_AREA, "Search area", "A", "#4ce0d2", "A"),
             (ToolMode.DELETE, "Delete", "X", "#ff6b81", "X"),
         ]
         for mode, label, shortcut, color, symbol in specs:
@@ -295,6 +304,14 @@ class MainWindow(QMainWindow):
         self.assignment_table.verticalHeader().setVisible(False)
         self.assignment_table.horizontalHeader().setStretchLastSection(True)
         tabs.addTab(self.assignment_table, "Assignments")
+        self.coverage_table = QTableWidget(0, 7)
+        self.coverage_table.setHorizontalHeaderLabels(
+            ["Area", "Drones", "Scan passes", "Covered cells", "Coverage", "Repeat", "Target"]
+        )
+        self.coverage_table.setAlternatingRowColors(True)
+        self.coverage_table.verticalHeader().setVisible(False)
+        self.coverage_table.horizontalHeader().setStretchLastSection(True)
+        tabs.addTab(self.coverage_table, "Coverage")
         tabs.addTab(self.log_view, "Activity log")
         bottom_dock = QDockWidget("Workspace", self)
         bottom_dock.setObjectName("WorkspaceDock")
@@ -317,6 +334,7 @@ class MainWindow(QMainWindow):
         self.reset_view_action.triggered.connect(self.map_view.reset_view)
         self.plan_route_action.triggered.connect(self.plan_selected_route)
         self.auto_assign_action.triggered.connect(self.auto_assign_tasks)
+        self.plan_coverage_action.triggered.connect(self.plan_area_coverage)
         self.play_action.triggered.connect(self.play_simulation)
         self.pause_action.triggered.connect(self.pause_simulation)
         self.step_action.triggered.connect(self.step_simulation)
@@ -346,6 +364,7 @@ class MainWindow(QMainWindow):
             return
         self.service.new_project()
         self._discard_simulation()
+        self.coverage_results.clear()
         self._selected_id = None
         self._refresh_all()
         LOGGER.info("Created a new empty mission")
@@ -366,6 +385,7 @@ class MainWindow(QMainWindow):
             return
         self._selected_id = None
         self._discard_simulation()
+        self.coverage_results.clear()
         self._refresh_all()
         LOGGER.info("Opened project %s", path)
 
@@ -410,6 +430,9 @@ class MainWindow(QMainWindow):
         if kind == ToolMode.NO_FLY:
             item = self.service.add_no_fly_zone(Rect(x, y, width, height))
             LOGGER.info("Added no-fly zone %s (%.1f x %.1f m)", item.id, width, height)
+        elif kind == ToolMode.SEARCH_AREA:
+            item = self.service.add_search_area(Rect(x, y, width, height))
+            LOGGER.info("Added search area %s (%.1f x %.1f m)", item.id, width, height)
         else:
             item = self.service.add_obstacle(Rect(x, y, width, height))
             LOGGER.info("Added obstacle %s (%.1f x %.1f m)", item.id, width, height)
@@ -452,6 +475,81 @@ class MainWindow(QMainWindow):
             len(result.waypoints),
         )
 
+    def plan_area_coverage(self) -> None:
+        selected = self.service.project.map.find(self._selected_id or "")
+        areas = self.service.project.map.search_areas
+        area = selected if isinstance(selected, SearchArea) else (areas[0] if areas else None)
+        if area is None or not self.service.project.map.drones:
+            QMessageBox.information(
+                self,
+                "Nothing to cover",
+                "Add at least one search area and one drone before planning coverage.",
+            )
+            return
+        LOGGER.info(
+            "Planning %s across %d drones (spacing %.1f m)",
+            area.id,
+            len(self.service.project.map.drones),
+            area.scan_spacing,
+        )
+        result = self.coverage_planner.plan(self.service.project.map, area)
+        self._discard_simulation()
+        self.coverage_results[area.id] = result
+        for drone in self.service.project.map.drones:
+            drone.planned_path = result.drone_paths.get(drone.id, [])
+            drone.assigned_tasks.clear()
+        self.service.dirty = True
+        self._render_coverage_table()
+        self._populate_tree()
+        self.map_view.render_model()
+        self._update_title()
+        self.workspace_tabs.setCurrentWidget(self.coverage_table)
+        if result.failures:
+            details = "; ".join(f"{key}: {value}" for key, value in result.failures.items())
+            LOGGER.warning("Coverage planning incomplete — %s", details)
+            QMessageBox.warning(self, "Coverage planning incomplete", details)
+            return
+        passes = sum(len(strip.passes) for strip in result.strips)
+        LOGGER.info(
+            "Coverage ready: %d strips, %d passes, %.1f m total route",
+            len(result.strips),
+            passes,
+            result.total_distance,
+        )
+        self.statusBar().showMessage(
+            f"{area.id}: {len(result.drone_paths)} drones, {passes} scan passes, "
+            f"{result.total_distance:.1f} m total",
+            8000,
+        )
+
+    def _render_coverage_table(
+        self, snapshots: tuple[AreaCoverageSnapshot, ...] | None = None
+    ) -> None:
+        if snapshots is None:
+            snapshots = CoverageMonitor(self.service.project.map).snapshot()
+        by_area = {snapshot.area_id: snapshot for snapshot in snapshots}
+        areas = self.service.project.map.search_areas
+        self.coverage_table.setRowCount(len(areas))
+        for row, area in enumerate(areas):
+            result = self.coverage_results.get(area.id)
+            snapshot = by_area.get(area.id)
+            values = [
+                area.id,
+                str(len(result.drone_paths)) if result else "—",
+                str(sum(len(strip.passes) for strip in result.strips)) if result else "—",
+                (
+                    f"{snapshot.covered_cells}/{snapshot.target_cells}"
+                    if snapshot is not None
+                    else "—"
+                ),
+                f"{snapshot.coverage:.1%}" if snapshot is not None else "—",
+                f"{snapshot.repeat_coverage:.1%}" if snapshot is not None else "—",
+                f"{area.target_coverage:.0%}",
+            ]
+            for column, value in enumerate(values):
+                self.coverage_table.setItem(row, column, QTableWidgetItem(value))
+        self.coverage_table.resizeColumnsToContents()
+
     def auto_assign_tasks(self) -> None:
         if not self.service.project.map.drones or not self.service.project.map.tasks:
             QMessageBox.information(
@@ -467,6 +565,7 @@ class MainWindow(QMainWindow):
         )
         result = self.assignment_planner.assign(self.service.project.map)
         self._discard_simulation()
+        self.coverage_results.clear()
         self._apply_assignment_result(result)
         self._render_assignment_table(result)
         self._populate_tree()
@@ -577,7 +676,10 @@ class MainWindow(QMainWindow):
 
     def _ensure_simulation_engine(self) -> bool:
         if not any(drone.planned_path for drone in self.service.project.map.drones):
-            self.auto_assign_tasks()
+            if self.service.project.map.search_areas:
+                self.plan_area_coverage()
+            else:
+                self.auto_assign_tasks()
         if not any(drone.planned_path for drone in self.service.project.map.drones):
             QMessageBox.warning(
                 self,
@@ -621,7 +723,15 @@ class MainWindow(QMainWindow):
                 task.status = status
         minutes, seconds = divmod(snapshot.time, 60.0)
         self.simulation_time_label.setText(f"T+ {int(minutes):02d}:{seconds:05.2f}")
+        progress = {coverage.area_id: coverage.coverage for coverage in snapshot.coverage}
+        cells = self.simulation_engine.coverage_monitor.render_cells()
+        resolutions = {
+            area_id: self.simulation_engine.coverage_monitor.resolution(area_id)
+            for area_id in cells
+        }
+        self.map_view.set_coverage_overlay(progress, cells, resolutions)
         self.map_view.render_model()
+        self._render_coverage_table(snapshot.coverage)
         self._populate_tree()
         if self._selected_id:
             selected = self.service.project.map.find(self._selected_id)
@@ -632,6 +742,7 @@ class MainWindow(QMainWindow):
         self.simulation_timer.stop()
         self.simulation_engine = None
         self.simulation_time_label.setText("T+ 00:00.00")
+        self.map_view.clear_coverage_overlay()
 
     def delete_selected(self) -> None:
         if self._selected_id:
@@ -642,6 +753,7 @@ class MainWindow(QMainWindow):
         if removed is None:
             return
         LOGGER.info("Deleted %s %s", type(removed).__name__, object_id)
+        self.coverage_results.pop(object_id, None)
         self._selected_id = None
         self._refresh_all()
 
@@ -664,6 +776,9 @@ class MainWindow(QMainWindow):
             LOGGER.error("Property update rejected: %s", exc)
             return
         LOGGER.info("Updated %s.%s", object_id, name)
+        if isinstance(item, SearchArea):
+            self.coverage_results.pop(item.id, None)
+            self._discard_simulation()
         self.map_view.render_model()
         self._populate_tree()
         self.property_panel.set_object(item)
@@ -679,6 +794,7 @@ class MainWindow(QMainWindow):
         self._populate_tree()
         self._update_title()
         self._update_summary()
+        self._render_coverage_table()
         if select_id:
             self.select_object(select_id)
         else:
@@ -693,6 +809,7 @@ class MainWindow(QMainWindow):
             ("Obstacles", list(self.service.project.map.obstacles), "obstacle"),
             ("No-fly zones", list(self.service.project.map.no_fly_zones), "no_fly"),
             ("Tasks", list(self.service.project.map.tasks), "task"),
+            ("Search areas", list(self.service.project.map.search_areas), "search_area"),
         ]
         for label, objects, kind in groups:
             root = QTreeWidgetItem([f"{label}  ·  {len(objects)}", ""])
@@ -715,7 +832,8 @@ class MainWindow(QMainWindow):
             f"{map_model.width} x {map_model.height} m map     •     "
             f"{len(map_model.drones)} drones     •     {len(map_model.tasks)} missions     •     "
             f"{len(map_model.obstacles)} obstacles     •     "
-            f"{len(map_model.no_fly_zones)} no-fly zones"
+            f"{len(map_model.no_fly_zones)} no-fly zones     •     "
+            f"{len(map_model.search_areas)} search areas"
         )
 
     def _update_title(self) -> None:
@@ -741,9 +859,9 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 0.4.0</b><br><br>"
+            "<b>Drone Mission Planner 0.5.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Phase 4: deterministic dynamic simulation.",
+            "Phase 5: cooperative area coverage and live progress monitoring.",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:

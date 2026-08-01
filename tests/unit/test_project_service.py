@@ -10,10 +10,12 @@ def test_add_update_and_remove_objects() -> None:
     drone = service.add_drone(Point(70.0, 80.0))
     task = service.add_task(Point(200.0, 120.0))
     obstacle = service.add_obstacle(Rect(100.0, 100.0, -30.0, 20.0))
+    search = service.add_search_area(Rect(200.0, 150.0, 300.0, 200.0))
 
     assert drone.home_base_id == base.id
     assert task.id == "T-01"
     assert obstacle.bounds.width == 30.0
+    assert search.id == "S-01"
     assert service.project.map.find(drone.id) is drone
 
     service.update_property(drone.id, "max_speed", 21.0)

@@ -2,7 +2,7 @@
 
 from .enums import DroneStatus, ObstacleShape, TaskStatus, TaskType
 from .geometry import Point, Rect
-from .models import BaseStation, Drone, MapModel, MissionTask, Obstacle, ProjectModel
+from .models import BaseStation, Drone, MapModel, MissionTask, Obstacle, ProjectModel, SearchArea
 
 __all__ = [
     "BaseStation",
@@ -15,6 +15,7 @@ __all__ = [
     "Point",
     "ProjectModel",
     "Rect",
+    "SearchArea",
     "TaskStatus",
     "TaskType",
 ]

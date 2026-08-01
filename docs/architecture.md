@@ -16,3 +16,5 @@ The UI owns rendering. Domain coordinates are always metres in a top-left-origin
 ## Simulation timing
 
 `SimulationEngine` advances only in fixed logical steps (default `0.05 s`). The Qt timer supplies elapsed wall time to an accumulator; it never directly changes aircraft state. Speed multipliers scale the accumulator, so UI frame rate and multiplier changes cannot alter the final deterministic result.
+
+`CoverageMonitor` is owned by the engine and uses the same fixed-step positions. It precomputes accessible cells for each search polygon, stores the set of visiting drone IDs per cell, and exposes immutable coverage snapshots. The UI receives only summary values and render-cell coordinates; planning and measurement remain independent of PySide6.

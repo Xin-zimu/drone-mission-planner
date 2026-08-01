@@ -13,6 +13,7 @@ from drone_mission_planner.domain.models import (
     NoFlyZone,
     Obstacle,
     ProjectModel,
+    SearchArea,
 )
 from drone_mission_planner.persistence.project_repository import ProjectRepository
 
@@ -31,13 +32,21 @@ class ProjectService:
             "obstacle": 0,
             "no_fly": 0,
             "task": 0,
+            "search": 0,
         }
 
     def new_project(self, name: str = "Untitled mission") -> ProjectModel:
         self.project = ProjectModel(name=name)
         self.path = None
         self.dirty = False
-        self._counters = {"base": 0, "drone": 0, "obstacle": 0, "no_fly": 0, "task": 0}
+        self._counters = {
+            "base": 0,
+            "drone": 0,
+            "obstacle": 0,
+            "no_fly": 0,
+            "task": 0,
+            "search": 0,
+        }
         return self.project
 
     def load(self, path: str | Path) -> ProjectModel:
@@ -91,6 +100,13 @@ class ProjectService:
         self.dirty = True
         return item
 
+    def add_search_area(self, bounds: Rect) -> SearchArea:
+        index = self._next("search")
+        item = SearchArea(f"S-{index:02d}", f"Search area {index}", bounds.normalized)
+        self.project.map.search_areas.append(item)
+        self.dirty = True
+        return item
+
     def remove(self, object_id: str) -> MapObject | None:
         removed = self.project.map.remove(object_id)
         if removed is not None:
@@ -119,4 +135,5 @@ class ProjectService:
             "obstacle": len(self.project.map.obstacles),
             "no_fly": len(self.project.map.no_fly_zones),
             "task": len(self.project.map.tasks),
+            "search": len(self.project.map.search_areas),
         }

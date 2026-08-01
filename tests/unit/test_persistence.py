@@ -20,6 +20,7 @@ def test_project_round_trip(tmp_path: Path) -> None:
     service.add_drone(Point(60.0, 70.0))
     service.add_task(Point(300.0, 200.0))
     service.add_obstacle(Rect(120.0, 90.0, 60.0, 45.0))
+    service.add_search_area(Rect(200.0, 150.0, 220.0, 180.0))
     path = tmp_path / "mission.dmproj"
 
     service.save(path)
@@ -28,6 +29,7 @@ def test_project_round_trip(tmp_path: Path) -> None:
     assert loaded.name == "Round trip"
     assert loaded.map.drones[0].home_base_id == "B-01"
     assert loaded.map.obstacles[0].bounds.width == 60.0
+    assert loaded.map.search_areas[0].scan_spacing == 45.0
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == "1.0"
 
 

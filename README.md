@@ -6,7 +6,7 @@ Drone Mission Planner is a fully local desktop application for composing 2D mult
 
 ## Current milestone
 
-Phase 4 — fixed-step dynamic simulation.
+Phase 5 — cooperative search-area coverage.
 
 - Polished PySide6 desktop shell and zoomable map editor
 - Base, drone, obstacle, no-fly-zone, and mission-point editing
@@ -23,6 +23,10 @@ Phase 4 — fixed-step dynamic simulation.
 - Takeoff, flight, task execution, return, and completion state transitions
 - Play, pause, single-step, reset, and 0.5x–10x wall-clock speed controls
 - Live position, battery, task status, distance, and timing statistics
+- Rectangular or polygonal search areas with editable scan spacing and boundary margin
+- Deterministic vertical-strip partitioning across the available drone fleet
+- Obstacle-safe alternating lawnmower passes with automatic return to base
+- Live covered-cell heatmap, target coverage, and cross-drone repeat-coverage metrics
 
 ## Quick start
 
@@ -42,6 +46,8 @@ On Linux or macOS, activate with `source .venv/bin/activate`.
 | Select an object | Select tool, then left-click |
 | Add an object | Choose a placement tool, then click the map |
 | Draw an obstacle | Choose Obstacle, then drag a rectangle |
+| Draw a search area | Choose Search area, then drag a rectangle |
+| Plan cooperative sweep | `Ctrl+Shift+C` or Planning → Plan area coverage |
 | Pan | Middle mouse drag, or hold Space and drag |
 | Zoom | Mouse wheel |
 | Delete | Delete tool and click, or select and press Delete |
@@ -54,6 +60,8 @@ python -m pytest
 ruff check .
 mypy src
 ```
+
+Open `examples/coverage_demo.dmproj` to explore the three-drone canyon rescue sweep shown in the Phase 5 acceptance screenshot.
 
 ## Roadmap
 

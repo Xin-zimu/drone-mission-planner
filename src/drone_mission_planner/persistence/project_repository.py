@@ -16,6 +16,7 @@ from drone_mission_planner.domain.models import (
     NoFlyZone,
     Obstacle,
     ProjectModel,
+    SearchArea,
 )
 
 CURRENT_VERSION = "1.0"
@@ -148,6 +149,18 @@ class ProjectRepository:
                     assigned_drone_id=item.get("assigned_drone_id"),
                 )
                 for item in map_data.get("tasks", [])
+            ],
+            search_areas=[
+                SearchArea(
+                    id=item["id"],
+                    name=item["name"],
+                    bounds=_rect(item["bounds"]),
+                    points=[_point(point) for point in item.get("points", [])],
+                    scan_spacing=float(item.get("scan_spacing", 45.0)),
+                    boundary_margin=float(item.get("boundary_margin", 8.0)),
+                    target_coverage=float(item.get("target_coverage", 0.95)),
+                )
+                for item in map_data.get("search_areas", [])
             ],
         )
         return ProjectModel(

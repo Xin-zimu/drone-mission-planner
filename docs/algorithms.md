@@ -19,3 +19,13 @@ After A*, collinear nodes are removed and line-of-sight shortcuts are attempted.
 Pending tasks are ordered by descending priority, then deadline, then stable task ID. Every drone is evaluated against status, payload, home-base availability, reachability, safe return, and remaining energy plus a 15% reserve.
 
 Feasible candidates are ranked by route distance, battery risk, current task count, and deadline risk. Ties use stable drone IDs. A task is assigned at most once. Rejections retain per-drone reasons so the UI can explain whether payload, energy, status, outbound path, or return path caused the failure.
+
+## Cooperative area coverage
+
+A search polygon is intersected with horizontal scanlines separated by the configured sensor spacing. The polygon's horizontal extent is divided into equal, non-overlapping vertical strips—one per selected drone. Scanline fragments are clipped to each strip and shortened by the configured boundary margin.
+
+Pass direction alternates on every row to form a lawnmower pattern. Start, pass endpoints, and home-base return are joined through the same inflated A* grid used by point missions, so obstacles and no-fly zones remain hard constraints. Unsafe endpoints are moved inward to the nearest free planning cell; an unresolved leg produces a named per-drone failure instead of a partial executable route.
+
+## Coverage measurement
+
+`CoverageMonitor` samples accessible cells inside every search polygon. A drone covers cells within half its configured scan spacing. Coverage is the fraction visited by at least one drone; repeat coverage is the fraction visited by at least two distinct drones. Obstacle and no-fly cells are excluded from the denominator. The fixed-step engine updates both values independently from UI frame rate.

@@ -67,7 +67,29 @@ class MissionTask:
     assigned_drone_id: str | None = None
 
 
-type MapObject = BaseStation | Drone | Obstacle | NoFlyZone | MissionTask
+@dataclass(slots=True)
+class SearchArea:
+    id: str
+    name: str
+    bounds: Rect
+    points: list[Point] = field(default_factory=list)
+    scan_spacing: float = 45.0
+    boundary_margin: float = 8.0
+    target_coverage: float = 0.95
+
+    def polygon(self) -> list[Point]:
+        if self.points:
+            return list(self.points)
+        rect = self.bounds.normalized
+        return [
+            Point(rect.x, rect.y),
+            Point(rect.x + rect.width, rect.y),
+            Point(rect.x + rect.width, rect.y + rect.height),
+            Point(rect.x, rect.y + rect.height),
+        ]
+
+
+type MapObject = BaseStation | Drone | Obstacle | NoFlyZone | MissionTask | SearchArea
 
 
 @dataclass(slots=True)
@@ -80,9 +102,17 @@ class MapModel:
     bases: list[BaseStation] = field(default_factory=list)
     drones: list[Drone] = field(default_factory=list)
     tasks: list[MissionTask] = field(default_factory=list)
+    search_areas: list[SearchArea] = field(default_factory=list)
 
     def objects(self) -> list[MapObject]:
-        return [*self.bases, *self.drones, *self.obstacles, *self.no_fly_zones, *self.tasks]
+        return [
+            *self.bases,
+            *self.drones,
+            *self.obstacles,
+            *self.no_fly_zones,
+            *self.tasks,
+            *self.search_areas,
+        ]
 
     def find(self, object_id: str) -> MapObject | None:
         return next((item for item in self.objects() if item.id == object_id), None)
@@ -99,6 +129,8 @@ class MapModel:
             self.no_fly_zones.remove(item)
         elif isinstance(item, MissionTask):
             self.tasks.remove(item)
+        elif isinstance(item, SearchArea):
+            self.search_areas.remove(item)
         else:
             return None
         return item

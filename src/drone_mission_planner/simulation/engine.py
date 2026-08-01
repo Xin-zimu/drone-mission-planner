@@ -7,6 +7,7 @@ from drone_mission_planner.domain.enums import DroneStatus, TaskStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import MapModel, MissionTask
 
+from .coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from .drone_runtime import DroneRuntime
 from .statistics import DroneStatistics, collect_drone_statistics
 
@@ -27,6 +28,7 @@ class SimulationSnapshot:
     running: bool
     drones: tuple[DroneSnapshot, ...]
     task_statuses: dict[str, TaskStatus]
+    coverage: tuple[AreaCoverageSnapshot, ...]
 
 
 class SimulationEngine:
@@ -45,6 +47,10 @@ class SimulationEngine:
             task.id: TaskStatus.ASSIGNED if task.assigned_drone_id else task.status
             for task in map_model.tasks
         }
+        self.coverage_monitor = CoverageMonitor(map_model)
+        self.coverage_monitor.update(
+            {runtime.id: runtime.position for runtime in self.runtimes.values()}
+        )
 
     def start(self) -> None:
         self.running = True
@@ -81,6 +87,10 @@ class SimulationEngine:
             task.id: TaskStatus.ASSIGNED if task.assigned_drone_id else TaskStatus.PENDING
             for task in self.tasks.values()
         }
+        self.coverage_monitor.reset()
+        self.coverage_monitor.update(
+            {runtime.id: runtime.position for runtime in self.runtimes.values()}
+        )
 
     def run_until_complete(self, *, max_steps: int = 2_000_000) -> int:
         steps = 0
@@ -108,7 +118,13 @@ class SimulationEngine:
             )
             for runtime in sorted(self.runtimes.values(), key=lambda item: item.id)
         )
-        return SimulationSnapshot(self.time, self.running, drones, dict(self.task_statuses))
+        return SimulationSnapshot(
+            self.time,
+            self.running,
+            drones,
+            dict(self.task_statuses),
+            self.coverage_monitor.snapshot(),
+        )
 
     def statistics(self) -> tuple[DroneStatistics, ...]:
         return tuple(
@@ -119,6 +135,9 @@ class SimulationEngine:
     def _step(self, dt: float) -> None:
         for runtime in self.runtimes.values():
             self._update_runtime(runtime, dt)
+        self.coverage_monitor.update(
+            {runtime.id: runtime.position for runtime in self.runtimes.values()}
+        )
         self.time += dt
 
     def _update_runtime(self, runtime: DroneRuntime, dt: float) -> None:

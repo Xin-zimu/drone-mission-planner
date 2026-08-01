@@ -32,6 +32,7 @@ from drone_mission_planner.domain.models import (
     MissionTask,
     NoFlyZone,
     Obstacle,
+    SearchArea,
 )
 
 
@@ -42,6 +43,7 @@ class ToolMode(StrEnum):
     OBSTACLE = "obstacle"
     NO_FLY = "no_fly"
     TASK = "task"
+    SEARCH_AREA = "search_area"
     DELETE = "delete"
 
 
@@ -65,6 +67,9 @@ class MapView(QGraphicsView):
         self._pan_start = QPoint()
         self._drag_origin: QPointF | None = None
         self._preview: QGraphicsRectItem | None = None
+        self._coverage_progress: dict[str, float] = {}
+        self._coverage_cells: dict[str, tuple[tuple[Point, int], ...]] = {}
+        self._coverage_resolutions: dict[str, float] = {}
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
@@ -103,6 +108,9 @@ class MapView(QGraphicsView):
 
     def render_model(self) -> None:
         self._scene.clear()
+        for area in self._model.search_areas:
+            self._add_search_area_item(area)
+        self._add_coverage_overlay()
         for obstacle in self._model.obstacles:
             self._add_obstacle_item(obstacle)
         for zone in self._model.no_fly_zones:
@@ -116,6 +124,21 @@ class MapView(QGraphicsView):
             self._add_task_item(task)
         for drone in self._model.drones:
             self._add_drone_item(drone)
+
+    def set_coverage_overlay(
+        self,
+        progress: dict[str, float],
+        cells: dict[str, tuple[tuple[Point, int], ...]],
+        resolutions: dict[str, float],
+    ) -> None:
+        self._coverage_progress = dict(progress)
+        self._coverage_cells = dict(cells)
+        self._coverage_resolutions = dict(resolutions)
+
+    def clear_coverage_overlay(self) -> None:
+        self._coverage_progress.clear()
+        self._coverage_cells.clear()
+        self._coverage_resolutions.clear()
 
     def reset_view(self) -> None:
         self.resetTransform()
@@ -190,7 +213,7 @@ class MapView(QGraphicsView):
                 self.create_point_requested.emit(self._mode.value, world.x, world.y)
                 event.accept()
                 return
-            if self._mode in {ToolMode.OBSTACLE, ToolMode.NO_FLY}:
+            if self._mode in {ToolMode.OBSTACLE, ToolMode.NO_FLY, ToolMode.SEARCH_AREA}:
                 self._drag_origin = QPointF(world.x, world.y)
                 self._preview = self._scene.addRect(
                     QRectF(self._drag_origin, self._drag_origin),
@@ -332,6 +355,51 @@ class MapView(QGraphicsView):
         self._tag(item, zone.id)
         self._scene.addItem(item)
         self._add_label(zone.id, bounds.x + 6, bounds.y + 5, "#dda8ff")
+
+    def _add_search_area_item(self, area: SearchArea) -> None:
+        polygon = area.polygon()
+        if not polygon:
+            return
+        path = QPainterPath(QPointF(polygon[0].x, polygon[0].y))
+        for point in polygon[1:]:
+            path.lineTo(point.x, point.y)
+        path.closeSubpath()
+        item = QGraphicsPathItem(path)
+        item.setPen(QPen(QColor("#4ce0d2"), 2, Qt.PenStyle.DashLine))
+        item.setBrush(QColor(35, 148, 140, 35))
+        item.setZValue(-6)
+        self._tag(item, area.id)
+        self._scene.addItem(item)
+        anchor = min(polygon, key=lambda point: (point.y, point.x))
+        progress = self._coverage_progress.get(area.id, 0.0)
+        self._add_label(
+            f"{area.id}  •  {progress:.1%} covered",
+            anchor.x + 7,
+            anchor.y + 7,
+            "#78f1e5",
+        )
+
+    def _add_coverage_overlay(self) -> None:
+        for area_id, cells in self._coverage_cells.items():
+            resolution = self._coverage_resolutions.get(area_id, 0.0)
+            if resolution <= 0:
+                continue
+            size = resolution * 0.82
+            for center, visit_count in cells:
+                item = QGraphicsRectItem(
+                    center.x - size / 2,
+                    center.y - size / 2,
+                    size,
+                    size,
+                )
+                if visit_count >= 2:
+                    item.setBrush(QColor(249, 202, 91, 105))
+                else:
+                    item.setBrush(QColor(85, 214, 190, 95))
+                item.setPen(Qt.PenStyle.NoPen)
+                item.setZValue(-5)
+                item.setData(0, area_id)
+                self._scene.addItem(item)
 
     def _add_route(self, drone: Drone, index: int) -> None:
         if len(drone.planned_path) < 2:
