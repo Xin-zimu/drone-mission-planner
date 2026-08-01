@@ -1,85 +1,115 @@
 # Drone Mission Planner
 
-**多无人机协同任务规划与动态仿真平台**
+**多无人机协同任务规划与动态仿真平台** — a fully local PySide6 desktop application for composing, planning, validating, simulating, and reporting 2D multi-UAV missions. Version 1.0 is software-only: it does not connect to real aircraft or cloud services.
 
-Drone Mission Planner is a fully local desktop application for composing 2D multi-UAV missions, validating constraints, planning routes, and simulating execution. Version 1 does not connect to real aircraft or cloud services.
+![Final mountain search-and-rescue dashboard](reports/screenshots/phase-08-final-rescue.png)
 
-## Current milestone
+## Demonstration
 
-Phase 7 — collision prediction and communication constraints.
+![Search, fault containment, live replanning, and final statistics](docs/media/rescue-demo.gif)
 
-- Polished PySide6 desktop shell and zoomable map editor
-- Base, drone, obstacle, no-fly-zone, and mission-point editing
-- Object tree and editable property inspector
-- Versioned `.dmproj` JSON save/load
-- Structured logging and deterministic IDs
-- Deterministic 8-connected A* with Octile heuristic
-- Per-drone obstacle inflation, line-of-sight smoothing, and final validation
-- Distance, time, energy, expanded-node, and clear failure reporting
-- Priority-first multi-drone greedy assignment
-- Payload and safe-return battery validation for every candidate
-- Simultaneous color-coded routes, assignment table, and manual reassignment field
-- Deterministic 0.05 s simulation steps independent from UI frame rate
-- Takeoff, flight, task execution, return, and completion state transitions
-- Play, pause, single-step, reset, and 0.5x–10x wall-clock speed controls
-- Live position, battery, task status, distance, and timing statistics
-- Rectangular or polygonal search areas with editable scan spacing and boundary margin
-- Deterministic vertical-strip partitioning across the available drone fleet
-- Obstacle-safe alternating lawnmower passes with automatic return to base
-- Live covered-cell heatmap, target coverage, and cross-drone repeat-coverage metrics
-- Manual and deterministic scheduled drone-failure events
-- Immediate failed-aircraft stop with visible failure reason and event history
-- Automatic task or coverage redistribution from live positions
-- Replanning that preserves simulation time, battery, distance, and completed work
-- Dynamic mission insertion, cancellation, and temporary no-fly-zone replanning
-- Sampled time–space conflict prediction over each drone's future trajectory
-- Stable task-priority yielding that records safety holds and waiting time
-- Direct and multi-hop base-link graph validation using per-node radio ranges
-- Communication loss/restoration events with disconnect duration and hop count
-- Configurable `log_only` or obstacle-safe `auto_return` loss policy
+[Download the MP4 demonstration](docs/media/rescue-demo.mp4) · [Open the generated simulation report](reports/final-simulation-report.html)
 
-## Quick start
+## What is included
+
+| Area | Capabilities |
+|---|---|
+| Mission editor | Zoomable grid map; bases, drones, point missions, obstacles, no-fly zones, polygon/rectangular search areas; inspector and object tree |
+| Route planning | Deterministic 8-connected A*, Octile heuristic, safety-radius inflation, corner-cut prevention, smoothing, and final validation |
+| Assignment | Priority-first multi-drone allocation with payload, remaining battery, safe return, reserve, deadlines, and per-drone rejection reasons |
+| Cooperative search | Vertical strip partitioning, obstacle-safe lawnmower passes, return to base, live coverage heatmap, and repeat-coverage metrics |
+| Dynamic simulation | Fixed 0.05 s logic steps, 0.5x–10x playback, state machine, battery/distance/task integration, pause/step/reset |
+| Live adaptation | Manual or seeded automatic failures, exact-position stop, unfinished-work redistribution, temporary zones, task insertion/cancellation |
+| Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
+| Reporting | Per-aircraft and system statistics, completion/coverage charts, event history, and HTML/JSON/CSV export |
+| Persistence | Human-readable `.dmproj` JSON, schema migration from 1.0 to 1.1, validation, and clear corrupt/incompatible-file errors |
+
+## Windows application
+
+The release package contains a standalone `DroneMissionPlanner.exe`; Python is not required on the target computer. The reproducible Windows build is defined in [the PyInstaller spec](packaging/drone_mission_planner.spec) and [GitHub Actions workflow](.github/workflows/build-windows.yml).
+
+To build locally on Windows with Python 3.12:
+
+```powershell
+./packaging/build-windows.ps1
+```
+
+The one-file EXE is written to `dist/DroneMissionPlanner.exe`.
+
+## Run from source
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+python -m pip install -e ".[dev]"
 python run.py
 ```
 
-On Linux or macOS, activate with `source .venv/bin/activate`.
+## Five-minute workflow
+
+1. Place a base, one or more drones, and missions; drag rectangles for obstacles/no-fly zones.
+2. Use **Planning → Auto assign all missions**, or draw a Search area and choose **Plan area coverage**.
+3. Press Play, or use Pause, Step, Reset, and the speed selector.
+4. Select a drone and press `Ctrl+Shift+F` to test state-preserving fault recovery.
+5. Review Events, Safety & links, Coverage, and Statistics; press `Ctrl+E` to export a report.
+
+Press `F1` inside the application for the quick-start guide.
+
+## Examples
+
+| Project | Demonstrates |
+|---|---|
+| `examples/inspection_demo.dmproj` | Three-drone priority inspection around buildings and a crane exclusion zone |
+| `examples/delivery_demo.dmproj` | Light/cargo/heavy delivery allocation using payload and energy constraints |
+| `examples/rescue_demo.dmproj` | Required final mountain search: three drones, two no-fly zones, four peaks, two checkpoints, D-02 failure, two-drone recovery, 95%+ coverage |
+| `examples/safety_constraints_demo.dmproj` | Crossing-flight priority hold and a three-relay communication chain |
+| `examples/fault_replanning_demo.dmproj` | Point-mission failure and redistribution from live state |
 
 ## Controls
 
 | Action | Control |
 |---|---|
-| Select an object | Select tool, then left-click |
-| Add an object | Choose a placement tool, then click the map |
-| Draw an obstacle | Choose Obstacle, then drag a rectangle |
-| Draw a search area | Choose Search area, then drag a rectangle |
-| Plan cooperative sweep | `Ctrl+Shift+C` or Planning → Plan area coverage |
-| Fail a drone | Select it, then `Ctrl+Shift+F` |
-| Schedule a fault | Simulation → Schedule automatic failure |
-| Insert during simulation | Use Mission or No-fly while a simulation exists |
-| Cancel a mission | Select it, then Simulation → Cancel selected mission |
-| Pan | Middle mouse drag, or hold Space and drag |
-| Zoom | Mouse wheel |
-| Delete | Delete tool and click, or select and press Delete |
+| Select / inspect | Select tool, then click map or object tree |
+| Add point object | Choose Base, Drone, or Mission, then click |
+| Draw area object | Choose Obstacle, No-fly, or Search area, then drag |
+| Pan / zoom / fit | Middle-drag or Space-drag / wheel / `F` |
 | Save | `Ctrl+S` |
+| Point mission planning | `Ctrl+Shift+P` |
+| Cooperative coverage | `Ctrl+Shift+C` |
+| Play / step | `Ctrl+Space` / `.` |
+| Inject selected-drone fault | `Ctrl+Shift+F` |
+| Export report | `Ctrl+E` |
+| In-app guide | `F1` |
 
-## Quality checks
+## Engineering quality
 
 ```bash
-python -m pytest
 ruff check .
 mypy src
+pytest
+python scripts/benchmark.py
 ```
 
-Open `examples/coverage_demo.dmproj` for cooperative search, `examples/fault_replanning_demo.dmproj` for live fault recovery, or `examples/safety_constraints_demo.dmproj` for collision holds and relay links.
+The final suite covers geometry, rasterization, A*, smoothing, energy, assignment, coverage, event handling, state-preserving fault recovery, collision avoidance, multi-hop communication, reporting, persistence migration, UI smoke paths, all three release examples, and performance limits. See [the final test report](reports/final-test-report.md).
 
-## Roadmap
+## Documentation
 
-The project follows eight independently archived phases: editor, A* planning, multi-UAV assignment, dynamic simulation, coverage planning, fault replanning, collision/communication constraints, and final optimization/packaging.
+- [User guide](docs/user-guide.md) and printable Word/PDF manual
+- [Architecture](docs/architecture.md)
+- [Algorithms](docs/algorithms.md)
+- [Developer guide](docs/developer-guide.md)
+- [Data format](docs/data-format.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Project summary](docs/project-summary.md)
+
+## Architecture
+
+The project enforces `UI → application → domain/planning/simulation/persistence` dependency direction. Planning and simulation never depend on PySide6, all domain objects are dataclasses, deterministic behavior accepts a fixed seed, and each core feature has automated tests.
+
+## Scope and roadmap
+
+Version 1.0 is a local 2D planning and simulation platform. Real flight control, MAVLink/PX4, ROS 2, 3D terrain, wind, and hardware telemetry are intentionally outside this release; the project summary documents extension points.
 
 ## License
 

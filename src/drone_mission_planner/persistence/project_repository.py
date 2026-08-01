@@ -18,8 +18,11 @@ from drone_mission_planner.domain.models import (
     ProjectModel,
     SearchArea,
 )
+from drone_mission_planner.domain.validation import validate_project
 
-CURRENT_VERSION = "1.0"
+from .migrations import MigrationError, migrate_project
+
+CURRENT_VERSION = "1.1"
 
 
 class ProjectFormatError(ValueError):
@@ -48,6 +51,7 @@ class ProjectRepository:
     """Read and write deterministic, human-readable `.dmproj` JSON files."""
 
     def save(self, project: ProjectModel, path: str | Path) -> Path:
+        validate_project(project)
         target = Path(path)
         if target.suffix.lower() != ".dmproj":
             target = target.with_suffix(".dmproj")
@@ -68,13 +72,19 @@ class ProjectRepository:
             raise ProjectFormatError(f"Cannot read project: {exc}") from exc
         if not isinstance(raw, dict):
             raise ProjectFormatError("Project root must be a JSON object")
+        try:
+            raw = migrate_project(raw)
+        except MigrationError as exc:
+            raise ProjectFormatError(str(exc)) from exc
         version = str(raw.get("version", ""))
         if version != CURRENT_VERSION:
             raise ProjectFormatError(
                 f"Unsupported project version {version or 'missing'}; expected {CURRENT_VERSION}"
             )
         try:
-            return self._decode(raw)
+            project = self._decode(raw)
+            validate_project(project)
+            return project
         except (KeyError, TypeError, ValueError) as exc:
             raise ProjectFormatError(f"Invalid project data: {exc}") from exc
 

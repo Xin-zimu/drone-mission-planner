@@ -28,7 +28,7 @@ Pass direction alternates on every row to form a lawnmower pattern. Start, pass 
 
 ## Coverage measurement
 
-`CoverageMonitor` samples accessible cells inside every search polygon. A drone covers cells within half its configured scan spacing. Coverage is the fraction visited by at least one drone; repeat coverage is the fraction visited by at least two distinct drones. Obstacle and no-fly cells are excluded from the denominator. The fixed-step engine updates both values independently from UI frame rate.
+`CoverageMonitor` samples accessible cells inside every search polygon. The conservative demonstration sensor footprint uses a radius equal to 90% of configured scan spacing, providing overlap despite grid quantization and obstacle detours. Coverage is the fraction visited by at least one drone; repeat coverage is the fraction visited by at least two distinct drones. Obstacle and no-fly cells are excluded from the denominator. The fixed-step engine updates both values independently from UI frame rate.
 
 ## Dynamic fault replanning
 

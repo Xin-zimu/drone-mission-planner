@@ -43,7 +43,7 @@ class CoverageMonitor:
 
     def update(self, drone_positions: dict[str, Point]) -> None:
         for state in self._states.values():
-            sensor_radius = max(state.resolution, state.area.scan_spacing / 2.0)
+            sensor_radius = max(state.resolution, state.area.scan_spacing * 0.9)
             cell_radius = ceil(sensor_radius / state.resolution)
             for drone_id, position in drone_positions.items():
                 center = self._world_to_cell(position, state.resolution)

@@ -1,0 +1,59 @@
+{
+  "mission_time": 529.4000000000663,
+  "total_tasks": 2,
+  "completed_tasks": 2,
+  "cancelled_tasks": 0,
+  "completion_rate": 1.0,
+  "total_distance": 15693.300295564008,
+  "total_energy_used": 413.9002144020102,
+  "replan_count": 1,
+  "conflict_count": 33,
+  "communication_loss_count": 1,
+  "drones": [
+    {
+      "drone_id": "D-01",
+      "status": "completed",
+      "distance_flown": 7284.546789141022,
+      "flight_time": 485.6364526094773,
+      "waiting_time": 4.049999999999994,
+      "battery_used": 182.11366972856754,
+      "remaining_battery": 37.88633027143246,
+      "completed_tasks": 1,
+      "base_link": "direct",
+      "hop_count": 1
+    },
+    {
+      "drone_id": "D-02",
+      "status": "failed",
+      "distance_flown": 1583.3999999999576,
+      "flight_time": 75.39999999999789,
+      "waiting_time": 4.6499999999999915,
+      "battery_used": 47.50199999999114,
+      "remaining_battery": 107.49800000000886,
+      "completed_tasks": 0,
+      "base_link": "lost",
+      "hop_count": null
+    },
+    {
+      "drone_id": "D-03",
+      "status": "completed",
+      "distance_flown": 6825.353506423029,
+      "flight_time": 525.0271928019275,
+      "waiting_time": 4.399999999999992,
+      "battery_used": 184.28454467345153,
+      "remaining_battery": 25.715455326548454,
+      "completed_tasks": 1,
+      "base_link": "direct",
+      "hop_count": 1
+    }
+  ],
+  "coverage": [
+    {
+      "area_id": "S-01",
+      "coverage": 0.9537974683544304,
+      "repeat_coverage": 0.32341772151898734,
+      "covered_cells": 1507,
+      "target_cells": 1580
+    }
+  ]
+}

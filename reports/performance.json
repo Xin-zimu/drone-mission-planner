@@ -1,0 +1,8 @@
+{
+  "route_planning_median_seconds": 0.021241121999992174,
+  "grid_500x500_seconds": 0.001398522999807028,
+  "rescue_project_load_median_seconds": 0.0001394229998368246,
+  "simulation_20_drones_100_steps_seconds": 0.27079616599985457,
+  "assignment_20_drones_200_tasks_seconds": 0.9581457329995828,
+  "python_version": "3.12.13"
+}

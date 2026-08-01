@@ -46,9 +46,11 @@ from drone_mission_planner.planning.route_planner import RoutePlanner
 from drone_mission_planner.simulation.coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from drone_mission_planner.simulation.engine import SimulationEngine, SimulationSnapshot
 from drone_mission_planner.simulation.events import EventType
+from drone_mission_planner.simulation.reporting import build_simulation_report, export_report
 
 from .map_view import MapView, ToolMode
 from .property_panel import PropertyPanel
+from .statistics_panel import StatisticsPanel
 
 LOGGER = logging.getLogger(__name__)
 
@@ -119,7 +121,7 @@ class MainWindow(QMainWindow):
         self._install_log_handler()
         self._refresh_all()
         self.statusBar().showMessage("Ready — create a base to begin planning", 5000)
-        LOGGER.info("Phase 1 editor initialized")
+        LOGGER.info("Drone Mission Planner 1.0 initialized")
 
     def _build_actions(self) -> None:
         self.new_action = QAction("New project", self)
@@ -152,6 +154,10 @@ class MainWindow(QMainWindow):
         self.fail_drone_action.setShortcut("Ctrl+Shift+F")
         self.schedule_failure_action = QAction("Schedule automatic failure", self)
         self.cancel_task_action = QAction("Cancel selected mission", self)
+        self.export_report_action = QAction("Export simulation report…", self)
+        self.export_report_action.setShortcut("Ctrl+E")
+        self.quick_start_action = QAction("Quick start guide", self)
+        self.quick_start_action.setShortcut("F1")
         self.about_action = QAction("About Drone Mission Planner", self)
 
     def _build_menu(self) -> None:
@@ -159,6 +165,7 @@ class MainWindow(QMainWindow):
         file_menu.addActions(
             [self.new_action, self.open_action, self.save_action, self.save_as_action]
         )
+        file_menu.addAction(self.export_report_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
         edit_menu = self.menuBar().addMenu("Edit")
@@ -176,6 +183,7 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.reset_view_action)
         help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction(self.quick_start_action)
         help_menu.addAction(self.about_action)
 
     def _build_toolbar(self) -> None:
@@ -334,6 +342,8 @@ class MainWindow(QMainWindow):
         self.safety_table.verticalHeader().setVisible(False)
         self.safety_table.horizontalHeader().setStretchLastSection(True)
         tabs.addTab(self.safety_table, "Safety & links")
+        self.statistics_panel = StatisticsPanel()
+        tabs.addTab(self.statistics_panel, "Statistics")
         tabs.addTab(self.log_view, "Activity log")
         bottom_dock = QDockWidget("Workspace", self)
         bottom_dock.setObjectName("WorkspaceDock")
@@ -364,9 +374,11 @@ class MainWindow(QMainWindow):
         self.fail_drone_action.triggered.connect(self.fail_selected_drone)
         self.schedule_failure_action.triggered.connect(self.schedule_automatic_failure)
         self.cancel_task_action.triggered.connect(self.cancel_selected_task)
+        self.export_report_action.triggered.connect(self.export_simulation_report)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
+        self.quick_start_action.triggered.connect(self.show_quick_start)
         self.map_view.create_point_requested.connect(self.create_point_object)
         self.map_view.create_rect_requested.connect(self.create_rect_object)
         self.map_view.object_selected.connect(self.select_object)
@@ -536,6 +548,7 @@ class MainWindow(QMainWindow):
         )
         result = self.coverage_planner.plan(self.service.project.map, area)
         self._discard_simulation()
+        self.service.project.planning_settings["mission_mode"] = "coverage"
         self.coverage_results[area.id] = result
         for drone in self.service.project.map.drones:
             drone.planned_path = result.drone_paths.get(drone.id, [])
@@ -666,6 +679,31 @@ class MainWindow(QMainWindow):
                 self.safety_table.setItem(row, column, item)
         self.safety_table.resizeColumnsToContents()
 
+    def export_simulation_report(self) -> None:
+        if self.simulation_engine is None:
+            QMessageBox.information(
+                self,
+                "No simulation data",
+                "Start or step a simulation before exporting its report.",
+            )
+            return
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export simulation report",
+            f"{self.service.project.name}-report.html",
+            "Web report (*.html);;JSON report (*.json);;CSV table (*.csv)",
+        )
+        if not selected:
+            return
+        try:
+            saved = export_report(build_simulation_report(self.simulation_engine), selected)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Cannot export report", str(exc))
+            LOGGER.error("Report export failed: %s", exc)
+            return
+        LOGGER.info("Simulation report exported to %s", saved)
+        self.statusBar().showMessage(f"Report exported: {saved.name}", 6000)
+
     def auto_assign_tasks(self) -> None:
         if not self.service.project.map.drones or not self.service.project.map.tasks:
             QMessageBox.information(
@@ -681,6 +719,7 @@ class MainWindow(QMainWindow):
         )
         result = self.assignment_planner.assign(self.service.project.map)
         self._discard_simulation()
+        self.service.project.planning_settings["mission_mode"] = "point_tasks"
         self.coverage_results.clear()
         self._apply_assignment_result(result)
         self._render_assignment_table(result)
@@ -898,7 +937,9 @@ class MainWindow(QMainWindow):
             return
 
         coverage_mode = bool(self.service.project.map.search_areas) and (
-            bool(self.coverage_results) or not self.service.project.map.tasks
+            self.service.project.planning_settings.get("mission_mode") == "coverage"
+            or bool(self.coverage_results)
+            or not self.service.project.map.tasks
         )
         if coverage_mode:
             area = self.service.project.map.search_areas[0]
@@ -1026,6 +1067,7 @@ class MainWindow(QMainWindow):
         self._render_coverage_table(snapshot.coverage)
         self._render_event_table()
         self._render_safety_table(snapshot)
+        self.statistics_panel.set_report(build_simulation_report(self.simulation_engine))
         self._populate_tree()
         if self._selected_id:
             selected = self.service.project.map.find(self._selected_id)
@@ -1048,6 +1090,17 @@ class MainWindow(QMainWindow):
             self.delete_object(self._selected_id)
 
     def delete_object(self, object_id: str) -> None:
+        if self.simulation_engine is not None:
+            self.pause_simulation()
+            QMessageBox.information(
+                self,
+                "Simulation object is active",
+                "Active simulation objects cannot be deleted. Start a new project or reopen "
+                "the project before changing its structure. Missions can be cancelled from "
+                "the Simulation menu.",
+            )
+            LOGGER.warning("Deletion of %s blocked while simulation state is active", object_id)
+            return
         removed = self.service.remove(object_id)
         if removed is None:
             return
@@ -1160,9 +1213,21 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 0.7.0</b><br><br>"
+            "<b>Drone Mission Planner 1.0.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Phase 7: collision avoidance and multi-hop communication constraints.",
+            "Release 1.0: eight-stage planning, simulation, recovery, and reporting platform.",
+        )
+
+    def show_quick_start(self) -> None:
+        QMessageBox.information(
+            self,
+            "Quick start",
+            "<b>1. Compose</b> — place a base, drones, missions, obstacles, and no-fly zones.<br>"
+            "<b>2. Plan</b> — auto-assign point missions or create a cooperative area sweep.<br>"
+            "<b>3. Simulate</b> — Play, Pause, Step, Reset, and choose 0.5x-10x speed.<br>"
+            "<b>4. Adapt</b> — inject a failure, insert/cancel work, or add a temporary zone.<br>"
+            "<b>5. Review</b> — inspect Events, Safety &amp; links, Statistics, then export a report.<br><br>"
+            "Tip: open an example from the examples folder to explore a complete mission.",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:

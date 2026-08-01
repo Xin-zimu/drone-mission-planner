@@ -3,6 +3,7 @@
 from .enums import DroneStatus, ObstacleShape, TaskStatus, TaskType
 from .geometry import Point, Rect
 from .models import BaseStation, Drone, MapModel, MissionTask, Obstacle, ProjectModel, SearchArea
+from .validation import ProjectValidationError, validate_project
 
 __all__ = [
     "BaseStation",
@@ -14,8 +15,10 @@ __all__ = [
     "ObstacleShape",
     "Point",
     "ProjectModel",
+    "ProjectValidationError",
     "Rect",
     "SearchArea",
     "TaskStatus",
     "TaskType",
+    "validate_project",
 ]

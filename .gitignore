@@ -7,8 +7,10 @@ __pycache__/
 build/
 dist/
 *.spec
+!packaging/drone_mission_planner.spec
 *.dmproj.autosave
 artifacts/
 reports/*.xml
 reports/*.json
-
+!reports/performance.json
+!reports/final-simulation-report.json

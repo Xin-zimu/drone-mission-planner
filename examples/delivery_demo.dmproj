@@ -1,0 +1,238 @@
+{
+  "map": {
+    "bases": [
+      {
+        "communication_range": 900,
+        "id": "B-01",
+        "name": "Medical logistics hub",
+        "position": {
+          "x": 90,
+          "y": 350
+        }
+      }
+    ],
+    "drones": [
+      {
+        "assigned_tasks": [
+          "T-01"
+        ],
+        "battery_capacity": 300,
+        "communication_range": 900,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.025,
+        "home_base_id": "B-01",
+        "id": "D-01",
+        "max_speed": 15.0,
+        "name": "Light courier",
+        "payload_capacity": 1.5,
+        "planned_path": [
+          {
+            "x": 90,
+            "y": 320
+          },
+          {
+            "x": 280,
+            "y": 120
+          },
+          {
+            "x": 90,
+            "y": 350
+          }
+        ],
+        "position": {
+          "x": 90,
+          "y": 320
+        },
+        "remaining_battery": 300,
+        "safety_radius": 6.0,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [
+          "T-02"
+        ],
+        "battery_capacity": 300,
+        "communication_range": 900,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.025,
+        "home_base_id": "B-01",
+        "id": "D-02",
+        "max_speed": 13,
+        "name": "Cargo courier",
+        "payload_capacity": 6,
+        "planned_path": [
+          {
+            "x": 90,
+            "y": 350
+          },
+          {
+            "x": 560,
+            "y": 610
+          },
+          {
+            "x": 90,
+            "y": 350
+          }
+        ],
+        "position": {
+          "x": 90,
+          "y": 350
+        },
+        "remaining_battery": 300,
+        "safety_radius": 6.0,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [
+          "T-03"
+        ],
+        "battery_capacity": 300,
+        "communication_range": 900,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.025,
+        "home_base_id": "B-01",
+        "id": "D-03",
+        "max_speed": 11,
+        "name": "Heavy lift",
+        "payload_capacity": 12,
+        "planned_path": [
+          {
+            "x": 90,
+            "y": 380
+          },
+          {
+            "x": 690.0,
+            "y": 350.0
+          },
+          {
+            "x": 900,
+            "y": 270
+          },
+          {
+            "x": 710.0,
+            "y": 350.0
+          },
+          {
+            "x": 90,
+            "y": 350
+          }
+        ],
+        "position": {
+          "x": 90,
+          "y": 380
+        },
+        "remaining_battery": 300,
+        "safety_radius": 6.0,
+        "status": "idle"
+      }
+    ],
+    "grid_size": 20,
+    "height": 700,
+    "no_fly_zones": [
+      {
+        "bounds": {
+          "height": 100,
+          "width": 130,
+          "x": 500,
+          "y": 90
+        },
+        "id": "N-01",
+        "name": "Hospital approach",
+        "points": [],
+        "shape": "rectangle",
+        "temporary": false
+      }
+    ],
+    "obstacles": [
+      {
+        "bounds": {
+          "height": 120,
+          "width": 150,
+          "x": 320,
+          "y": 210
+        },
+        "id": "O-01",
+        "name": "City block",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 120,
+          "width": 170,
+          "x": 610,
+          "y": 400
+        },
+        "id": "O-02",
+        "name": "Stadium",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      }
+    ],
+    "search_areas": [],
+    "tasks": [
+      {
+        "assigned_drone_id": "D-01",
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 8,
+        "id": "T-01",
+        "name": "Urgent medicine",
+        "position": {
+          "x": 280,
+          "y": 120
+        },
+        "priority": 10,
+        "required_payload": 0.8,
+        "status": "assigned",
+        "task_type": "delivery"
+      },
+      {
+        "assigned_drone_id": "D-02",
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 8,
+        "id": "T-02",
+        "name": "Field supplies",
+        "position": {
+          "x": 560,
+          "y": 610
+        },
+        "priority": 8,
+        "required_payload": 4.5,
+        "status": "assigned",
+        "task_type": "delivery"
+      },
+      {
+        "assigned_drone_id": "D-03",
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 8,
+        "id": "T-03",
+        "name": "Rescue equipment",
+        "position": {
+          "x": 900,
+          "y": 270
+        },
+        "priority": 9,
+        "required_payload": 9.0,
+        "status": "assigned",
+        "task_type": "delivery"
+      }
+    ],
+    "width": 1000
+  },
+  "name": "Medical Supply Delivery",
+  "planning_settings": {
+    "mission_mode": "point_tasks"
+  },
+  "simulation_settings": {
+    "communication_grace": 5.0,
+    "communication_policy": "log_only",
+    "fixed_dt": 0.05,
+    "random_seed": 42
+  },
+  "version": "1.1"
+}

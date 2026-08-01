@@ -15,6 +15,7 @@ from drone_mission_planner.domain.models import (
     ProjectModel,
     SearchArea,
 )
+from drone_mission_planner.domain.validation import validate_project
 from drone_mission_planner.persistence.project_repository import ProjectRepository
 
 
@@ -125,7 +126,13 @@ class ProjectService:
         allowed = {field.name for field in fields(item)} - {"id"}
         if name not in allowed:
             raise ValueError(f"Property {name!r} is not editable")
+        previous = getattr(item, name)
         setattr(item, name, value)
+        try:
+            validate_project(self.project)
+        except ValueError:
+            setattr(item, name, previous)
+            raise
         self.dirty = True
         return item
 
