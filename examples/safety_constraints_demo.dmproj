@@ -1,0 +1,240 @@
+{
+  "map": {
+    "bases": [
+      {
+        "communication_range": 310,
+        "id": "B-01",
+        "name": "Valley command",
+        "position": {
+          "x": 80,
+          "y": 350
+        }
+      }
+    ],
+    "drones": [
+      {
+        "assigned_tasks": [
+          "T-01"
+        ],
+        "battery_capacity": 100.0,
+        "communication_range": 310,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.08,
+        "home_base_id": "B-01",
+        "id": "D-01",
+        "max_speed": 18,
+        "name": "Priority scout",
+        "payload_capacity": 3.0,
+        "planned_path": [
+          {
+            "x": 150,
+            "y": 300
+          },
+          {
+            "x": 850,
+            "y": 300
+          },
+          {
+            "x": 80,
+            "y": 350
+          }
+        ],
+        "position": {
+          "x": 150,
+          "y": 300
+        },
+        "remaining_battery": 100.0,
+        "safety_radius": 12,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [
+          "T-02"
+        ],
+        "battery_capacity": 100.0,
+        "communication_range": 310,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.08,
+        "home_base_id": "B-01",
+        "id": "D-02",
+        "max_speed": 15,
+        "name": "Surveyor",
+        "payload_capacity": 3.0,
+        "planned_path": [
+          {
+            "x": 500,
+            "y": 600
+          },
+          {
+            "x": 500,
+            "y": 100
+          },
+          {
+            "x": 80,
+            "y": 350
+          }
+        ],
+        "position": {
+          "x": 500,
+          "y": 600
+        },
+        "remaining_battery": 100.0,
+        "safety_radius": 12,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [],
+        "battery_capacity": 100.0,
+        "communication_range": 310,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.08,
+        "home_base_id": "B-01",
+        "id": "D-03",
+        "max_speed": 15.0,
+        "name": "Relay west",
+        "payload_capacity": 3.0,
+        "planned_path": [],
+        "position": {
+          "x": 300,
+          "y": 520
+        },
+        "remaining_battery": 100.0,
+        "safety_radius": 6.0,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [],
+        "battery_capacity": 100.0,
+        "communication_range": 310,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.08,
+        "home_base_id": "B-01",
+        "id": "D-04",
+        "max_speed": 15.0,
+        "name": "Relay center",
+        "payload_capacity": 3.0,
+        "planned_path": [],
+        "position": {
+          "x": 550,
+          "y": 520
+        },
+        "remaining_battery": 100.0,
+        "safety_radius": 6.0,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [],
+        "battery_capacity": 100.0,
+        "communication_range": 310,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.08,
+        "home_base_id": "B-01",
+        "id": "D-05",
+        "max_speed": 15.0,
+        "name": "Relay east",
+        "payload_capacity": 3.0,
+        "planned_path": [],
+        "position": {
+          "x": 780,
+          "y": 480
+        },
+        "remaining_battery": 100.0,
+        "safety_radius": 6.0,
+        "status": "idle"
+      }
+    ],
+    "grid_size": 15,
+    "height": 700,
+    "no_fly_zones": [
+      {
+        "bounds": {
+          "height": 90,
+          "width": 115,
+          "x": 720,
+          "y": 110
+        },
+        "id": "N-01",
+        "name": "Protected camp",
+        "points": [],
+        "shape": "rectangle",
+        "temporary": false
+      }
+    ],
+    "obstacles": [
+      {
+        "bounds": {
+          "height": 90,
+          "width": 110,
+          "x": 250,
+          "y": 120
+        },
+        "id": "O-01",
+        "name": "West ridge",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 80,
+          "width": 120,
+          "x": 690,
+          "y": 540
+        },
+        "id": "O-02",
+        "name": "East ridge",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      }
+    ],
+    "search_areas": [],
+    "tasks": [
+      {
+        "assigned_drone_id": "D-01",
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-01",
+        "name": "Priority beacon",
+        "position": {
+          "x": 850,
+          "y": 300
+        },
+        "priority": 10,
+        "required_payload": 0.0,
+        "status": "assigned",
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": "D-02",
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-02",
+        "name": "Routine transect",
+        "position": {
+          "x": 500,
+          "y": 100
+        },
+        "priority": 3,
+        "required_payload": 0.0,
+        "status": "assigned",
+        "task_type": "inspection"
+      }
+    ],
+    "width": 1000
+  },
+  "name": "Safe Airspace and Relay Exercise",
+  "planning_settings": {
+    "conflict_horizon": 2.0,
+    "yield_policy": "task_priority"
+  },
+  "simulation_settings": {
+    "communication_grace": 4.0,
+    "communication_policy": "log_only",
+    "fixed_dt": 0.05,
+    "random_seed": 42
+  },
+  "version": "1.0"
+}

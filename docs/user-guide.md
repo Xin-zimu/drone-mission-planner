@@ -23,3 +23,11 @@ While a simulation is ready, select a drone and choose **Simulation → Fail sel
 **Schedule automatic failure** creates a deterministic future event from the project's random seed. It appears as Scheduled in the Events tab and uses the same recovery path when its timestamp is reached.
 
 Placing a Mission while an engine exists inserts it dynamically and triggers reassignment. Selecting an unfinished mission and choosing **Cancel selected mission** removes it from future routes. Drawing a No-fly zone while an engine exists marks it temporary, invalidates active routes, and replans around it. If no operational aircraft can continue, the status bar and activity log give the per-task planning reason.
+
+## Safety and communication
+
+Open the **Safety & links** tab during simulation. Each drone reports Direct, Relay, or Lost; shortest hop count; nearest-base distance; disconnect duration; active policy; and accumulated priority holds. Dashed teal lines on the map are currently valid radio edges.
+
+The engine predicts simultaneous path occupancy before aircraft enter a shared safety radius. The lower task-priority drone waits while the other clears the conflict; the Events tab records the predicted minimum distance and yielding ID. Safety radius and communication range remain editable per drone, and base range is editable from the inspector.
+
+Projects configure `simulation_settings.communication_policy` as `log_only` or `auto_return`, plus `communication_grace` in seconds. Auto-return releases unfinished work only after the grace interval and uses the normal obstacle/no-fly-safe route planner. `examples/safety_constraints_demo.dmproj` demonstrates two crossing flights connected through three relay drones.

@@ -35,3 +35,13 @@ Pass direction alternates on every row to form a lawnmower pattern. Start, pass 
 Events are ordered by `(timestamp, event ID)` and processed inside the fixed simulation step. A drone-failure event immediately changes the runtime to `FAILED`, freezes movement and energy use, releases only unfinished work, and requests a replan. Manual and seeded automatic events use the same code path.
 
 Before replanning, live positions, remaining battery, current statuses, completed tasks, and covered cells are copied into the planning model. Point missions run priority-first assignment again over unfinished/non-cancelled work. Coverage missions repartition the area across operational drones while the coverage monitor keeps prior observations. New paths begin at each runtime's current position and are applied without recreating the engine, so time, consumed battery, travelled distance, event history, and completed work remain intact.
+
+## Time–space conflict handling
+
+Every fixed step samples operational trajectories over a two-second horizon at 0.2-second intervals. A conflict exists when the predicted separation is smaller than the sum of both safety radii. The drone carrying the lower-priority unfinished task yields; equal priorities use stable drone IDs. Only the yielding runtime pauses, its waiting time increases, and the conflict is recorded once when the pair enters the predicted conflict state. Prediction repeats each step until the higher-priority aircraft clears the shared safety region.
+
+## Communication graph
+
+Bases and available drones form an undirected graph. An edge exists when node distance is within both radio ranges. Breadth-first search calculates the shortest hop count from every drone to any base, distinguishing direct and relayed links. Failed/emergency drones are removed as relay nodes.
+
+Link transitions are timestamped. Under `log_only`, simulation continues and exposes the disconnect duration. Under `auto_return`, a configurable grace period must expire before the engine releases unfinished tasks and activates a safety-inflated A* route from the live position to the home base. Missing or unreachable bases place the drone in `EMERGENCY` with a clear reason.

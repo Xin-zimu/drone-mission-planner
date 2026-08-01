@@ -22,3 +22,7 @@ The UI owns rendering. Domain coordinates are always metres in a top-left-origin
 ## Dynamic events
 
 `EventManager` owns ordered pending events and immutable processed records. `SimulationEngine` applies due failures inside logical steps and emits a replan request; it never calls UI or planning code. The application layer synchronizes live runtime state, invokes task assignment or coverage planning, then calls `apply_replan`. That method replaces only future path state while retaining clock, battery, flight statistics, completed-task IDs, event history, and coverage cells.
+
+## Safety constraints
+
+`ConflictDetector` is a pure planning component over immutable motion-state inputs. The engine converts live runtimes into those inputs, pauses only returned yielding IDs, and records newly active pairs. `CommunicationMonitor` is a separate graph state machine over base/drone nodes. It owns reachability, shortest-hop status, transition history, grace timing, and one-shot policy requests; obstacle-safe auto-return remains an engine operation. Neither component depends on Qt.

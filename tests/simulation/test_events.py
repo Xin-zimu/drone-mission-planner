@@ -64,7 +64,7 @@ def test_automatic_failure_is_deterministic_and_processed() -> None:
     first.start()
     first.advance(0.5)
     assert first.snapshot().drones[0].status == DroneStatus.FAILED
-    assert first.snapshot().events[-1].event.id == first_event.id
+    assert any(record.event.id == first_event.id for record in first.snapshot().events)
 
 
 def test_cancelled_task_is_not_reactivated_on_reset() -> None:

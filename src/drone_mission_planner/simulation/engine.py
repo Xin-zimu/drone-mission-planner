@@ -7,7 +7,14 @@ from random import Random
 from drone_mission_planner.domain.enums import DroneStatus, TaskStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import Drone, MapModel, MissionTask
+from drone_mission_planner.planning.collision import (
+    ConflictDetector,
+    MotionState,
+    PredictedConflict,
+)
+from drone_mission_planner.planning.route_planner import RoutePlanner
 
+from .communication import CommunicationMonitor, CommunicationNode, CommunicationStatus
 from .coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from .drone_runtime import DroneRuntime
 from .events import EventManager, EventRecord, EventType, SimulationEvent
@@ -34,11 +41,19 @@ class SimulationSnapshot:
     coverage: tuple[AreaCoverageSnapshot, ...]
     events: tuple[EventRecord, ...]
     replan_count: int
+    conflicts: tuple[PredictedConflict, ...]
+    communication: tuple[CommunicationStatus, ...]
 
 
 class SimulationEngine:
     def __init__(
-        self, map_model: MapModel, *, fixed_dt: float = 0.05, random_seed: int = 42
+        self,
+        map_model: MapModel,
+        *,
+        fixed_dt: float = 0.05,
+        random_seed: int = 42,
+        communication_policy: str = "log_only",
+        communication_grace: float = 5.0,
     ) -> None:
         if fixed_dt <= 0:
             raise ValueError("fixed_dt must be positive")
@@ -62,6 +77,15 @@ class SimulationEngine:
         )
         self.event_manager = EventManager()
         self._replan_requests: list[str] = []
+        self.conflict_detector = ConflictDetector()
+        self.active_conflicts: tuple[PredictedConflict, ...] = ()
+        self.conflict_history: list[PredictedConflict] = []
+        self._active_conflict_pairs: set[tuple[str, str]] = set()
+        self.communication_monitor = CommunicationMonitor(
+            policy=communication_policy, grace_period=communication_grace
+        )
+        self._processed_communication_transitions = 0
+        self._update_communication()
 
     def start(self) -> None:
         self.running = True
@@ -111,6 +135,12 @@ class SimulationEngine:
         self.event_manager.clear()
         self._replan_requests.clear()
         self.replan_count = 0
+        self.active_conflicts = ()
+        self.conflict_history.clear()
+        self._active_conflict_pairs.clear()
+        self.communication_monitor.reset()
+        self._processed_communication_transitions = 0
+        self._update_communication()
 
     def schedule_random_failure(
         self, *, minimum_delay: float = 8.0, maximum_delay: float = 20.0
@@ -240,6 +270,11 @@ class SimulationEngine:
             self.coverage_monitor.snapshot(),
             self.event_manager.history,
             self.replan_count,
+            tuple(self.conflict_history),
+            tuple(
+                self.communication_monitor.statuses[key]
+                for key in sorted(self.communication_monitor.statuses)
+            ),
         )
 
     def statistics(self) -> tuple[DroneStatistics, ...]:
@@ -251,12 +286,133 @@ class SimulationEngine:
     def _step(self, dt: float) -> None:
         for event in self.event_manager.pop_due(self.time):
             self._process_event(event)
+        auto_returns = self._update_communication()
+        for drone_id in auto_returns:
+            self._apply_auto_return(drone_id)
+        self.active_conflicts = self.conflict_detector.detect(self._motion_states())
+        yielding = {conflict.yielding_drone_id for conflict in self.active_conflicts}
+        current_pairs = {conflict.pair for conflict in self.active_conflicts}
+        for conflict in self.active_conflicts:
+            if conflict.pair not in self._active_conflict_pairs:
+                self.conflict_history.append(conflict)
+                self.record_external_event(
+                    EventType.COLLISION_HOLD,
+                    conflict.yielding_drone_id,
+                    f"Yielding to avoid {conflict.drone_a}/{conflict.drone_b} conflict "
+                    f"({conflict.predicted_distance:.1f} m predicted)",
+                )
+        self._active_conflict_pairs = current_pairs
         for runtime in self.runtimes.values():
-            self._update_runtime(runtime, dt)
+            if runtime.id in yielding:
+                runtime.waiting_time += dt
+            else:
+                self._update_runtime(runtime, dt)
         self.coverage_monitor.update(
             {runtime.id: runtime.position for runtime in self.runtimes.values()}
         )
         self.time += dt
+
+    def _motion_states(self) -> list[MotionState]:
+        states: list[MotionState] = []
+        for runtime in self.runtimes.values():
+            if runtime.status not in {DroneStatus.FLYING, DroneStatus.RETURNING}:
+                continue
+            priorities = [
+                self.tasks[task_id].priority
+                for task_id in runtime.assigned_task_ids
+                if task_id in self.tasks and self.task_statuses.get(task_id) != TaskStatus.COMPLETED
+            ]
+            states.append(
+                MotionState(
+                    runtime.id,
+                    runtime.position,
+                    tuple(runtime.path),
+                    runtime.segment_index,
+                    runtime.max_speed,
+                    runtime.safety_radius,
+                    max(priorities, default=0),
+                )
+            )
+        return states
+
+    def _update_communication(self) -> tuple[str, ...]:
+        nodes = [
+            CommunicationNode(
+                base.id,
+                base.position,
+                base.communication_range,
+                is_base=True,
+            )
+            for base in self.map_model.bases
+        ]
+        for runtime in self.runtimes.values():
+            drone = self.map_model.find(runtime.id)
+            if isinstance(drone, Drone):
+                nodes.append(
+                    CommunicationNode(
+                        runtime.id,
+                        runtime.position,
+                        drone.communication_range,
+                        available=runtime.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY},
+                    )
+                )
+        requests = self.communication_monitor.update(nodes, timestamp=self.time)
+        new_transitions = self.communication_monitor.transitions[
+            self._processed_communication_transitions :
+        ]
+        for transition in new_transitions:
+            event_type = (
+                EventType.COMMUNICATION_RESTORED
+                if transition.connected
+                else EventType.COMMUNICATION_LOSS
+            )
+            self.record_external_event(event_type, transition.drone_id, transition.message)
+        self._processed_communication_transitions += len(new_transitions)
+        return requests
+
+    def _apply_auto_return(self, drone_id: str) -> None:
+        runtime = self.runtimes.get(drone_id)
+        drone = self.map_model.find(drone_id)
+        if runtime is None or not isinstance(drone, Drone):
+            return
+        base = next((item for item in self.map_model.bases if item.id == drone.home_base_id), None)
+        if base is None:
+            runtime.status = DroneStatus.EMERGENCY
+            runtime.failure_reason = "Communication lost and home base is unavailable"
+            self.record_external_event(
+                EventType.AUTO_RETURN, drone_id, "Auto-return failed: home base is unavailable"
+            )
+            return
+        route = RoutePlanner().plan_between(self.map_model, drone, runtime.position, base.position)
+        if not route.success:
+            runtime.status = DroneStatus.EMERGENCY
+            runtime.failure_reason = route.failure_reason or "No safe auto-return route"
+            self.record_external_event(
+                EventType.AUTO_RETURN,
+                drone_id,
+                f"Auto-return failed: {runtime.failure_reason}",
+            )
+            return
+        for task_id in list(runtime.assigned_task_ids):
+            if self.task_statuses.get(task_id) in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}:
+                continue
+            task = self.tasks.get(task_id)
+            if task is not None:
+                task.status = TaskStatus.PENDING
+                task.assigned_drone_id = None
+                self.task_statuses[task_id] = TaskStatus.PENDING
+        runtime.assigned_task_ids.clear()
+        runtime.path = route.waypoints
+        runtime.segment_index = 1
+        runtime.status = DroneStatus.RETURNING
+        drone.assigned_tasks.clear()
+        drone.planned_path = route.waypoints
+        self.replan_count += 1
+        self.record_external_event(
+            EventType.AUTO_RETURN,
+            drone_id,
+            "Communication grace expired; safe return-to-base route activated",
+        )
 
     def _process_event(self, event: SimulationEvent) -> bool:
         if event.event_type != EventType.DRONE_FAILURE:

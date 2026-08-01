@@ -147,5 +147,10 @@ class ProjectModel:
     map: MapModel = field(default_factory=MapModel)
     planning_settings: dict[str, float | int | bool | str] = field(default_factory=dict)
     simulation_settings: dict[str, float | int | bool | str] = field(
-        default_factory=lambda: {"fixed_dt": 0.05, "random_seed": 42}
+        default_factory=lambda: {
+            "fixed_dt": 0.05,
+            "random_seed": 42,
+            "communication_policy": "log_only",
+            "communication_grace": 5.0,
+        }
     )

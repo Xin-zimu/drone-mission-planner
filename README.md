@@ -6,7 +6,7 @@ Drone Mission Planner is a fully local desktop application for composing 2D mult
 
 ## Current milestone
 
-Phase 6 — fault events and state-preserving dynamic replanning.
+Phase 7 — collision prediction and communication constraints.
 
 - Polished PySide6 desktop shell and zoomable map editor
 - Base, drone, obstacle, no-fly-zone, and mission-point editing
@@ -32,6 +32,11 @@ Phase 6 — fault events and state-preserving dynamic replanning.
 - Automatic task or coverage redistribution from live positions
 - Replanning that preserves simulation time, battery, distance, and completed work
 - Dynamic mission insertion, cancellation, and temporary no-fly-zone replanning
+- Sampled time–space conflict prediction over each drone's future trajectory
+- Stable task-priority yielding that records safety holds and waiting time
+- Direct and multi-hop base-link graph validation using per-node radio ranges
+- Communication loss/restoration events with disconnect duration and hop count
+- Configurable `log_only` or obstacle-safe `auto_return` loss policy
 
 ## Quick start
 
@@ -70,7 +75,7 @@ ruff check .
 mypy src
 ```
 
-Open `examples/coverage_demo.dmproj` for cooperative search, or `examples/fault_replanning_demo.dmproj` for live fault recovery.
+Open `examples/coverage_demo.dmproj` for cooperative search, `examples/fault_replanning_demo.dmproj` for live fault recovery, or `examples/safety_constraints_demo.dmproj` for collision holds and relay links.
 
 ## Roadmap
 

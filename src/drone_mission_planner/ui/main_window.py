@@ -44,7 +44,7 @@ from drone_mission_planner.planning.assignment import AssignmentResult, GreedyAs
 from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePlanResult
 from drone_mission_planner.planning.route_planner import RoutePlanner
 from drone_mission_planner.simulation.coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
-from drone_mission_planner.simulation.engine import SimulationEngine
+from drone_mission_planner.simulation.engine import SimulationEngine, SimulationSnapshot
 from drone_mission_planner.simulation.events import EventType
 
 from .map_view import MapView, ToolMode
@@ -326,6 +326,14 @@ class MainWindow(QMainWindow):
         self.event_table.verticalHeader().setVisible(False)
         self.event_table.horizontalHeader().setStretchLastSection(True)
         tabs.addTab(self.event_table, "Events")
+        self.safety_table = QTableWidget(0, 6)
+        self.safety_table.setHorizontalHeaderLabels(
+            ["Drone", "Base link", "Hops", "Nearest base", "Disconnected", "Policy"]
+        )
+        self.safety_table.setAlternatingRowColors(True)
+        self.safety_table.verticalHeader().setVisible(False)
+        self.safety_table.horizontalHeader().setStretchLastSection(True)
+        tabs.addTab(self.safety_table, "Safety & links")
         tabs.addTab(self.log_view, "Activity log")
         bottom_dock = QDockWidget("Workspace", self)
         bottom_dock.setObjectName("WorkspaceDock")
@@ -621,6 +629,43 @@ class MainWindow(QMainWindow):
                 self.event_table.setItem(row, column, item)
         self.event_table.resizeColumnsToContents()
 
+    def _render_safety_table(self, snapshot: SimulationSnapshot | None = None) -> None:
+        if self.simulation_engine is None:
+            self.safety_table.setRowCount(0)
+            return
+        snapshot = snapshot or self.simulation_engine.snapshot()
+        hold_counts: dict[str, int] = {}
+        for conflict in snapshot.conflicts:
+            hold_counts[conflict.yielding_drone_id] = (
+                hold_counts.get(conflict.yielding_drone_id, 0) + 1
+            )
+        self.safety_table.setRowCount(len(snapshot.communication))
+        for row, status in enumerate(snapshot.communication):
+            if status.connected:
+                link = "Direct" if status.direct else "Relay"
+                link_color = QColor("#55d6be")
+            else:
+                link = "Lost"
+                link_color = QColor("#ff8997")
+            policy = status.policy.replace("_", " ")
+            holds = hold_counts.get(status.drone_id, 0)
+            if holds:
+                policy += f" • {holds} hold(s)"
+            values = [
+                status.drone_id,
+                link,
+                str(status.hop_count) if status.hop_count is not None else "—",
+                f"{status.nearest_base_distance:.1f} m",
+                f"{status.disconnected_for:.1f} s",
+                policy,
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 1:
+                    item.setForeground(link_color)
+                self.safety_table.setItem(row, column, item)
+        self.safety_table.resizeColumnsToContents()
+
     def auto_assign_tasks(self) -> None:
         if not self.service.project.map.drones or not self.service.project.map.tasks:
             QMessageBox.information(
@@ -914,8 +959,18 @@ class MainWindow(QMainWindow):
         if self.simulation_engine is None:
             fixed_dt = float(self.service.project.simulation_settings.get("fixed_dt", 0.05))
             random_seed = int(self.service.project.simulation_settings.get("random_seed", 42))
+            communication_policy = str(
+                self.service.project.simulation_settings.get("communication_policy", "log_only")
+            )
+            communication_grace = float(
+                self.service.project.simulation_settings.get("communication_grace", 5.0)
+            )
             self.simulation_engine = SimulationEngine(
-                self.service.project.map, fixed_dt=fixed_dt, random_seed=random_seed
+                self.service.project.map,
+                fixed_dt=fixed_dt,
+                random_seed=random_seed,
+                communication_policy=communication_policy,
+                communication_grace=communication_grace,
             )
             self.simulation_engine.set_speed(float(self.speed_combo.currentData()))
             self._sync_simulation_state()
@@ -958,9 +1013,19 @@ class MainWindow(QMainWindow):
             for area_id in cells
         }
         self.map_view.set_coverage_overlay(progress, cells, resolutions)
+        positions = {base.id: base.position for base in self.service.project.map.bases} | {
+            state.id: state.position for state in snapshot.drones
+        }
+        links = tuple(
+            (positions[first], positions[second])
+            for first, second in self.simulation_engine.communication_monitor.links
+            if first in positions and second in positions
+        )
+        self.map_view.set_communication_links(links)
         self.map_view.render_model()
         self._render_coverage_table(snapshot.coverage)
         self._render_event_table()
+        self._render_safety_table(snapshot)
         self._populate_tree()
         if self._selected_id:
             selected = self.service.project.map.find(self._selected_id)
@@ -972,8 +1037,11 @@ class MainWindow(QMainWindow):
         self.simulation_engine = None
         self.simulation_time_label.setText("T+ 00:00.00")
         self.map_view.clear_coverage_overlay()
+        self.map_view.clear_communication_links()
         if hasattr(self, "event_table"):
             self.event_table.setRowCount(0)
+        if hasattr(self, "safety_table"):
+            self.safety_table.setRowCount(0)
 
     def delete_selected(self) -> None:
         if self._selected_id:
@@ -1027,6 +1095,7 @@ class MainWindow(QMainWindow):
         self._update_summary()
         self._render_coverage_table()
         self._render_event_table()
+        self._render_safety_table()
         if select_id:
             self.select_object(select_id)
         else:
@@ -1091,9 +1160,9 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 0.6.0</b><br><br>"
+            "<b>Drone Mission Planner 0.7.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Phase 6: live fault injection and state-preserving dynamic replanning.",
+            "Phase 7: collision avoidance and multi-hop communication constraints.",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:

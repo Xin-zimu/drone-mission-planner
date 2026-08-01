@@ -14,6 +14,7 @@ class DroneRuntime:
     position: Point
     path: list[Point]
     max_speed: float
+    safety_radius: float
     energy_per_meter: float
     initial_battery: float
     remaining_battery: float
@@ -39,6 +40,7 @@ class DroneRuntime:
             position=drone.position,
             path=path,
             max_speed=drone.max_speed,
+            safety_radius=drone.safety_radius,
             energy_per_meter=drone.energy_per_meter,
             initial_battery=drone.remaining_battery,
             remaining_battery=drone.remaining_battery,

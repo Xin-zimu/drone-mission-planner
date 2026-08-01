@@ -70,6 +70,7 @@ class MapView(QGraphicsView):
         self._coverage_progress: dict[str, float] = {}
         self._coverage_cells: dict[str, tuple[tuple[Point, int], ...]] = {}
         self._coverage_resolutions: dict[str, float] = {}
+        self._communication_links: tuple[tuple[Point, Point], ...] = ()
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
@@ -111,6 +112,7 @@ class MapView(QGraphicsView):
         for area in self._model.search_areas:
             self._add_search_area_item(area)
         self._add_coverage_overlay()
+        self._add_communication_links()
         for obstacle in self._model.obstacles:
             self._add_obstacle_item(obstacle)
         for zone in self._model.no_fly_zones:
@@ -139,6 +141,12 @@ class MapView(QGraphicsView):
         self._coverage_progress.clear()
         self._coverage_cells.clear()
         self._coverage_resolutions.clear()
+
+    def set_communication_links(self, links: tuple[tuple[Point, Point], ...]) -> None:
+        self._communication_links = links
+
+    def clear_communication_links(self) -> None:
+        self._communication_links = ()
 
     def reset_view(self) -> None:
         self.resetTransform()
@@ -407,6 +415,15 @@ class MapView(QGraphicsView):
                 item.setZValue(-5)
                 item.setData(0, area_id)
                 self._scene.addItem(item)
+
+    def _add_communication_links(self) -> None:
+        for start, end in self._communication_links:
+            path = QPainterPath(QPointF(start.x, start.y))
+            path.lineTo(end.x, end.y)
+            item = QGraphicsPathItem(path)
+            item.setPen(QPen(QColor(85, 214, 190, 105), 1.5, Qt.PenStyle.DashLine))
+            item.setZValue(-3)
+            self._scene.addItem(item)
 
     def _add_route(self, drone: Drone, index: int) -> None:
         if len(drone.planned_path) < 2:

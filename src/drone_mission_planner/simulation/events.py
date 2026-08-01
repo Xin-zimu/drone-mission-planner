@@ -9,6 +9,10 @@ class EventType(StrEnum):
     NEW_TASK = "new_task"
     TASK_CANCELLED = "task_cancelled"
     TEMP_NO_FLY_ZONE = "temporary_no_fly_zone"
+    COLLISION_HOLD = "collision_hold"
+    COMMUNICATION_LOSS = "communication_loss"
+    COMMUNICATION_RESTORED = "communication_restored"
+    AUTO_RETURN = "auto_return"
 
 
 @dataclass(frozen=True, slots=True)
