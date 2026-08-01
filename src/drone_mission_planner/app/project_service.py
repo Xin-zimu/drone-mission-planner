@@ -93,9 +93,14 @@ class ProjectService:
         self.dirty = True
         return item
 
-    def add_no_fly_zone(self, bounds: Rect) -> NoFlyZone:
+    def add_no_fly_zone(self, bounds: Rect, *, temporary: bool = False) -> NoFlyZone:
         index = self._next("no_fly")
-        item = NoFlyZone(f"N-{index:02d}", f"No-fly zone {index}", bounds=bounds.normalized)
+        item = NoFlyZone(
+            f"N-{index:02d}",
+            f"No-fly zone {index}",
+            bounds=bounds.normalized,
+            temporary=temporary,
+        )
         self.project.map.no_fly_zones.append(item)
         self.dirty = True
         return item

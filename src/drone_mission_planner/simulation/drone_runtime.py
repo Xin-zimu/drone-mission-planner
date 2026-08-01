@@ -26,6 +26,7 @@ class DroneRuntime:
     distance_flown: float = 0.0
     flight_time: float = 0.0
     waiting_time: float = 0.0
+    failure_reason: str | None = None
 
     @classmethod
     def from_drone(cls, drone: Drone) -> DroneRuntime:
@@ -55,3 +56,4 @@ class DroneRuntime:
         self.distance_flown = 0.0
         self.flight_time = 0.0
         self.waiting_time = 0.0
+        self.failure_reason = None

@@ -50,6 +50,7 @@ class NoFlyZone:
     shape: ObstacleShape = ObstacleShape.RECTANGLE
     bounds: Rect = field(default_factory=lambda: Rect(0.0, 0.0, 30.0, 30.0))
     points: list[Point] = field(default_factory=list)
+    temporary: bool = False
 
 
 @dataclass(slots=True)

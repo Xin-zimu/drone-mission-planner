@@ -15,3 +15,11 @@ Choose **Search area** and drag a rectangle over the map. Select it to edit scan
 Choose **Planning → Plan area coverage** (`Ctrl+Shift+C`). The planner assigns one vertical strip to every available drone, connects alternating scan passes around protected regions, and appends a safe return to base. The Coverage tab lists assigned drones, pass count, accessible cells, live coverage, repeat coverage, and the requested target.
 
 Press Play to watch the covered-cell heatmap grow. Teal cells were observed by one drone; amber cells were observed by at least two. The area label and table update from the deterministic simulation state. Reset clears the coverage history and returns every drone to its initial state.
+
+## Faults and live changes
+
+While a simulation is ready, select a drone and choose **Simulation → Fail selected drone** (`Ctrl+Shift+F`). The aircraft stops at its exact live position, turns red, and exposes its reason in the Events tab. Unfinished missions or coverage work are reassigned to operational drones from their current positions; the simulation clock, battery, completed tasks, travelled distance, and coverage history are not reset.
+
+**Schedule automatic failure** creates a deterministic future event from the project's random seed. It appears as Scheduled in the Events tab and uses the same recovery path when its timestamp is reached.
+
+Placing a Mission while an engine exists inserts it dynamically and triggers reassignment. Selecting an unfinished mission and choosing **Cancel selected mission** removes it from future routes. Drawing a No-fly zone while an engine exists marks it temporary, invalidates active routes, and replans around it. If no operational aircraft can continue, the status bar and activity log give the per-task planning reason.

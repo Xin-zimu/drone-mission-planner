@@ -317,14 +317,21 @@ class MapView(QGraphicsView):
         path.closeSubpath()
         item = QGraphicsPathItem(path)
         item.setPos(drone.position.x, drone.position.y)
-        item.setPen(QPen(QColor("#87aefe"), 2))
-        item.setBrush(QColor("#2f6de0"))
+        failed = drone.status.value in {"failed", "emergency"}
+        item.setPen(QPen(QColor("#ff9aa6" if failed else "#87aefe"), 2))
+        item.setBrush(QColor("#b83449" if failed else "#2f6de0"))
         self._tag(item, drone.id)
         self._scene.addItem(item)
         halo = QGraphicsEllipseItem(-17, -17, 34, 34, item)
-        halo.setPen(QPen(QColor(77, 141, 247, 90), 1))
+        halo.setPen(QPen(QColor(239, 106, 121, 150) if failed else QColor(77, 141, 247, 90), 1))
         halo.setBrush(Qt.BrushStyle.NoBrush)
-        self._add_label(drone.id, drone.position.x + 16, drone.position.y - 12, "#a9c5ff")
+        label = f"{drone.id}  FAILED" if failed else drone.id
+        self._add_label(
+            label,
+            drone.position.x + 16,
+            drone.position.y - 12,
+            "#ff9aa6" if failed else "#a9c5ff",
+        )
 
     def _add_task_item(self, task: MissionTask) -> None:
         outer = QGraphicsEllipseItem(-10, -10, 20, 20)

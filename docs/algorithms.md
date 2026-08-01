@@ -29,3 +29,9 @@ Pass direction alternates on every row to form a lawnmower pattern. Start, pass 
 ## Coverage measurement
 
 `CoverageMonitor` samples accessible cells inside every search polygon. A drone covers cells within half its configured scan spacing. Coverage is the fraction visited by at least one drone; repeat coverage is the fraction visited by at least two distinct drones. Obstacle and no-fly cells are excluded from the denominator. The fixed-step engine updates both values independently from UI frame rate.
+
+## Dynamic fault replanning
+
+Events are ordered by `(timestamp, event ID)` and processed inside the fixed simulation step. A drone-failure event immediately changes the runtime to `FAILED`, freezes movement and energy use, releases only unfinished work, and requests a replan. Manual and seeded automatic events use the same code path.
+
+Before replanning, live positions, remaining battery, current statuses, completed tasks, and covered cells are copied into the planning model. Point missions run priority-first assignment again over unfinished/non-cancelled work. Coverage missions repartition the area across operational drones while the coverage monitor keeps prior observations. New paths begin at each runtime's current position and are applied without recreating the engine, so time, consumed battery, travelled distance, event history, and completed work remain intact.

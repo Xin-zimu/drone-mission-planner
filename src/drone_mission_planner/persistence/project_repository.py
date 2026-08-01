@@ -131,6 +131,7 @@ class ProjectRepository:
                     shape=ObstacleShape(item.get("shape", ObstacleShape.RECTANGLE)),
                     bounds=_rect(item["bounds"]),
                     points=[_point(point) for point in item.get("points", [])],
+                    temporary=bool(item.get("temporary", False)),
                 )
                 for item in map_data.get("no_fly_zones", [])
             ],

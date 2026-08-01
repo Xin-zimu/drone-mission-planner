@@ -45,6 +45,7 @@ from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePla
 from drone_mission_planner.planning.route_planner import RoutePlanner
 from drone_mission_planner.simulation.coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from drone_mission_planner.simulation.engine import SimulationEngine
+from drone_mission_planner.simulation.events import EventType
 
 from .map_view import MapView, ToolMode
 from .property_panel import PropertyPanel
@@ -147,6 +148,10 @@ class MainWindow(QMainWindow):
         self.step_action = QAction("Step", self)
         self.step_action.setShortcut(".")
         self.reset_sim_action = QAction("Reset", self)
+        self.fail_drone_action = QAction("Fail selected drone", self)
+        self.fail_drone_action.setShortcut("Ctrl+Shift+F")
+        self.schedule_failure_action = QAction("Schedule automatic failure", self)
+        self.cancel_task_action = QAction("Cancel selected mission", self)
         self.about_action = QAction("About Drone Mission Planner", self)
 
     def _build_menu(self) -> None:
@@ -164,7 +169,10 @@ class MainWindow(QMainWindow):
         planning_menu.addAction(self.plan_route_action)
         planning_menu.addAction(self.auto_assign_action)
         planning_menu.addAction(self.plan_coverage_action)
-        self.menuBar().addMenu("Simulation")
+        simulation_menu = self.menuBar().addMenu("Simulation")
+        simulation_menu.addActions(
+            [self.fail_drone_action, self.schedule_failure_action, self.cancel_task_action]
+        )
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.reset_view_action)
         help_menu = self.menuBar().addMenu("Help")
@@ -312,6 +320,12 @@ class MainWindow(QMainWindow):
         self.coverage_table.verticalHeader().setVisible(False)
         self.coverage_table.horizontalHeader().setStretchLastSection(True)
         tabs.addTab(self.coverage_table, "Coverage")
+        self.event_table = QTableWidget(0, 4)
+        self.event_table.setHorizontalHeaderLabels(["Time", "Event", "Target", "Outcome"])
+        self.event_table.setAlternatingRowColors(True)
+        self.event_table.verticalHeader().setVisible(False)
+        self.event_table.horizontalHeader().setStretchLastSection(True)
+        tabs.addTab(self.event_table, "Events")
         tabs.addTab(self.log_view, "Activity log")
         bottom_dock = QDockWidget("Workspace", self)
         bottom_dock.setObjectName("WorkspaceDock")
@@ -339,6 +353,9 @@ class MainWindow(QMainWindow):
         self.pause_action.triggered.connect(self.pause_simulation)
         self.step_action.triggered.connect(self.step_simulation)
         self.reset_sim_action.triggered.connect(self.reset_simulation)
+        self.fail_drone_action.triggered.connect(self.fail_selected_drone)
+        self.schedule_failure_action.triggered.connect(self.schedule_automatic_failure)
+        self.cancel_task_action.triggered.connect(self.cancel_selected_task)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
@@ -422,14 +439,24 @@ class MainWindow(QMainWindow):
             return
         LOGGER.info("Added %s %s at (%.1f, %.1f)", type(item).__name__, item.id, x, y)
         self._refresh_all(select_id=item.id)
+        if isinstance(item, MissionTask) and self.simulation_engine is not None:
+            self.simulation_engine.add_task(item)
+            self._dynamic_replan(f"New task {item.id} inserted")
 
     def create_rect_object(
         self, kind: str, x: float, y: float, width: float, height: float
     ) -> None:
         item: MapObject
         if kind == ToolMode.NO_FLY:
-            item = self.service.add_no_fly_zone(Rect(x, y, width, height))
-            LOGGER.info("Added no-fly zone %s (%.1f x %.1f m)", item.id, width, height)
+            temporary = self.simulation_engine is not None
+            item = self.service.add_no_fly_zone(Rect(x, y, width, height), temporary=temporary)
+            LOGGER.info(
+                "Added %sno-fly zone %s (%.1f x %.1f m)",
+                "temporary " if temporary else "",
+                item.id,
+                width,
+                height,
+            )
         elif kind == ToolMode.SEARCH_AREA:
             item = self.service.add_search_area(Rect(x, y, width, height))
             LOGGER.info("Added search area %s (%.1f x %.1f m)", item.id, width, height)
@@ -437,6 +464,13 @@ class MainWindow(QMainWindow):
             item = self.service.add_obstacle(Rect(x, y, width, height))
             LOGGER.info("Added obstacle %s (%.1f x %.1f m)", item.id, width, height)
         self._refresh_all(select_id=item.id)
+        if kind == ToolMode.NO_FLY and self.simulation_engine is not None:
+            self.simulation_engine.record_external_event(
+                EventType.TEMP_NO_FLY_ZONE,
+                item.id,
+                "Temporary no-fly zone inserted; active routes invalidated",
+            )
+            self._dynamic_replan(f"Temporary no-fly zone {item.id} inserted")
 
     def plan_selected_route(self) -> None:
         selected = self.service.project.map.find(self._selected_id or "")
@@ -549,6 +583,43 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.coverage_table.setItem(row, column, QTableWidgetItem(value))
         self.coverage_table.resizeColumnsToContents()
+
+    def _render_event_table(self) -> None:
+        if self.simulation_engine is None:
+            self.event_table.setRowCount(0)
+            return
+        manager = self.simulation_engine.event_manager
+        entries: list[tuple[float, str, str, str, bool]] = []
+        entries.extend(
+            (
+                record.processed_at,
+                record.event.event_type.value,
+                record.event.target_id,
+                record.message,
+                record.event.event_type == EventType.DRONE_FAILURE,
+            )
+            for record in manager.history
+        )
+        entries.extend(
+            (
+                event.timestamp,
+                event.event_type.value,
+                event.target_id,
+                "Scheduled",
+                False,
+            )
+            for event in manager.pending
+        )
+        entries.sort(key=lambda item: item[0])
+        self.event_table.setRowCount(len(entries))
+        for row, (timestamp, event_type, target, outcome, is_failure) in enumerate(entries):
+            values = [f"T+{timestamp:.2f}", event_type.replace("_", " "), target, outcome]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if is_failure:
+                    item.setForeground(QColor("#ff8997"))
+                self.event_table.setItem(row, column, item)
+        self.event_table.resizeColumnsToContents()
 
     def auto_assign_tasks(self) -> None:
         if not self.service.project.map.drones or not self.service.project.map.tasks:
@@ -670,6 +741,159 @@ class MainWindow(QMainWindow):
         self.health_badge.setStyleSheet("color: #75a7ff; font-weight: 700;")
         LOGGER.info("Simulation reset")
 
+    def fail_selected_drone(self) -> None:
+        if not self._ensure_simulation_engine():
+            return
+        assert self.simulation_engine is not None
+        selected = self.service.project.map.find(self._selected_id or "")
+        drone = (
+            selected
+            if isinstance(selected, Drone)
+            else next(
+                (
+                    item
+                    for item in self.service.project.map.drones
+                    if item.status.value not in {"failed", "emergency"}
+                ),
+                None,
+            )
+        )
+        if drone is None:
+            QMessageBox.information(self, "No active drone", "Every drone is already unavailable.")
+            return
+        if not self.simulation_engine.trigger_failure(
+            drone.id, reason="Manually injected propulsion failure"
+        ):
+            QMessageBox.information(self, "Failure ignored", f"{drone.id} is already unavailable.")
+            return
+        LOGGER.error(
+            "Failure injected: %s stopped at T+%.2f s", drone.id, self.simulation_engine.time
+        )
+        self._handle_replan_requests()
+        self._sync_simulation_state()
+        self.workspace_tabs.setCurrentWidget(self.event_table)
+
+    def schedule_automatic_failure(self) -> None:
+        if not self._ensure_simulation_engine():
+            return
+        assert self.simulation_engine is not None
+        try:
+            event = self.simulation_engine.schedule_random_failure()
+        except ValueError as exc:
+            QMessageBox.information(self, "Cannot schedule failure", str(exc))
+            return
+        LOGGER.warning(
+            "Automatic failure %s scheduled for %s at T+%.2f s",
+            event.id,
+            event.target_id,
+            event.timestamp,
+        )
+        self._render_event_table()
+        self.workspace_tabs.setCurrentWidget(self.event_table)
+        self.statusBar().showMessage(
+            f"{event.id}: automatic failure for {event.target_id} at T+{event.timestamp:.2f} s",
+            7000,
+        )
+
+    def cancel_selected_task(self) -> None:
+        selected = self.service.project.map.find(self._selected_id or "")
+        if not isinstance(selected, MissionTask):
+            QMessageBox.information(
+                self, "Select a mission", "Select an unfinished mission before cancelling it."
+            )
+            return
+        if selected.status == TaskStatus.COMPLETED:
+            QMessageBox.information(
+                self, "Mission already complete", "Completed missions cannot be cancelled."
+            )
+            return
+        if self.simulation_engine is not None:
+            if not self.simulation_engine.cancel_task(selected.id):
+                return
+            self._dynamic_replan(f"Task {selected.id} cancelled")
+        else:
+            selected.status = TaskStatus.CANCELLED
+            selected.assigned_drone_id = None
+            self.service.dirty = True
+        LOGGER.warning("Task %s cancelled", selected.id)
+        self._refresh_all(select_id=selected.id)
+
+    def _handle_replan_requests(self) -> None:
+        if self.simulation_engine is None:
+            return
+        requests = self.simulation_engine.drain_replan_requests()
+        if requests:
+            self._dynamic_replan(f"Failure recovery for {', '.join(requests)}")
+
+    def _dynamic_replan(self, reason: str) -> None:
+        engine = self.simulation_engine
+        if engine is None:
+            return
+        snapshot = engine.snapshot()
+        for state in snapshot.drones:
+            drone = self.service.project.map.find(state.id)
+            if isinstance(drone, Drone):
+                drone.position = state.position
+                drone.status = state.status
+                drone.remaining_battery = state.remaining_battery
+        for task_id, status in snapshot.task_statuses.items():
+            task = self.service.project.map.find(task_id)
+            if isinstance(task, MissionTask):
+                task.status = status
+
+        active_drones = [
+            drone
+            for drone in self.service.project.map.drones
+            if drone.status.value not in {"failed", "emergency"}
+        ]
+        if not active_drones:
+            LOGGER.error("Dynamic replanning failed: no operational drones remain")
+            self.statusBar().showMessage("Replanning failed — no operational drones remain", 9000)
+            self._render_event_table()
+            return
+
+        coverage_mode = bool(self.service.project.map.search_areas) and (
+            bool(self.coverage_results) or not self.service.project.map.tasks
+        )
+        if coverage_mode:
+            area = self.service.project.map.search_areas[0]
+            coverage_result = self.coverage_planner.plan(
+                self.service.project.map, area, active_drones
+            )
+            self.coverage_results[area.id] = coverage_result
+            paths = coverage_result.drone_paths
+            for drone in self.service.project.map.drones:
+                drone.planned_path = paths.get(drone.id, [])
+            failures = coverage_result.failures
+            self._render_coverage_table(engine.snapshot().coverage)
+        else:
+            assignment = self.assignment_planner.assign(self.service.project.map)
+            self._apply_assignment_result(assignment)
+            self._render_assignment_table(assignment)
+            paths = assignment.drone_paths
+            failures = {failure.task_id: failure.summary() for failure in assignment.failures}
+
+        engine.apply_replan(paths)
+        self.service.dirty = True
+        self.map_view.render_model()
+        self._populate_tree()
+        self._render_event_table()
+        self._update_title()
+        if failures:
+            details = "; ".join(f"{key}: {value}" for key, value in failures.items())
+            LOGGER.error("%s incomplete — %s", reason, details)
+            self.statusBar().showMessage(f"Replanning incomplete — {details}", 10000)
+        else:
+            LOGGER.info(
+                "%s completed at T+%.2f s without resetting time or battery",
+                reason,
+                engine.time,
+            )
+            self.statusBar().showMessage(
+                f"{reason}: routes rebuilt from live positions at T+{engine.time:.2f} s",
+                9000,
+            )
+
     def _speed_changed(self) -> None:
         if self.simulation_engine is not None:
             self.simulation_engine.set_speed(float(self.speed_combo.currentData()))
@@ -689,7 +913,10 @@ class MainWindow(QMainWindow):
             return False
         if self.simulation_engine is None:
             fixed_dt = float(self.service.project.simulation_settings.get("fixed_dt", 0.05))
-            self.simulation_engine = SimulationEngine(self.service.project.map, fixed_dt=fixed_dt)
+            random_seed = int(self.service.project.simulation_settings.get("random_seed", 42))
+            self.simulation_engine = SimulationEngine(
+                self.service.project.map, fixed_dt=fixed_dt, random_seed=random_seed
+            )
             self.simulation_engine.set_speed(float(self.speed_combo.currentData()))
             self._sync_simulation_state()
             LOGGER.info("Fixed-step simulation initialized (dt=%.3f s)", fixed_dt)
@@ -700,6 +927,7 @@ class MainWindow(QMainWindow):
             return
         elapsed = min(0.25, self.simulation_clock.restart() / 1000.0)
         if self.simulation_engine.advance(elapsed):
+            self._handle_replan_requests()
             self._sync_simulation_state()
         if self.simulation_engine.is_complete:
             self.pause_simulation()
@@ -732,6 +960,7 @@ class MainWindow(QMainWindow):
         self.map_view.set_coverage_overlay(progress, cells, resolutions)
         self.map_view.render_model()
         self._render_coverage_table(snapshot.coverage)
+        self._render_event_table()
         self._populate_tree()
         if self._selected_id:
             selected = self.service.project.map.find(self._selected_id)
@@ -743,6 +972,8 @@ class MainWindow(QMainWindow):
         self.simulation_engine = None
         self.simulation_time_label.setText("T+ 00:00.00")
         self.map_view.clear_coverage_overlay()
+        if hasattr(self, "event_table"):
+            self.event_table.setRowCount(0)
 
     def delete_selected(self) -> None:
         if self._selected_id:
@@ -795,6 +1026,7 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._update_summary()
         self._render_coverage_table()
+        self._render_event_table()
         if select_id:
             self.select_object(select_id)
         else:
@@ -859,9 +1091,9 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 0.5.0</b><br><br>"
+            "<b>Drone Mission Planner 0.6.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Phase 5: cooperative area coverage and live progress monitoring.",
+            "Phase 6: live fault injection and state-preserving dynamic replanning.",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:

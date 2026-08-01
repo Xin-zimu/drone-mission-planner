@@ -56,7 +56,11 @@ class GreedyAssignmentPlanner:
         used_energy = {drone.id: 0.0 for drone in map_model.drones}
         task_counts = {drone.id: 0 for drone in map_model.drones}
         ordered_tasks = sorted(
-            (task for task in map_model.tasks if task.status != TaskStatus.COMPLETED),
+            (
+                task
+                for task in map_model.tasks
+                if task.status in {TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS}
+            ),
             key=lambda task: (
                 -task.priority,
                 task.deadline if task.deadline is not None else inf,

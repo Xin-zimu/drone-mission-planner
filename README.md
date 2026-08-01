@@ -6,7 +6,7 @@ Drone Mission Planner is a fully local desktop application for composing 2D mult
 
 ## Current milestone
 
-Phase 5 — cooperative search-area coverage.
+Phase 6 — fault events and state-preserving dynamic replanning.
 
 - Polished PySide6 desktop shell and zoomable map editor
 - Base, drone, obstacle, no-fly-zone, and mission-point editing
@@ -27,6 +27,11 @@ Phase 5 — cooperative search-area coverage.
 - Deterministic vertical-strip partitioning across the available drone fleet
 - Obstacle-safe alternating lawnmower passes with automatic return to base
 - Live covered-cell heatmap, target coverage, and cross-drone repeat-coverage metrics
+- Manual and deterministic scheduled drone-failure events
+- Immediate failed-aircraft stop with visible failure reason and event history
+- Automatic task or coverage redistribution from live positions
+- Replanning that preserves simulation time, battery, distance, and completed work
+- Dynamic mission insertion, cancellation, and temporary no-fly-zone replanning
 
 ## Quick start
 
@@ -48,6 +53,10 @@ On Linux or macOS, activate with `source .venv/bin/activate`.
 | Draw an obstacle | Choose Obstacle, then drag a rectangle |
 | Draw a search area | Choose Search area, then drag a rectangle |
 | Plan cooperative sweep | `Ctrl+Shift+C` or Planning → Plan area coverage |
+| Fail a drone | Select it, then `Ctrl+Shift+F` |
+| Schedule a fault | Simulation → Schedule automatic failure |
+| Insert during simulation | Use Mission or No-fly while a simulation exists |
+| Cancel a mission | Select it, then Simulation → Cancel selected mission |
 | Pan | Middle mouse drag, or hold Space and drag |
 | Zoom | Mouse wheel |
 | Delete | Delete tool and click, or select and press Delete |
@@ -61,7 +70,7 @@ ruff check .
 mypy src
 ```
 
-Open `examples/coverage_demo.dmproj` to explore the three-drone canyon rescue sweep shown in the Phase 5 acceptance screenshot.
+Open `examples/coverage_demo.dmproj` for cooperative search, or `examples/fault_replanning_demo.dmproj` for live fault recovery.
 
 ## Roadmap
 
