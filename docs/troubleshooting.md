@@ -3,7 +3,7 @@
 ## A project will not open
 
 - Confirm the extension is `.dmproj` and the file contains JSON.
-- Versions 1.0 and 1.1 are migrated automatically; versions newer than the current schema are rejected to prevent silent corruption.
+- Versions 1.0, 1.1, and 1.2 are migrated automatically; versions newer than the current schema are rejected to prevent silent corruption.
 - The error dialog identifies malformed JSON, incompatible versions, invalid IDs/positions, or inconsistent aircraft parameters.
 
 ## Planning fails

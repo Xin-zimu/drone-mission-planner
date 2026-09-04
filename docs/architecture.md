@@ -15,7 +15,7 @@ The UI owns rendering. Domain coordinates are always metres in a top-left-origin
 
 ## Environment model
 
-Terrain and wind live in the domain model as serializable Python dataclasses. Terrain is currently procedural, storing Gaussian peaks rather than a dense elevation array. Planning and simulation sample `altitude_at(x, y)` when estimating climb/descent energy and drawing terrain. Wind is a global vector expressed as the direction the wind blows toward, so path energy can apply deterministic tailwind, headwind, and crosswind corrections without adding weather services.
+Terrain and wind live in the domain model as serializable Python dataclasses. Terrain supports flat, procedural Gaussian-peak, and imported regular-grid elevation sources. Planning and simulation sample `altitude_at(x, y)` when estimating climb/descent energy and drawing terrain; grid terrain uses bilinear interpolation and clamps out-of-range samples to the imported bounds. Wind is a global vector expressed as the direction the wind blows toward, so path energy can apply deterministic tailwind, headwind, and crosswind corrections without adding weather services.
 
 ## Simulation timing
 

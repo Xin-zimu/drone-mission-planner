@@ -12,6 +12,8 @@ The bottom simulation bar provides Play, Pause, Step, Reset, and 0.5x–10x spee
 
 Open the **Environment** tab in the bottom workspace to edit base terrain altitude, sample resolution, procedural mountain peaks, and wind direction/speed/gust settings. Set the mountain peak count first, then edit each peak's center, radius, and height in the table.
 
+Use **Import elevation CSV** to load a local CSV with `x`, `y`, and `elevation` columns. The samples must form a complete regular grid with matching x/y spacing. The import preview shows sample count, bounds, elevation range, and resolution before replacing the current terrain.
+
 Environment edits are applied immediately. The map, 2.5D terrain view, summary bar, and Altitude profile energy estimates refresh from the current `MapModel.terrain` and `MapModel.wind`. Existing simulation state is discarded because terrain and wind change aircraft altitude, speed, and energy assumptions; run planning again when you want assignment or coverage tables regenerated against the new environment.
 
 ## Altitude profile and risks

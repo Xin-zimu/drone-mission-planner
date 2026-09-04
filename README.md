@@ -19,11 +19,11 @@
 | Assignment | Priority-first multi-drone allocation with payload, terrain/wind-aware energy, safe return, reserve, deadlines, and per-drone rejection reasons |
 | Cooperative search | Vertical strip partitioning, obstacle-safe lawnmower passes, incremental supplemental sweeps, return to base, live covered/uncovered-cell overlays, and repeat-coverage metrics |
 | Dynamic simulation | Fixed 0.05 s logic steps, 0.5x–10x playback, state machine, altitude/energy/distance/task integration, pause/step/reset |
-| Environment | Editable procedural terrain peaks, base elevation, global wind vectors, climb/descent/hover power parameters, and a read-only 2.5D terrain view |
+| Environment | Editable procedural terrain peaks, CSV elevation-grid import, base elevation, global wind vectors, climb/descent/hover power parameters, and a read-only 2.5D terrain view |
 | Live adaptation | Manual or seeded automatic failures, exact-position stop, unfinished-work redistribution from live state, coverage recovery without resetting history, temporary zones, task insertion/cancellation |
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
 | Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, event history, and HTML/JSON/CSV export |
-| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.2, validation, and clear corrupt/incompatible-file errors |
+| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.3, validation, and clear corrupt/incompatible-file errors |
 
 ## Windows application
 
@@ -78,6 +78,7 @@ Press `F1` inside the application for the quick-start guide.
 | Pan / zoom / fit | Middle-drag or Space-drag / wheel / `F` |
 | Save | `Ctrl+S` |
 | Edit terrain/wind | Workspace → Environment tab |
+| Import elevation CSV | Workspace → Environment tab → Import elevation CSV |
 | Point mission planning | `Ctrl+Shift+P` |
 | Cooperative coverage | `Ctrl+Shift+C` |
 | Play / step | `Ctrl+Space` / `.` |

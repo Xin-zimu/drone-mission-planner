@@ -4,6 +4,7 @@ from math import ceil, isfinite
 
 from .geometry import Point, Rect
 from .models import ProjectModel
+from .terrain import TerrainModel
 
 
 class ProjectValidationError(ValueError):
@@ -21,8 +22,8 @@ def validate_project(project: ProjectModel) -> None:
         issues.append("map grid size must be positive")
     elif ceil(model.width / model.grid_size) > 500 or ceil(model.height / model.grid_size) > 500:
         issues.append("planning grid may not exceed 500 x 500 cells")
-    if model.terrain.terrain_type not in {"flat", "procedural"}:
-        issues.append("terrain type must be flat or procedural")
+    if model.terrain.terrain_type not in {"flat", "procedural", "grid"}:
+        issues.append("terrain type must be flat, procedural, or grid")
     if not isfinite(model.terrain.resolution) or model.terrain.resolution <= 0:
         issues.append("terrain resolution must be positive")
     if not all(
@@ -43,6 +44,8 @@ def validate_project(project: ProjectModel) -> None:
             issues.append(f"terrain peak {index} radius must be positive")
         if not isfinite(peak.height):
             issues.append(f"terrain peak {index} height must be finite")
+    if model.terrain.terrain_type == "grid":
+        _terrain_grid(model.terrain, issues)
     if not isfinite(model.wind.direction_to_deg):
         issues.append("wind direction must be finite")
     if not isfinite(model.wind.speed) or model.wind.speed < 0:
@@ -154,3 +157,33 @@ def _rect(object_id: str, rect: Rect, width: float, height: float, issues: list[
         or bounds.y + bounds.height > height
     ):
         issues.append(f"{object_id} bounds extend outside the map")
+
+
+def _terrain_grid(terrain: TerrainModel, issues: list[str]) -> None:
+    origin = terrain.grid_origin
+    if origin is None or not isfinite(origin.x) or not isfinite(origin.y):
+        issues.append("terrain grid origin must be finite")
+    if terrain.grid_width <= 0 or terrain.grid_height <= 0:
+        issues.append("terrain grid dimensions must be positive")
+    if len(terrain.grid_altitudes) != terrain.grid_height:
+        issues.append("terrain grid height must match altitude rows")
+        return
+    values: list[float] = []
+    for row_index, row in enumerate(terrain.grid_altitudes, start=1):
+        if len(row) != terrain.grid_width:
+            issues.append(f"terrain grid row {row_index} width must match grid width")
+        for value in row:
+            if not isfinite(value):
+                issues.append(f"terrain grid row {row_index} altitude values must be finite")
+                continue
+            values.append(value)
+    if not values:
+        return
+    actual_min = min(values)
+    actual_max = max(values)
+    tolerance = 1e-6
+    if (
+        abs(actual_min - terrain.min_altitude) > tolerance
+        or abs(actual_max - terrain.max_altitude) > tolerance
+    ):
+        issues.append("terrain grid altitude range must match grid samples")

@@ -159,7 +159,7 @@ class MapModel:
 @dataclass(slots=True)
 class ProjectModel:
     name: str = "Untitled mission"
-    version: str = "1.2"
+    version: str = "1.3"
     map: MapModel = field(default_factory=MapModel)
     planning_settings: dict[str, float | int | bool | str] = field(default_factory=dict)
     simulation_settings: dict[str, float | int | bool | str] = field(

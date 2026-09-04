@@ -12,7 +12,7 @@ from drone_mission_planner.domain.models import (
     Obstacle,
     ProjectModel,
 )
-from drone_mission_planner.domain.terrain import TerrainPeak
+from drone_mission_planner.domain.terrain import TerrainModel, TerrainPeak
 from drone_mission_planner.domain.validation import ProjectValidationError, validate_project
 from drone_mission_planner.domain.wind import WindModel
 
@@ -66,6 +66,26 @@ def test_rejects_invalid_environment_models() -> None:
 
     assert "terrain peak 1 radius" in str(captured.value)
     assert "wind speed" in str(captured.value)
+
+
+def test_rejects_invalid_grid_terrain_model() -> None:
+    project = ProjectModel()
+    project.map.terrain = TerrainModel(
+        terrain_type="grid",
+        resolution=10.0,
+        min_altitude=0.0,
+        max_altitude=10.0,
+        grid_origin=Point(0.0, 0.0),
+        grid_width=2,
+        grid_height=1,
+        grid_altitudes=[[5.0]],
+    )
+
+    with pytest.raises(ProjectValidationError) as captured:
+        validate_project(project)
+
+    assert "terrain grid row 1 width" in str(captured.value)
+    assert "terrain grid altitude range" in str(captured.value)
 
 
 def test_rejects_invalid_drone_flight_parameters() -> None:

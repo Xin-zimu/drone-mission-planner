@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import ceil, exp, isfinite
+from math import ceil, exp, floor, isfinite
 
 from .geometry import Point
 
@@ -21,8 +21,14 @@ class TerrainModel:
     min_altitude: float = 0.0
     max_altitude: float = 0.0
     peaks: list[TerrainPeak] = field(default_factory=list)
+    grid_origin: Point | None = None
+    grid_width: int = 0
+    grid_height: int = 0
+    grid_altitudes: list[list[float]] = field(default_factory=list)
 
     def altitude_at(self, x: float, y: float) -> float:
+        if self.terrain_type == "grid" and self.grid_altitudes and self.grid_origin is not None:
+            return self._grid_altitude_at(x, y)
         altitude = self.base_altitude
         for peak in self.peaks:
             if peak.radius <= 0:
@@ -31,6 +37,21 @@ class TerrainModel:
             dy = y - peak.center.y
             altitude += peak.height * exp(-(dx * dx + dy * dy) / (2.0 * peak.radius * peak.radius))
         return altitude
+
+    def _grid_altitude_at(self, x: float, y: float) -> float:
+        if not isfinite(x) or not isfinite(y) or self.grid_origin is None:
+            return self.base_altitude
+        x_index = _clamp((x - self.grid_origin.x) / self.resolution, 0.0, self.grid_width - 1.0)
+        y_index = _clamp((y - self.grid_origin.y) / self.resolution, 0.0, self.grid_height - 1.0)
+        x0 = floor(x_index)
+        y0 = floor(y_index)
+        x1 = min(self.grid_width - 1, x0 + 1)
+        y1 = min(self.grid_height - 1, y0 + 1)
+        tx = x_index - x0
+        ty = y_index - y0
+        top = _lerp(self.grid_altitudes[y0][x0], self.grid_altitudes[y0][x1], tx)
+        bottom = _lerp(self.grid_altitudes[y1][x0], self.grid_altitudes[y1][x1], tx)
+        return _lerp(top, bottom, ty)
 
 
 def flat_terrain(*, altitude: float = 0.0, resolution: float = 25.0) -> TerrainModel:
@@ -74,6 +95,43 @@ def generate_mountain_terrain(
     return model
 
 
+def grid_terrain(
+    *,
+    origin: Point,
+    resolution: float,
+    altitudes: list[list[float]],
+) -> TerrainModel:
+    if not isfinite(origin.x) or not isfinite(origin.y):
+        raise ValueError("terrain grid origin must be finite")
+    if not isfinite(resolution) or resolution <= 0:
+        raise ValueError("terrain resolution must be positive")
+    if not altitudes or not altitudes[0]:
+        raise ValueError("terrain grid must contain at least one altitude sample")
+    width = len(altitudes[0])
+    flattened: list[float] = []
+    normalized_rows: list[list[float]] = []
+    for row in altitudes:
+        if len(row) != width:
+            raise ValueError("terrain grid rows must have equal width")
+        normalized_row = [float(value) for value in row]
+        if not all(isfinite(value) for value in normalized_row):
+            raise ValueError("terrain grid altitude values must be finite")
+        flattened.extend(normalized_row)
+        normalized_rows.append(normalized_row)
+    return TerrainModel(
+        terrain_type="grid",
+        resolution=resolution,
+        base_altitude=normalized_rows[0][0],
+        min_altitude=min(flattened),
+        max_altitude=max(flattened),
+        peaks=[],
+        grid_origin=origin,
+        grid_width=width,
+        grid_height=len(normalized_rows),
+        grid_altitudes=normalized_rows,
+    )
+
+
 def load_from_dem(filepath: str) -> TerrainModel:
     raise NotImplementedError(f"DEM import is not implemented yet: {filepath}")
 
@@ -92,3 +150,11 @@ def _sample_altitudes(
             x = min(width, column * resolution)
             samples.append(model.altitude_at(x, y))
     return samples
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _lerp(start: float, end: float, ratio: float) -> float:
+    return start + (end - start) * ratio

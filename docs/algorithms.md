@@ -24,6 +24,8 @@ Feasible candidates are ranked by estimated mission energy, route distance, batt
 
 Route geometry is still planned by the 2D inflated-grid A* planner. After a path is found, every segment is re-evaluated against the current terrain and wind models. Flight altitude is the greater of the drone cruise altitude and terrain altitude plus minimum clearance; task endpoints may require a higher target altitude. Segment energy combines legacy horizontal distance cost, payload cost, climb/descent power converted from watts over climb/descent time, and deterministic wind correction. Wind is global and uses the direction it blows toward: tailwind reduces time and horizontal energy, headwind increases both, and crosswind adds a smaller penalty.
 
+Terrain sampling is source-agnostic. Flat terrain returns a constant altitude, procedural terrain evaluates Gaussian peaks, and imported CSV terrain samples a regular elevation grid with bilinear interpolation. Queries outside the imported grid are clamped to the nearest grid edge so planning, 2.5D rendering, and reports remain deterministic even when the mission map is larger than the imported elevation extent.
+
 ## Altitude safety validation
 
 Every planned route is sampled along each segment and checked against terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. The validator reports structured warning or critical risks with the affected drone, segment index, sampled position, required altitude, actual flight altitude, optional object ID, and a concise reason.

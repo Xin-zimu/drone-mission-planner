@@ -47,6 +47,7 @@ from drone_mission_planner.domain.terrain import (
 )
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
+from drone_mission_planner.persistence.terrain_import import TerrainImportError, load_terrain_csv
 from drone_mission_planner.planning.altitude_validator import (
     AltitudeRisk,
     AltitudeRiskSeverity,
@@ -452,6 +453,7 @@ class MainWindow(QMainWindow):
         self.object_tree.itemSelectionChanged.connect(self._tree_selection_changed)
         self.property_panel.property_changed.connect(self.update_property)
         self.environment_panel.environment_changed.connect(self.update_environment)
+        self.environment_panel.import_terrain_requested.connect(self.import_elevation_csv)
 
     def _update_coordinate_label(self, x: float, y: float) -> None:
         model = self.service.project.map
@@ -1172,6 +1174,41 @@ class MainWindow(QMainWindow):
         )
         self.environment_panel.set_map_model(self.service.project.map)
 
+    def import_elevation_csv(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import elevation CSV",
+            "",
+            "Elevation CSV (*.csv);;All files (*)",
+        )
+        if not selected:
+            return
+        try:
+            result = load_terrain_csv(selected)
+        except TerrainImportError as exc:
+            QMessageBox.warning(self, "Cannot import elevation CSV", str(exc))
+            LOGGER.error("Elevation CSV import failed: %s", exc)
+            return
+
+        preview = result.preview
+        answer = QMessageBox.question(
+            self,
+            "Import elevation CSV",
+            f"{preview.summary()}\n\nReplace the current terrain with this imported grid?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._apply_environment_update(
+            result.terrain,
+            self.service.project.map.wind,
+            f"Imported elevation CSV: {Path(selected).name}",
+        )
+        self.environment_panel.set_map_model(self.service.project.map)
+        LOGGER.info("Imported elevation CSV %s", selected)
+
     def update_environment(self, terrain: TerrainModel, wind: WindModel) -> None:
         self._apply_environment_update(
             terrain,
@@ -1430,11 +1467,19 @@ class MainWindow(QMainWindow):
         wind = "no wind"
         if map_model.wind.enabled and map_model.wind.speed > 0:
             wind = f"wind {map_model.wind.speed:.1f} m/s @ {map_model.wind.direction_to_deg:.0f}°"
-        terrain = (
-            "flat terrain"
-            if not map_model.terrain.peaks
-            else f"terrain {map_model.terrain.min_altitude:.0f}-{map_model.terrain.max_altitude:.0f} m"
-        )
+        if map_model.terrain.terrain_type == "grid" and map_model.terrain.grid_altitudes:
+            terrain = (
+                f"imported terrain {map_model.terrain.grid_width} x "
+                f"{map_model.terrain.grid_height}, "
+                f"{map_model.terrain.min_altitude:.0f}-{map_model.terrain.max_altitude:.0f} m"
+            )
+        elif map_model.terrain.peaks:
+            terrain = (
+                f"terrain {map_model.terrain.min_altitude:.0f}-"
+                f"{map_model.terrain.max_altitude:.0f} m"
+            )
+        else:
+            terrain = "flat terrain"
         self.object_summary.setText(
             f"{map_model.width} x {map_model.height} m map     •     "
             f"{len(map_model.drones)} drones     •     {len(map_model.tasks)} missions     •     "

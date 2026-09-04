@@ -7,6 +7,7 @@ from drone_mission_planner.domain.terrain import (
     TerrainPeak,
     flat_terrain,
     generate_mountain_terrain,
+    grid_terrain,
     load_from_dem,
 )
 from drone_mission_planner.domain.wind import WindModel
@@ -33,6 +34,36 @@ def test_mountain_terrain_samples_gaussian_peaks() -> None:
     assert terrain.altitude_at(100.0, 100.0) == pytest.approx(80.0)
     assert terrain.altitude_at(0.0, 0.0) < terrain.altitude_at(100.0, 100.0)
     assert terrain.max_altitude == pytest.approx(80.0)
+
+
+def test_grid_terrain_interpolates_regular_samples() -> None:
+    terrain = grid_terrain(
+        origin=Point(0.0, 0.0),
+        resolution=10.0,
+        altitudes=[
+            [0.0, 10.0],
+            [20.0, 30.0],
+        ],
+    )
+
+    assert terrain.terrain_type == "grid"
+    assert terrain.grid_width == 2
+    assert terrain.grid_height == 2
+    assert terrain.altitude_at(5.0, 5.0) == pytest.approx(15.0)
+    assert terrain.altitude_at(-5.0, -5.0) == pytest.approx(0.0)
+    assert terrain.altitude_at(100.0, 100.0) == pytest.approx(30.0)
+
+
+def test_grid_terrain_rejects_irregular_rows() -> None:
+    with pytest.raises(ValueError, match="equal width"):
+        grid_terrain(
+            origin=Point(0.0, 0.0),
+            resolution=10.0,
+            altitudes=[
+                [0.0, 10.0],
+                [20.0],
+            ],
+        )
 
 
 def test_wind_vector_uses_map_coordinate_system() -> None:

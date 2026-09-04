@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QDoubleSpinBox
+from PySide6.QtWidgets import QDoubleSpinBox, QMessageBox
 
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.geometry import Point, Rect
@@ -103,6 +106,46 @@ def test_environment_panel_updates_model_and_altitude_estimates(qtbot: object) -
     assert service.project.map.wind.enabled
     assert service.project.map.wind.speed == 7.0
     service.dirty = False
+
+
+def test_environment_panel_imports_elevation_csv(
+    tmp_path: Path, qtbot: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "terrain.csv"
+    path.write_text(
+        "x,y,elevation\n"
+        "0,0,10\n"
+        "10,0,20\n"
+        "0,10,30\n"
+        "10,10,50\n",
+        encoding="utf-8",
+    )
+    service = ProjectService()
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    def selected_file(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        return str(path), "Elevation CSV (*.csv)"
+
+    def confirm_import(*_args: object, **_kwargs: object) -> QMessageBox.StandardButton:
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(
+        "drone_mission_planner.ui.main_window.QFileDialog.getOpenFileName",
+        selected_file,
+    )
+    monkeypatch.setattr(
+        "drone_mission_planner.ui.main_window.QMessageBox.question",
+        confirm_import,
+    )
+
+    window.import_elevation_csv()
+
+    assert service.project.map.terrain.terrain_type == "grid"
+    assert service.project.map.terrain.altitude_at(5.0, 5.0) == pytest.approx(27.5)
+    assert "imported grid terrain" in window.environment_panel.summary_label.text()
+    assert service.dirty
 
 
 def test_coordinate_label_shows_terrain_altitude(qtbot: object) -> None:

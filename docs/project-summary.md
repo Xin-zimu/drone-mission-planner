@@ -34,7 +34,7 @@ Drone Mission Planner progressed through eight independently accepted stages int
 - Fault recovery initially risked resetting engine state; a dedicated `apply_replan` boundary preserved live resources.
 - Collision safety required time as well as geometry; priority holds are recalculated every fixed step.
 - Radio range was insufficient for remote missions until drones became graph relay nodes.
-- Release examples exposed schema-compatibility needs, resulting in versioned migrations that now carry older files forward through 1.2.
+- Release examples exposed schema-compatibility needs, resulting in versioned migrations that now carry older files forward through 1.3.
 
 ## Verified release metrics
 
@@ -44,9 +44,9 @@ Drone Mission Planner progressed through eight independently accepted stages int
 - 20 drones / 200 tasks: approximately 0.96 s in the release benchmark scenario.
 - Final rescue: 100% checkpoints, 95.4% accessible-area coverage, one live replan, failed D-02 contained, D-01/D-03 returned with positive battery.
 
-## v1.2 environment extension
+## v1.3 environment extension
 
-The project now has serializable terrain and wind models, schema migration through 1.2, terrain/wind-aware route energy, assignment costs based on estimated mission energy, altitude-aware simulation statistics, and a read-only 2.5D terrain view. The path planner remains 2D A* by design; altitude affects energy and visualization rather than adding a 3D search space.
+The project now has serializable terrain and wind models, schema migration through 1.3, terrain/wind-aware route energy, assignment costs based on estimated mission energy, altitude-aware simulation statistics, CSV elevation-grid import, and a read-only 2.5D terrain view. The path planner remains 2D A* by design; altitude affects energy and visualization rather than adding a 3D search space.
 
 ## Known scope limits
 
@@ -54,4 +54,4 @@ The release is still simulation-only. It has no hardware telemetry, distributed 
 
 ## Extension direction
 
-Natural next steps are terrain elevation and wind energy, D* Lite for incremental maps, OR-Tools VRP, Cooperative A*/reservation tables, ORCA local avoidance, signed installers, ROS 2/MAVLink adapters, and recorded/replayed real telemetry.
+Natural next steps are three-dimensional waypoints, true 3D rendering, route export, D* Lite for incremental maps, OR-Tools VRP, Cooperative A*/reservation tables, ORCA local avoidance, signed installers, ROS 2/MAVLink adapters, and recorded/replayed real telemetry.

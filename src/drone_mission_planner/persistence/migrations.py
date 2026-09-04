@@ -10,13 +10,15 @@ class MigrationError(ValueError):
 
 def migrate_project(raw: dict[str, Any]) -> dict[str, Any]:
     version = str(raw.get("version", ""))
-    if version == "1.2":
+    if version == "1.3":
         return raw
     if version == "1.0":
-        return _migrate_1_1_to_1_2(_migrate_1_0_to_1_1(raw))
+        return _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(_migrate_1_0_to_1_1(raw)))
     if version == "1.1":
-        return _migrate_1_1_to_1_2(raw)
-    raise MigrationError(f"Unsupported project version {version or 'missing'}; expected 1.2")
+        return _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(raw))
+    if version == "1.2":
+        return _migrate_1_2_to_1_3(raw)
+    raise MigrationError(f"Unsupported project version {version or 'missing'}; expected 1.3")
 
 
 def _migrate_1_0_to_1_1(raw: dict[str, Any]) -> dict[str, Any]:
@@ -67,4 +69,16 @@ def _migrate_1_1_to_1_2(raw: dict[str, Any]) -> dict[str, Any]:
     for task in map_data.get("tasks", []):
         task.setdefault("target_altitude", 100.0)
     migrated["version"] = "1.2"
+    return migrated
+
+
+def _migrate_1_2_to_1_3(raw: dict[str, Any]) -> dict[str, Any]:
+    migrated = deepcopy(raw)
+    map_data = migrated.setdefault("map", {})
+    terrain = map_data.setdefault("terrain", {})
+    terrain.setdefault("grid_origin", None)
+    terrain.setdefault("grid_width", 0)
+    terrain.setdefault("grid_height", 0)
+    terrain.setdefault("grid_altitudes", [])
+    migrated["version"] = "1.3"
     return migrated

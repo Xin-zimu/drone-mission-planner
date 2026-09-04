@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QTableWidget,
@@ -28,6 +29,7 @@ from drone_mission_planner.domain.wind import WindModel
 
 class EnvironmentPanel(QScrollArea):
     environment_changed = Signal(object, object)
+    import_terrain_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -58,6 +60,10 @@ class EnvironmentPanel(QScrollArea):
         terrain_form.addRow("Terrain sample step", self.resolution_spin)
         terrain_form.addRow("Mountain peaks", self.peak_count_spin)
         layout.addLayout(terrain_form)
+
+        self.import_terrain_button = QPushButton("Import elevation CSV...")
+        self.import_terrain_button.setToolTip("Load a local CSV with x, y, elevation columns")
+        layout.addWidget(self.import_terrain_button)
 
         self.peak_table = QTableWidget(0, 4)
         self.peak_table.setHorizontalHeaderLabels(["Center X", "Center Y", "Radius", "Height"])
@@ -125,6 +131,9 @@ class EnvironmentPanel(QScrollArea):
         )
         self.wind_speed_spin.valueChanged.connect(lambda _value: self._emit_environment_changed())
         self.wind_gust_spin.valueChanged.connect(lambda _value: self._emit_environment_changed())
+        self.import_terrain_button.clicked.connect(
+            lambda _checked=False: self.import_terrain_requested.emit()
+        )
 
     def _resize_peaks(self, count: int) -> None:
         if self._updating:
@@ -186,11 +195,18 @@ class EnvironmentPanel(QScrollArea):
         self.environment_changed.emit(terrain, wind)
 
     def _update_summary(self, terrain: TerrainModel, wind: WindModel) -> None:
-        terrain_text = (
-            f"{len(terrain.peaks)} peak terrain, {terrain.min_altitude:.0f}-{terrain.max_altitude:.0f} m"
-            if terrain.peaks
-            else f"flat terrain at {terrain.base_altitude:.0f} m"
-        )
+        if terrain.terrain_type == "grid" and terrain.grid_altitudes:
+            terrain_text = (
+                f"imported grid terrain {terrain.grid_width} x {terrain.grid_height}, "
+                f"{terrain.min_altitude:.0f}-{terrain.max_altitude:.0f} m"
+            )
+        elif terrain.peaks:
+            terrain_text = (
+                f"{len(terrain.peaks)} peak terrain, "
+                f"{terrain.min_altitude:.0f}-{terrain.max_altitude:.0f} m"
+            )
+        else:
+            terrain_text = f"flat terrain at {terrain.base_altitude:.0f} m"
         wind_text = (
             f"wind {wind.speed:.1f} m/s to {wind.direction_to_deg:.0f} deg"
             if wind.enabled and wind.speed > 0
