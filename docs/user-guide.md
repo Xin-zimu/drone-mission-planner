@@ -14,17 +14,25 @@ Open the **Environment** tab in the bottom workspace to edit base terrain altitu
 
 Environment edits are applied immediately. The map, 2.5D terrain view, summary bar, and Altitude profile energy estimates refresh from the current `MapModel.terrain` and `MapModel.wind`. Existing simulation state is discarded because terrain and wind change aircraft altitude, speed, and energy assumptions; run planning again when you want assignment or coverage tables regenerated against the new environment.
 
+## Altitude profile and risks
+
+Open the **Altitude profile** tab after route or coverage planning to inspect every route leg. The table shows terrain-aware start/end altitude, climb, energy, wind effect, and any safety risk found on that segment.
+
+Altitude risks are also drawn on the map. Orange segments indicate warnings and red segments indicate critical risks. The checks include terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. Select a drone to highlight its route and matching altitude rows.
+
 ## Cooperative search
 
 Choose **Search area** and drag a rectangle over the map. Select it to edit scan spacing, boundary margin, and target coverage in the inspector. Projects may also store irregular polygons; `examples/coverage_demo.dmproj` includes one.
 
 Choose **Planning → Plan area coverage** (`Ctrl+Shift+C`). The planner assigns one vertical strip to every available drone, connects alternating scan passes around protected regions, and appends a safe return to base. The Coverage tab lists assigned drones, pass count, accessible cells, live coverage, repeat coverage, and the requested target.
 
-Press Play to watch the covered-cell heatmap grow. Teal cells were observed by one drone; amber cells were observed by at least two. The area label and table update from the deterministic simulation state. Reset clears the coverage history and returns every drone to its initial state.
+Press Play to watch the covered-cell heatmap grow. Teal cells were observed by one drone; amber cells were observed by at least two. During failure recovery, uncovered target cells are shown separately in red so the supplemental sweep scope is visible. The area label and table update from the deterministic simulation state. Reset clears the coverage history and returns every drone to its initial state.
 
 ## Faults and live changes
 
 While a simulation is ready, select a drone and choose **Simulation → Fail selected drone** (`Ctrl+Shift+F`). The aircraft stops at its exact live position, turns red, and exposes its reason in the Events tab. Unfinished missions or coverage work are reassigned to operational drones from their current positions; the simulation clock, battery, completed tasks, travelled distance, and coverage history are not reset.
+
+Coverage recovery is incremental. Previously observed cells are kept as planning input, failed or emergency drones stop contributing coverage, and the replacement routes target only the remaining cells. If the target coverage is already satisfied, the engine accepts an empty replacement route and lets the mission complete normally.
 
 **Schedule automatic failure** creates a deterministic future event from the project's random seed. It appears as Scheduled in the Events tab and uses the same recovery path when its timestamp is reached.
 

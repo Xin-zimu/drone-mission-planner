@@ -10,6 +10,7 @@ from drone_mission_planner.planning.coverage import (
     CoveragePlanner,
     point_in_polygon,
     polygon_area,
+    target_cells_for_area,
 )
 from drone_mission_planner.planning.grid import GridMap
 from drone_mission_planner.planning.validator import validate_path
@@ -85,3 +86,86 @@ def test_planned_sweep_reaches_target_coverage_in_simulation() -> None:
 
     assert coverage.coverage >= area.target_coverage
     assert coverage.repeat_coverage < coverage.coverage
+
+
+def incremental_map() -> tuple[MapModel, SearchArea]:
+    model = MapModel(width=100, height=60, grid_size=10.0)
+    model.bases.append(BaseStation("B-01", "Base", Point(5, 5)))
+    model.drones.extend(
+        [
+            Drone("D-01", "Alpha", Point(5, 5), "B-01", safety_radius=6),
+            Drone("D-02", "Bravo", Point(5, 30), "B-01", safety_radius=6),
+        ]
+    )
+    area = SearchArea("S-01", "Patch", Rect(10, 10, 60, 30), scan_spacing=25)
+    model.search_areas.append(area)
+    return model, area
+
+
+def test_incremental_with_no_covered_cells_targets_the_whole_area() -> None:
+    model, area = incremental_map()
+    targets = target_cells_for_area(model, area)
+
+    result = CoveragePlanner().plan(model, area, covered_cells=())
+
+    assert result.incremental
+    assert result.target_cells == len(targets)
+    assert result.remaining_cells == len(targets)
+    assert result.covered_input_cells == 0
+    assert result.success, result.failures
+
+
+def test_incremental_with_full_coverage_returns_empty_success() -> None:
+    model, area = incremental_map()
+    targets = target_cells_for_area(model, area)
+
+    result = CoveragePlanner().plan(model, area, covered_cells=targets)
+
+    assert result.incremental
+    assert result.remaining_cells == 0
+    assert result.drone_paths == {}
+    assert result.failures == {}
+    assert result.success
+
+
+def test_incremental_remaining_cells_excludes_covered_input() -> None:
+    model, area = incremental_map()
+    targets = target_cells_for_area(model, area)
+    covered = set(sorted(targets)[: len(targets) // 2])
+
+    result = CoveragePlanner().plan(model, area, covered_cells=covered)
+
+    assert result.incremental
+    assert result.remaining_cells == len(targets) - len(covered)
+    assert result.covered_input_cells == len(covered)
+    assert result.success, result.failures
+
+
+def test_incremental_passes_endpoints_stay_on_the_inflated_free_grid() -> None:
+    model, area = incremental_map()
+    # Obstacle overlaps the right-hand target columns so raw cell centers in the
+    # inflated grid become blocked; incremental strips must clamp onto free segments.
+    model.obstacles.append(Obstacle("O-01", "Tower", bounds=Rect(50, 8, 30, 12), height=45))
+    planner = CoveragePlanner()
+    grid = GridMap.from_map(model, safety_radius=6)
+
+    result = planner.plan(model, area, covered_cells=())
+
+    assert result.success, result.failures
+    assert result.drone_paths
+    for drone_id, path in result.drone_paths.items():
+        valid, reason = validate_path(path, grid)
+        assert valid, f"{drone_id} incremental route is unsafe: {reason}"
+
+
+def test_incremental_does_not_require_every_drone_when_work_is_small() -> None:
+    model, area = incremental_map()
+    targets = target_cells_for_area(model, area)
+    covered = targets - {min(targets)}
+
+    result = CoveragePlanner().plan(model, area, covered_cells=covered)
+
+    assert result.remaining_cells == 1
+    assert result.success
+    assert result.failures == {}
+    assert len(result.drone_paths) == 1

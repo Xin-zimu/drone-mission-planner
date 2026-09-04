@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from drone_mission_planner.domain.geometry import Point
+from drone_mission_planner.planning.altitude_validator import AltitudeRisk
 
 
 @dataclass(slots=True)
@@ -15,6 +16,7 @@ class PathResult:
     expanded_nodes: int = 0
     failure_reason: str | None = None
     raw_waypoint_count: int = 0
+    altitude_risks: tuple[AltitudeRisk, ...] = ()
 
     @classmethod
     def failure(cls, reason: str, *, expanded_nodes: int = 0) -> PathResult:

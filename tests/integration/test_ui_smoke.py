@@ -79,13 +79,17 @@ def test_environment_panel_updates_model_and_altitude_estimates(qtbot: object) -
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
 
-    assert window.altitude_table.item(0, 3).text() == "40.0 m"
+    altitude_cell = window.altitude_table.item(0, 3)
+    assert altitude_cell is not None
+    assert altitude_cell.text() == "40.0 m"
 
     window.environment_panel.base_altitude_spin.setValue(35.0)
 
     assert service.project.map.terrain.base_altitude == 35.0
     assert service.dirty
-    assert window.altitude_table.item(0, 3).text() == "45.0 m"
+    altitude_cell = window.altitude_table.item(0, 3)
+    assert altitude_cell is not None
+    assert altitude_cell.text() == "45.0 m"
 
     window.environment_panel.peak_count_spin.setValue(1)
     height_spin = window.environment_panel.peak_table.cellWidget(0, 3)
@@ -98,3 +102,68 @@ def test_environment_panel_updates_model_and_altitude_estimates(qtbot: object) -
     assert service.project.map.terrain.peaks[0].height == 120.0
     assert service.project.map.wind.enabled
     assert service.project.map.wind.speed == 7.0
+    service.dirty = False
+
+
+def test_coordinate_label_shows_terrain_altitude(qtbot: object) -> None:
+    service = ProjectService()
+    service.project.map.terrain = generate_mountain_terrain(
+        width=float(service.project.map.width),
+        height=float(service.project.map.height),
+        resolution=40.0,
+        peaks=[TerrainPeak(Point(420.0, 260.0), 120.0, 140.0)],
+    )
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    window._update_coordinate_label(420.0, 260.0)
+
+    assert "terrain" in window.coordinate_label.text()
+    assert "m" in window.coordinate_label.text()
+    window._update_coordinate_label(-10.0, -10.0)
+    assert "outside" in window.coordinate_label.text()
+
+
+def test_altitude_table_reports_clearance_and_obstacle_risks(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    drone = service.add_drone(Point(40.0, 20.0))
+    service.add_obstacle(Rect(150.0, 10.0, 60.0, 30.0))
+    drone.cruise_altitude = 30.0
+    drone.min_clearance = 30.0
+    drone.planned_path = [drone.position, Point(300.0, 20.0)]
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    # Risk column (index 8) reports the obstacle-height risk on the crossing leg.
+    assert window.altitude_table.rowCount() == 1
+    risk_cell = window.altitude_table.item(0, 8)
+    assert risk_cell is not None
+    assert "obstacle height" in risk_cell.text()
+
+
+def test_coverage_sync_pushes_uncovered_cells_and_resolution(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 200.0))
+    drone = service.add_drone(Point(40.0, 200.0))
+    area = service.add_search_area(Rect(100.0, 100.0, 200.0, 160.0))
+    area.scan_spacing = 30
+    drone.planned_path = [drone.position, Point(400.0, 200.0)]
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    from drone_mission_planner.simulation.engine import SimulationEngine
+
+    engine = SimulationEngine(service.project.map)
+    window.simulation_engine = engine
+    engine.start()
+    engine.advance(3.0)
+    engine.pause()
+
+    window._sync_simulation_state()
+
+    assert window.map_view._uncovered_cells != {}
+    resolution = engine.coverage_monitor.resolution(area.id)
+    assert window.map_view._coverage_resolutions.get(area.id) == resolution

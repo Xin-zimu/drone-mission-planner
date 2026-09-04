@@ -47,6 +47,11 @@ from drone_mission_planner.domain.terrain import (
 )
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
+from drone_mission_planner.planning.altitude_validator import (
+    AltitudeRisk,
+    AltitudeRiskSeverity,
+    validate_altitude_path,
+)
 from drone_mission_planner.planning.assignment import AssignmentResult, GreedyAssignmentPlanner
 from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePlanResult
 from drone_mission_planner.planning.energy import estimate_segment_energy
@@ -365,7 +370,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.coverage_table, "Coverage")
         self.environment_panel = EnvironmentPanel()
         tabs.addTab(self.environment_panel, "Environment")
-        self.altitude_table = QTableWidget(0, 8)
+        self.altitude_table = QTableWidget(0, 9)
         self.altitude_table.setHorizontalHeaderLabels(
             [
                 "Drone",
@@ -376,6 +381,7 @@ class MainWindow(QMainWindow):
                 "Climb",
                 "Energy",
                 "Wind",
+                "Risk",
             ]
         )
         self.altitude_table.setAlternatingRowColors(True)
@@ -442,12 +448,20 @@ class MainWindow(QMainWindow):
         self.map_view.create_rect_requested.connect(self.create_rect_object)
         self.map_view.object_selected.connect(self.select_object)
         self.map_view.delete_requested.connect(self.delete_object)
-        self.map_view.coordinates_changed.connect(
-            lambda x, y: self.coordinate_label.setText(f"x {x:7.1f} m   y {y:7.1f} m")
-        )
+        self.map_view.coordinates_changed.connect(self._update_coordinate_label)
         self.object_tree.itemSelectionChanged.connect(self._tree_selection_changed)
         self.property_panel.property_changed.connect(self.update_property)
         self.environment_panel.environment_changed.connect(self.update_environment)
+
+    def _update_coordinate_label(self, x: float, y: float) -> None:
+        model = self.service.project.map
+        if 0.0 <= x <= model.width and 0.0 <= y <= model.height:
+            altitude = model.terrain.altitude_at(x, y)
+            self.coordinate_label.setText(
+                f"x {x:7.1f} m   y {y:7.1f} m   terrain {altitude:6.1f} m"
+            )
+        else:
+            self.coordinate_label.setText(f"x {x:7.1f} m   y {y:7.1f} m   outside map")
 
     def _install_log_handler(self) -> None:
         handler = QtLogHandler(self.log_view)
@@ -576,9 +590,14 @@ class MainWindow(QMainWindow):
         self._render_altitude_table()
         self._render_map_if_visible()
         self._update_title()
+        risk_message = (
+            f", {len(result.altitude_risks)} altitude risks"
+            if result.altitude_risks
+            else ", altitude clear"
+        )
         self.statusBar().showMessage(
             f"{drone.id} route: {result.total_distance:.1f} m, "
-            f"{result.estimated_time:.1f} s, {result.expanded_nodes} nodes",
+            f"{result.estimated_time:.1f} s, {result.expanded_nodes} nodes{risk_message}",
             8000,
         )
         LOGGER.info(
@@ -670,10 +689,24 @@ class MainWindow(QMainWindow):
         self.coverage_table.resizeColumnsToContents()
 
     def _render_altitude_table(self) -> None:
-        rows: list[list[str]] = []
+        rows: list[tuple[list[str], tuple[AltitudeRisk, ...], bool]] = []
         for drone in self.service.project.map.drones:
             if len(drone.planned_path) < 2:
                 continue
+            risks = validate_altitude_path(
+                self.service.project.map,
+                drone,
+                drone.planned_path,
+            )
+            risks_by_segment: dict[int, tuple[AltitudeRisk, ...]] = {}
+            for risk in risks:
+                risks_by_segment[risk.segment_index] = (
+                    *risks_by_segment.get(risk.segment_index, ()),
+                    risk,
+                )
+            drone_selected = self._selected_id == drone.id or any(
+                task_id == self._selected_id for task_id in drone.assigned_tasks
+            )
             for index, (start, end) in enumerate(pairwise(drone.planned_path), start=1):
                 profile = estimate_segment_energy(
                     drone,
@@ -683,22 +716,41 @@ class MainWindow(QMainWindow):
                     wind=self.service.project.map.wind,
                     end_altitude=self._task_altitude_at(drone, end),
                 )
+                segment_risks = risks_by_segment.get(index, ())
+                risk_text = (
+                    "Clear"
+                    if not segment_risks
+                    else ", ".join(risk.kind.value.replace("_", " ") for risk in segment_risks)
+                )
                 rows.append(
-                    [
-                        drone.id,
-                        str(index),
-                        f"{profile.distance:.1f} m",
-                        f"{profile.start_altitude:.1f} m",
-                        f"{profile.end_altitude:.1f} m",
-                        f"{profile.climb_meters:.1f}/{profile.descent_meters:.1f} m",
-                        f"{profile.energy:.2f}",
-                        f"{profile.wind_factor:.2f}x",
-                    ]
+                    (
+                        [
+                            drone.id,
+                            str(index),
+                            f"{profile.distance:.1f} m",
+                            f"{profile.start_altitude:.1f} m",
+                            f"{profile.end_altitude:.1f} m",
+                            f"{profile.climb_meters:.1f}/{profile.descent_meters:.1f} m",
+                            f"{profile.energy:.2f}",
+                            f"{profile.wind_factor:.2f}x",
+                            risk_text,
+                        ],
+                        segment_risks,
+                        drone_selected,
+                    )
                 )
         self.altitude_table.setRowCount(len(rows))
-        for row, values in enumerate(rows):
+        for row, (values, risks, selected) in enumerate(rows):
             for column, value in enumerate(values):
-                self.altitude_table.setItem(row, column, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if selected:
+                    item.setBackground(QColor("#203b57"))
+                if column == 8 and risks:
+                    color = "#ff6b81" if any(
+                        risk.severity == AltitudeRiskSeverity.CRITICAL for risk in risks
+                    ) else "#f9ca5b"
+                    item.setForeground(QColor(color))
+                self.altitude_table.setItem(row, column, item)
         self.altitude_table.resizeColumnsToContents()
 
     def _task_altitude_at(self, drone: Drone, point: Point) -> float | None:
@@ -1048,8 +1100,14 @@ class MainWindow(QMainWindow):
         )
         if coverage_mode:
             area = self.service.project.map.search_areas[0]
+            covered_cells = engine.coverage_monitor.covered_cells(area.id)
+            coverage_resolution = engine.coverage_monitor.resolution(area.id)
             coverage_result = self.coverage_planner.plan(
-                self.service.project.map, area, active_drones
+                self.service.project.map,
+                area,
+                active_drones,
+                covered_cells=covered_cells,
+                coverage_resolution=coverage_resolution,
             )
             self.coverage_results[area.id] = coverage_result
             paths = coverage_result.drone_paths
@@ -1227,7 +1285,8 @@ class MainWindow(QMainWindow):
             area_id: self.simulation_engine.coverage_monitor.resolution(area_id)
             for area_id in cells
         }
-        self.map_view.set_coverage_overlay(progress, cells, resolutions)
+        uncovered = self.simulation_engine.coverage_monitor.uncovered_render_cells()
+        self.map_view.set_coverage_overlay(progress, cells, resolutions, uncovered)
         positions = {base.id: base.position for base in self.service.project.map.bases} | {
             state.id: state.position for state in snapshot.drones
         }
@@ -1294,6 +1353,8 @@ class MainWindow(QMainWindow):
             return
         self._selected_id = object_id
         self.property_panel.set_object(item)
+        self.map_view.set_selected_object(object_id)
+        self._render_altitude_table()
         matches = self.object_tree.findItems(object_id, Qt.MatchFlag.MatchRecursive, 1)
         if matches:
             self.object_tree.blockSignals(True)
@@ -1334,6 +1395,8 @@ class MainWindow(QMainWindow):
         if select_id:
             self.select_object(select_id)
         else:
+            self._selected_id = None
+            self.map_view.set_selected_object(None)
             self.property_panel.show_empty()
 
     def _populate_tree(self) -> None:

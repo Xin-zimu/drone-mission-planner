@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from drone_mission_planner.domain.enums import TaskStatus
+from drone_mission_planner.planning.altitude_validator import validate_model_altitudes
 
 from .events import EventType
 
@@ -30,6 +31,7 @@ class DroneReport:
     completed_tasks: int
     base_link: str
     hop_count: int | None
+    altitude_risk_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +41,33 @@ class CoverageReport:
     repeat_coverage: float
     covered_cells: int
     target_cells: int
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentReport:
+    terrain_type: str
+    base_altitude: float
+    min_altitude: float
+    max_altitude: float
+    peak_count: int
+    wind_enabled: bool
+    wind_direction_to_deg: float
+    wind_speed: float
+    wind_gust_factor: float
+
+
+@dataclass(frozen=True, slots=True)
+class AltitudeRiskReport:
+    drone_id: str
+    segment_index: int
+    kind: str
+    severity: str
+    x: float
+    y: float
+    required_altitude: float
+    flight_altitude: float
+    object_id: str | None
+    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +82,9 @@ class SimulationReport:
     replan_count: int
     conflict_count: int
     communication_loss_count: int
+    altitude_risk_count: int
+    environment: EnvironmentReport
+    altitude_risks: tuple[AltitudeRiskReport, ...]
     drones: tuple[DroneReport, ...]
     coverage: tuple[CoverageReport, ...]
 
@@ -61,6 +93,10 @@ def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
     snapshot = engine.snapshot()
     statistics = {item.drone_id: item for item in engine.statistics()}
     communication = {item.drone_id: item for item in snapshot.communication}
+    altitude_risks = validate_model_altitudes(engine.map_model)
+    risk_counts: dict[str, int] = {}
+    for risk in altitude_risks:
+        risk_counts[risk.drone_id] = risk_counts.get(risk.drone_id, 0) + 1
     drones: list[DroneReport] = []
     for state in snapshot.drones:
         stats = statistics[state.id]
@@ -84,6 +120,7 @@ def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
                 stats.completed_tasks,
                 base_link,
                 link.hop_count if link is not None else None,
+                risk_counts.get(state.id, 0),
             )
         )
     task_statuses = tuple(snapshot.task_statuses.values())
@@ -113,6 +150,33 @@ def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
         conflict_count=len(snapshot.conflicts),
         communication_loss_count=sum(
             record.event.event_type == EventType.COMMUNICATION_LOSS for record in snapshot.events
+        ),
+        altitude_risk_count=len(altitude_risks),
+        environment=EnvironmentReport(
+            engine.map_model.terrain.terrain_type,
+            engine.map_model.terrain.base_altitude,
+            engine.map_model.terrain.min_altitude,
+            engine.map_model.terrain.max_altitude,
+            len(engine.map_model.terrain.peaks),
+            engine.map_model.wind.enabled,
+            engine.map_model.wind.direction_to_deg,
+            engine.map_model.wind.speed,
+            engine.map_model.wind.gust_factor,
+        ),
+        altitude_risks=tuple(
+            AltitudeRiskReport(
+                risk.drone_id,
+                risk.segment_index,
+                risk.kind.value,
+                risk.severity.value,
+                risk.position.x,
+                risk.position.y,
+                risk.required_altitude,
+                risk.flight_altitude,
+                risk.object_id,
+                risk.message,
+            )
+            for risk in altitude_risks
         ),
         drones=tuple(drones),
         coverage=coverage,
@@ -146,6 +210,7 @@ def export_report(report: SimulationReport, path: str | Path) -> Path:
                     "completed_tasks",
                     "base_link",
                     "hop_count",
+                    "altitude_risk_count",
                 ]
             )
             for drone in report.drones:
@@ -166,7 +231,8 @@ def _html_report(report: SimulationReport) -> str:
         f"<td>{item.remaining_battery:.2f}</td><td>{item.current_altitude:.1f} m</td>"
         f"<td>{item.altitude_gain:.1f} / {item.altitude_loss:.1f} m</td>"
         f"<td>{item.completed_tasks}</td>"
-        f"<td>{escape(item.base_link)}</td><td>{item.hop_count or '—'}</td></tr>"
+        f"<td>{escape(item.base_link)}</td><td>{item.hop_count or '—'}</td>"
+        f"<td>{item.altitude_risk_count}</td></tr>"
         for item in report.drones
     )
     coverage = (
@@ -176,6 +242,27 @@ def _html_report(report: SimulationReport) -> str:
             for item in report.coverage
         )
         or "<li>No search areas</li>"
+    )
+    risks = (
+        "".join(
+            "<li>"
+            f"{escape(item.drone_id)} leg {item.segment_index}: "
+            f"{escape(item.severity)} {escape(item.kind)}"
+            f"{' on ' + escape(item.object_id) if item.object_id else ''} "
+            f"at ({item.x:.1f}, {item.y:.1f}) "
+            f"{item.flight_altitude:.1f}/{item.required_altitude:.1f} m"
+            f" - {escape(item.message)}"
+            "</li>"
+            for item in report.altitude_risks
+        )
+        or "<li>No altitude risks</li>"
+    )
+    wind = (
+        f"{report.environment.wind_speed:.1f} m/s @ "
+        f"{report.environment.wind_direction_to_deg:.0f} deg, gust "
+        f"{report.environment.wind_gust_factor:.2f}"
+        if report.environment.wind_enabled
+        else "disabled"
     )
     return f"""<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>Drone Mission Planner report</title>
@@ -192,8 +279,13 @@ th,td{{padding:9px 10px;border:1px solid #d8dfeb;text-align:left}} th{{backgroun
 <div class="card"><div>Total distance</div><div class="value">{report.total_distance:.1f}m</div></div>
 <div class="card"><div>Energy used</div><div class="value">{report.total_energy_used:.1f}</div></div>
 <div class="card"><div>Replans / holds</div><div class="value">{report.replan_count} / {report.conflict_count}</div></div>
+<div class="card"><div>Altitude risks</div><div class="value">{report.altitude_risk_count}</div></div>
 </div>
+<h2>Environment</h2><ul>
+<li>Terrain: {escape(report.environment.terrain_type)}, base {report.environment.base_altitude:.1f} m, range {report.environment.min_altitude:.1f}-{report.environment.max_altitude:.1f} m, peaks {report.environment.peak_count}</li>
+<li>Wind: {escape(wind)}</li>
+</ul>
 <h2>Aircraft</h2><table><thead><tr><th>Drone</th><th>Status</th><th>Distance</th><th>Flight</th>
 <th>Waiting</th><th>Energy</th><th>Battery</th><th>Altitude</th><th>Climb / Descent</th>
-<th>Tasks</th><th>Link</th><th>Hops</th></tr></thead>
-<tbody>{rows}</tbody></table><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""
+<th>Tasks</th><th>Link</th><th>Hops</th><th>Altitude risks</th></tr></thead>
+<tbody>{rows}</tbody></table><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""

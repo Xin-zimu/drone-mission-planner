@@ -31,3 +31,19 @@ def test_reset_clears_visits() -> None:
     assert monitor.snapshot()[0].covered_cells > 0
     monitor.reset()
     assert monitor.snapshot()[0].covered_cells == 0
+
+
+def test_covered_and_uncovered_render_sets_are_complementary() -> None:
+    model = MapModel(width=100, height=100, grid_size=10)
+    model.search_areas.append(SearchArea("S-01", "Area", Rect(0, 0, 80, 80)))
+    monitor = CoverageMonitor(model)
+    monitor.update({"D-01": Point(30, 30)})
+
+    snapshot = monitor.snapshot()[0]
+    covered_cells = monitor.covered_cells("S-01")
+    uncovered = monitor.uncovered_render_cells()["S-01"]
+
+    assert snapshot.covered_cells == len(covered_cells) > 0
+    assert snapshot.target_cells == snapshot.covered_cells + len(uncovered)
+    assert monitor.resolution("S-01") > 0
+    assert monitor.covered_cells("missing-area") == frozenset()

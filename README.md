@@ -15,14 +15,14 @@
 | Area | Capabilities |
 |---|---|
 | Mission editor | Zoomable grid map; bases, drones, point missions, obstacles, no-fly zones, polygon/rectangular search areas; inspector and object tree |
-| Route planning | Deterministic 8-connected A*, Octile heuristic, safety-radius inflation, corner-cut prevention, smoothing, and final validation |
+| Route planning | Deterministic 8-connected A*, Octile heuristic, safety-radius inflation, corner-cut prevention, smoothing, final validation, and altitude-risk checks |
 | Assignment | Priority-first multi-drone allocation with payload, terrain/wind-aware energy, safe return, reserve, deadlines, and per-drone rejection reasons |
-| Cooperative search | Vertical strip partitioning, obstacle-safe lawnmower passes, return to base, live coverage heatmap, and repeat-coverage metrics |
+| Cooperative search | Vertical strip partitioning, obstacle-safe lawnmower passes, incremental supplemental sweeps, return to base, live covered/uncovered-cell overlays, and repeat-coverage metrics |
 | Dynamic simulation | Fixed 0.05 s logic steps, 0.5x–10x playback, state machine, altitude/energy/distance/task integration, pause/step/reset |
 | Environment | Editable procedural terrain peaks, base elevation, global wind vectors, climb/descent/hover power parameters, and a read-only 2.5D terrain view |
-| Live adaptation | Manual or seeded automatic failures, exact-position stop, unfinished-work redistribution, temporary zones, task insertion/cancellation |
+| Live adaptation | Manual or seeded automatic failures, exact-position stop, unfinished-work redistribution from live state, coverage recovery without resetting history, temporary zones, task insertion/cancellation |
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
-| Reporting | Per-aircraft and system statistics, completion/coverage charts, event history, and HTML/JSON/CSV export |
+| Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, event history, and HTML/JSON/CSV export |
 | Persistence | Human-readable `.dmproj` JSON, schema migration through 1.2, validation, and clear corrupt/incompatible-file errors |
 
 ## Windows application
@@ -53,7 +53,7 @@ python run.py
 2. Use **Planning → Auto assign all missions**, or draw a Search area and choose **Plan area coverage**.
 3. Press Play, or use Pause, Step, Reset, and the speed selector.
 4. Select a drone and press `Ctrl+Shift+F` to test state-preserving fault recovery.
-5. Review Events, Safety & links, Coverage, and Statistics; press `Ctrl+E` to export a report.
+5. Review Events, Safety & links, Coverage, Altitude profile, and Statistics; press `Ctrl+E` to export a report.
 
 Press `F1` inside the application for the quick-start guide.
 
@@ -93,6 +93,8 @@ mypy src
 pytest
 python scripts/benchmark.py
 ```
+
+On this Windows workstation, the validated development environment is Python 3.13 in `.venv313`; use `.\.venv313\Scripts\python.exe -m pytest` for the current full suite.
 
 The final suite covers geometry, rasterization, A*, smoothing, energy, assignment, coverage, event handling, state-preserving fault recovery, collision avoidance, multi-hop communication, reporting, persistence migration, UI smoke paths, all three release examples, and performance limits. See [the final test report](reports/final-test-report.md).
 

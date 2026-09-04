@@ -3,6 +3,7 @@ from __future__ import annotations
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import Drone, MapModel
 
+from .altitude_validator import validate_altitude_path
 from .astar import AStarPlanner
 from .energy import estimate_path_energy
 from .grid import GridMap
@@ -40,4 +41,9 @@ class RoutePlanner:
             )
             result.estimated_time = profile.time
             result.estimated_energy = profile.energy
+            result.altitude_risks = validate_altitude_path(
+                map_model,
+                drone,
+                result.waypoints,
+            )
         return result

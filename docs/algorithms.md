@@ -24,21 +24,29 @@ Feasible candidates are ranked by estimated mission energy, route distance, batt
 
 Route geometry is still planned by the 2D inflated-grid A* planner. After a path is found, every segment is re-evaluated against the current terrain and wind models. Flight altitude is the greater of the drone cruise altitude and terrain altitude plus minimum clearance; task endpoints may require a higher target altitude. Segment energy combines legacy horizontal distance cost, payload cost, climb/descent power converted from watts over climb/descent time, and deterministic wind correction. Wind is global and uses the direction it blows toward: tailwind reduces time and horizontal energy, headwind increases both, and crosswind adds a smaller penalty.
 
+## Altitude safety validation
+
+Every planned route is sampled along each segment and checked against terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. The validator reports structured warning or critical risks with the affected drone, segment index, sampled position, required altitude, actual flight altitude, optional object ID, and a concise reason.
+
+The current A* grid remains two-dimensional. Altitude validation runs after route generation and feeds the route result, 2D/2.5D route coloring, the Altitude profile table, and exported reports. Obstacles whose horizontal projection is crossed require the aircraft to clear `obstacle.height + drone.min_clearance`. No-fly zones can either remain strict at all altitudes or allow overflight only above their configured ceiling, depending on the validation policy.
+
 ## Cooperative area coverage
 
 A search polygon is intersected with horizontal scanlines separated by the configured sensor spacing. The polygon's horizontal extent is divided into equal, non-overlapping vertical strips—one per selected drone. Scanline fragments are clipped to each strip and shortened by the configured boundary margin.
 
-Pass direction alternates on every row to form a lawnmower pattern. Start, pass endpoints, and home-base return are joined through the same inflated A* grid used by point missions, so obstacles and no-fly zones remain hard constraints. Unsafe endpoints are moved inward to the nearest free planning cell; an unresolved leg produces a named per-drone failure instead of a partial executable route.
+Pass direction alternates on every row to form a lawnmower pattern. Start, pass endpoints, and home-base return are joined through the same inflated A* grid used by point missions, so obstacles and no-fly zones remain hard constraints. Pass endpoints are clipped to free cells in the safety-inflated grid before routing; an unresolved leg produces a named per-drone failure instead of a partial executable route.
+
+When the planner receives already covered cells, it switches to incremental mode. Target cells are computed with the same coverage grid used by the simulator, already covered cells are removed, and the remaining cells are grouped by eight-neighbor connectivity. Each cluster becomes short local passes clipped to free grid segments, then clusters are assigned to operational drones by live-position distance plus current load. If every target cell is already covered, the plan succeeds with no new drone paths.
 
 ## Coverage measurement
 
-`CoverageMonitor` samples accessible cells inside every search polygon. The conservative demonstration sensor footprint uses a radius equal to 90% of configured scan spacing, providing overlap despite grid quantization and obstacle detours. Coverage is the fraction visited by at least one drone; repeat coverage is the fraction visited by at least two distinct drones. Obstacle and no-fly cells are excluded from the denominator. The fixed-step engine updates both values independently from UI frame rate.
+`CoverageMonitor` samples accessible cells inside every search polygon with the shared coverage-grid helpers used by incremental planning. The conservative demonstration sensor footprint uses a radius equal to 90% of configured scan spacing, providing overlap despite grid quantization and obstacle detours. Coverage is the fraction visited by at least one drone; repeat coverage is the fraction visited by at least two distinct drones. Obstacle and no-fly cells are excluded from the denominator. Failed and emergency drones do not contribute new coverage. The fixed-step engine updates coverage independently from UI frame rate and exposes both covered and uncovered cells for rendering.
 
 ## Dynamic fault replanning
 
 Events are ordered by `(timestamp, event ID)` and processed inside the fixed simulation step. A drone-failure event immediately changes the runtime to `FAILED`, freezes movement and energy use, releases only unfinished work, and requests a replan. Manual and seeded automatic events use the same code path.
 
-Before replanning, live positions, remaining battery, current statuses, completed tasks, and covered cells are copied into the planning model. Point missions run priority-first assignment again over unfinished/non-cancelled work. Coverage missions repartition the area across operational drones while the coverage monitor keeps prior observations. New paths begin at each runtime's current position and are applied without recreating the engine, so time, consumed battery, travelled distance, event history, and completed work remain intact.
+Before replanning, live positions, remaining battery, current statuses, completed tasks, and covered cells are copied into the planning model. Point missions run priority-first assignment again over unfinished/non-cancelled work. Coverage missions pass the simulator's covered-cell set and resolution into `CoveragePlanner`, so only remaining target cells are repartitioned across operational drones. New paths begin at each runtime's current position and are applied without recreating the engine, so time, consumed battery, travelled distance, event history, completed work, and coverage history remain intact. A drone with no replacement path is marked complete rather than kept on an empty active route.
 
 ## Time–space conflict handling
 

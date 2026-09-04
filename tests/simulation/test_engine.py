@@ -3,8 +3,14 @@ from __future__ import annotations
 import pytest
 
 from drone_mission_planner.domain.enums import DroneStatus, TaskStatus
-from drone_mission_planner.domain.geometry import Point
-from drone_mission_planner.domain.models import BaseStation, Drone, MapModel, MissionTask
+from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.models import (
+    BaseStation,
+    Drone,
+    MapModel,
+    MissionTask,
+    SearchArea,
+)
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.simulation.engine import SimulationEngine
@@ -123,3 +129,77 @@ def test_simulation_tracks_environment_energy_and_altitude() -> None:
     assert stats.altitude_gain > 0.0
     assert stats.altitude_loss > 0.0
     assert engine.snapshot().drones[0].current_altitude == pytest.approx(stats.current_altitude)
+
+
+def test_failure_clears_assignment_path_and_reopens_task() -> None:
+    engine = SimulationEngine(simulation_map(), fixed_dt=0.05)
+    engine.start()
+    engine.advance(1.0)
+    engine.pause()
+    assert engine.trigger_failure("D-01", reason="propulsion fault")
+
+    snapshot = engine.snapshot()
+    drone = snapshot.drones[0]
+    runtime = engine.runtimes["D-01"]
+    assert drone.status == DroneStatus.FAILED
+    assert snapshot.task_statuses["T-01"] == TaskStatus.PENDING
+    assert runtime.assigned_task_ids == []
+    assert runtime.path == [runtime.position]
+    assert engine.drain_replan_requests() == ("D-01",)
+
+
+def test_failed_drone_stops_contributing_coverage() -> None:
+    model = MapModel(width=300, height=300, grid_size=10.0)
+    model.bases.append(BaseStation("B-01", "Base", Point(10, 10)))
+    model.drones.append(
+        Drone(
+            "D-01",
+            "Alpha",
+            Point(10, 10),
+            "B-01",
+            max_speed=10,
+            planned_path=[Point(10, 10), Point(250, 10), Point(10, 10)],
+        )
+    )
+    model.search_areas.append(SearchArea("S-01", "Area", Rect(10, 10, 120, 120)))
+    engine = SimulationEngine(model, fixed_dt=0.05)
+    engine.start()
+    engine.advance(0.5)
+    engine.pause()
+    before = engine.coverage_monitor.snapshot()[0].covered_cells
+    assert before > 0
+    stopped_at = engine.runtimes["D-01"].position
+
+    assert engine.trigger_failure("D-01", reason="propulsion fault")
+    engine.start()
+    engine.advance(3.0)
+    after = engine.coverage_monitor.snapshot()[0].covered_cells
+
+    assert engine.runtimes["D-01"].status == DroneStatus.FAILED
+    assert engine.runtimes["D-01"].position == stopped_at
+    assert after == before
+
+
+def test_apply_replan_with_empty_path_marks_drone_completed() -> None:
+    engine = SimulationEngine(simulation_map())
+    engine.start()
+    engine.advance(1.0)
+    engine.pause()
+
+    engine.apply_replan({"D-01": []})
+
+    assert engine.runtimes["D-01"].status == DroneStatus.COMPLETED
+    assert engine.is_complete
+
+
+def test_is_complete_is_true_when_no_drone_has_work() -> None:
+    model = MapModel(width=100, height=100, grid_size=5.0)
+    model.bases.append(BaseStation("B-01", "Base", Point(10, 10)))
+    model.drones.append(
+        Drone("D-01", "Alpha", Point(10, 10), "B-01")  # No planned path yet.
+    )
+    engine = SimulationEngine(model)
+
+    # With no assigned route, no drone is carrying active work, so a completion
+    # check must not spin forever waiting for flights that will never start.
+    assert engine.is_complete

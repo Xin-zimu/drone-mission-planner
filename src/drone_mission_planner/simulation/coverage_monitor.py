@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import ceil, floor
+from math import ceil
 
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import MapModel, SearchArea
-from drone_mission_planner.planning.coverage import point_in_polygon
-
-type CoverageCell = tuple[int, int]
+from drone_mission_planner.planning.coverage import (
+    CoverageCell,
+    coverage_cell_center,
+    coverage_resolution_for,
+    target_cells_for_area,
+    world_to_coverage_cell,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,41 +82,40 @@ class CoverageMonitor:
     def render_cells(self) -> dict[str, tuple[tuple[Point, int], ...]]:
         return {
             area_id: tuple(
-                (self._cell_center(cell, state.resolution), len(visitors))
+                (coverage_cell_center(cell, state.resolution), len(visitors))
                 for cell, visitors in sorted(state.visits.items())
             )
             for area_id, state in self._states.items()
         }
+
+    def uncovered_render_cells(self) -> dict[str, tuple[Point, ...]]:
+        return {
+            area_id: tuple(
+                coverage_cell_center(cell, state.resolution)
+                for cell in sorted(state.targets - set(state.visits))
+            )
+            for area_id, state in self._states.items()
+        }
+
+    def covered_cells(self, area_id: str) -> frozenset[CoverageCell]:
+        state = self._states.get(area_id)
+        if state is None:
+            return frozenset()
+        return frozenset(state.visits)
 
     def resolution(self, area_id: str) -> float:
         state = self._states.get(area_id)
         return state.resolution if state is not None else 0.0
 
     def _create_state(self, area: SearchArea) -> _AreaState:
-        resolution = max(5.0, min(self.map_model.grid_size, area.scan_spacing / 2.0))
-        polygon = area.polygon()
-        min_x = min(point.x for point in polygon)
-        max_x = max(point.x for point in polygon)
-        min_y = min(point.y for point in polygon)
-        max_y = max(point.y for point in polygon)
-        targets: set[CoverageCell] = set()
-        for x in range(floor(min_x / resolution), ceil(max_x / resolution)):
-            for y in range(floor(min_y / resolution), ceil(max_y / resolution)):
-                cell = (x, y)
-                center = self._cell_center(cell, resolution)
-                if point_in_polygon(center, polygon) and not self._blocked(center):
-                    targets.add(cell)
+        resolution = coverage_resolution_for(self.map_model, area)
+        targets = set(target_cells_for_area(self.map_model, area, resolution))
         return _AreaState(area, resolution, targets)
-
-    def _blocked(self, point: Point) -> bool:
-        return any(item.bounds.contains(point) for item in self.map_model.obstacles) or any(
-            item.bounds.contains(point) for item in self.map_model.no_fly_zones
-        )
 
     @staticmethod
     def _world_to_cell(point: Point, resolution: float) -> CoverageCell:
-        return floor(point.x / resolution), floor(point.y / resolution)
+        return world_to_coverage_cell(point, resolution)
 
     @staticmethod
     def _cell_center(cell: CoverageCell, resolution: float) -> Point:
-        return Point((cell[0] + 0.5) * resolution, (cell[1] + 0.5) * resolution)
+        return coverage_cell_center(cell, resolution)

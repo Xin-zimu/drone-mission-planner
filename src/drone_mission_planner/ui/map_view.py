@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from itertools import pairwise
-from math import cos, radians, sin
+from math import atan2, cos, hypot, radians, sin
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
@@ -36,6 +36,12 @@ from drone_mission_planner.domain.models import (
     Obstacle,
     SearchArea,
 )
+from drone_mission_planner.planning.altitude_validator import (
+    AltitudeRisk,
+    AltitudeRiskSeverity,
+    validate_altitude_path,
+)
+from drone_mission_planner.planning.energy import estimate_segment_energy
 
 ISO_COS = cos(radians(30.0))
 ISO_SIN = sin(radians(30.0))
@@ -82,8 +88,11 @@ class MapView(QGraphicsView):
         self._preview: QGraphicsRectItem | None = None
         self._coverage_progress: dict[str, float] = {}
         self._coverage_cells: dict[str, tuple[tuple[Point, int], ...]] = {}
+        self._uncovered_cells: dict[str, tuple[Point, ...]] = {}
         self._coverage_resolutions: dict[str, float] = {}
         self._communication_links: tuple[tuple[Point, Point], ...] = ()
+        self._selected_id: str | None = None
+        self._label_bounds: list[QRectF] = []
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
@@ -126,6 +135,10 @@ class MapView(QGraphicsView):
         self._sync_scene_rect()
         self.render_model()
 
+    def set_selected_object(self, object_id: str | None) -> None:
+        self._selected_id = object_id
+        self.render_model()
+
     def set_render_mode(self, mode: RenderMode) -> None:
         self._render_mode = mode
         if mode == RenderMode.TERRAIN_25D:
@@ -136,9 +149,12 @@ class MapView(QGraphicsView):
 
     def render_model(self) -> None:
         self._scene.clear()
+        self._label_bounds.clear()
         self._sync_scene_rect()
         if self._render_mode == RenderMode.TERRAIN_25D:
             self._render_model_25d()
+            self._add_terrain_legend()
+            self._add_wind_overlay()
             return
         for area in self._model.search_areas:
             self._add_search_area_item(area)
@@ -157,20 +173,25 @@ class MapView(QGraphicsView):
             self._add_task_item(task)
         for drone in self._model.drones:
             self._add_drone_item(drone)
+        self._add_terrain_legend()
+        self._add_wind_overlay()
 
     def set_coverage_overlay(
         self,
         progress: dict[str, float],
         cells: dict[str, tuple[tuple[Point, int], ...]],
         resolutions: dict[str, float],
+        uncovered_cells: dict[str, tuple[Point, ...]] | None = None,
     ) -> None:
         self._coverage_progress = dict(progress)
         self._coverage_cells = dict(cells)
         self._coverage_resolutions = dict(resolutions)
+        self._uncovered_cells = dict(uncovered_cells or {})
 
     def clear_coverage_overlay(self) -> None:
         self._coverage_progress.clear()
         self._coverage_cells.clear()
+        self._uncovered_cells.clear()
         self._coverage_resolutions.clear()
 
     def set_communication_links(self, links: tuple[tuple[Point, Point], ...]) -> None:
@@ -390,6 +411,155 @@ class MapView(QGraphicsView):
             self._terrain_altitude(point) + drone.min_clearance,
         )
 
+    def _is_selected(self, object_id: str) -> bool:
+        return object_id == self._selected_id
+
+    def _route_selected(self, drone: Drone) -> bool:
+        return self._selected_id == drone.id or self._selected_id in set(drone.assigned_tasks)
+
+    def _route_risks(self, drone: Drone) -> tuple[AltitudeRisk, ...]:
+        return validate_altitude_path(self._model, drone, drone.planned_path)
+
+    def _risks_by_segment(self, risks: tuple[AltitudeRisk, ...]) -> dict[int, list[AltitudeRisk]]:
+        by_segment: dict[int, list[AltitudeRisk]] = {}
+        for risk in risks:
+            by_segment.setdefault(risk.segment_index, []).append(risk)
+        return by_segment
+
+    def _task_altitude_at(self, drone: Drone, point: Point) -> float | None:
+        for task in self._model.tasks:
+            if task.assigned_drone_id not in {None, drone.id} and task.id not in drone.assigned_tasks:
+                continue
+            if task.position.distance_to(point) <= 1e-6:
+                return task.target_altitude
+        return None
+
+    def _route_tooltip(self, drone: Drone, risks: tuple[AltitudeRisk, ...]) -> str:
+        lines = [f"{drone.id} route"]
+        for index, (start, end) in enumerate(pairwise(drone.planned_path), start=1):
+            profile = estimate_segment_energy(
+                drone,
+                start,
+                end,
+                terrain=self._model.terrain,
+                wind=self._model.wind,
+                end_altitude=self._task_altitude_at(drone, end),
+            )
+            lines.append(
+                f"Leg {index}: wind {profile.wind_factor:.2f}x, "
+                f"ground speed {profile.ground_speed:.1f} m/s"
+            )
+            if index >= 6 and len(drone.planned_path) > 7:
+                lines.append("...")
+                break
+        if risks:
+            lines.append("Altitude risks:")
+            lines.extend(risk.summary() for risk in risks[:4])
+            if len(risks) > 4:
+                lines.append(f"... {len(risks) - 4} more")
+        return "\n".join(lines)
+
+    def _risk_tooltip(self, risks: list[AltitudeRisk]) -> str:
+        return "\n".join(risk.summary() for risk in risks)
+
+    def _risk_color(self, risks: list[AltitudeRisk]) -> QColor:
+        if any(risk.severity == AltitudeRiskSeverity.CRITICAL for risk in risks):
+            return QColor("#ef6a79")
+        return QColor("#f9ca5b")
+
+    def _should_show_labels(self) -> bool:
+        return self._render_mode == RenderMode.TWO_D or self._zoom >= 0.36
+
+    def _add_terrain_legend(self) -> None:
+        terrain = self._model.terrain
+        scene = self.sceneRect()
+        x = scene.left() + 18.0
+        y = scene.top() + 48.0
+        background = QGraphicsRectItem(x - 8.0, y - 24.0, 140.0, 100.0)
+        background.setBrush(QColor(9, 15, 24, 218))
+        background.setPen(QPen(QColor("#2b3a50"), 1))
+        background.setZValue(1000)
+        background.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        background.setToolTip("Terrain altitude legend")
+        self._scene.addItem(background)
+        self._add_overlay_text("Terrain", x, y - 19.0, "#cbd6e6")
+        steps = 8
+        span = max(1.0, terrain.max_altitude - terrain.min_altitude)
+        for index in range(steps):
+            ratio = 1.0 - index / max(1, steps - 1)
+            altitude = terrain.min_altitude + span * ratio
+            swatch = QGraphicsRectItem(x, y + index * 7.0, 56.0, 7.0)
+            swatch.setBrush(self._terrain_brush(altitude))
+            swatch.setPen(Qt.PenStyle.NoPen)
+            swatch.setZValue(1001)
+            swatch.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+            swatch.setToolTip(f"Terrain altitude {altitude:.1f} m")
+            self._scene.addItem(swatch)
+        self._add_overlay_text(f"{terrain.max_altitude:.0f} m", x + 65.0, y - 2.0, "#dce5f3")
+        self._add_overlay_text(f"{terrain.min_altitude:.0f} m", x + 65.0, y + 49.0, "#dce5f3")
+
+    def _add_wind_overlay(self) -> None:
+        scene = self.sceneRect()
+        x = scene.right() - 168.0
+        y = scene.top() + 48.0
+        background = QGraphicsRectItem(x - 8.0, y - 24.0, 156.0, 88.0)
+        background.setBrush(QColor(9, 15, 24, 218))
+        background.setPen(QPen(QColor("#2b3a50"), 1))
+        background.setZValue(1000)
+        background.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        background.setToolTip("Wind field overlay")
+        self._scene.addItem(background)
+        wind = self._model.wind
+        label = (
+            f"{wind.speed:.1f} m/s  gust {wind.gust_factor:.2f}"
+            if wind.enabled and wind.speed > 0
+            else "disabled"
+        )
+        self._add_overlay_text("Wind", x, y - 19.0, "#cbd6e6")
+        self._add_overlay_text(label, x, y + 43.0, "#dce5f3")
+        vx, vy = wind.wind_vector()
+        length = hypot(vx, vy)
+        if length <= 1e-9:
+            return
+        center = QPointF(x + 52.0, y + 20.0)
+        dx = vx / length * 42.0
+        dy = vy / length * 42.0
+        end = QPointF(center.x() + dx, center.y() + dy)
+        angle = atan2(dy, dx)
+        arrow = QPainterPath(center)
+        arrow.lineTo(end)
+        for sign in (-1, 1):
+            head_angle = angle + sign * radians(150.0)
+            arrow.moveTo(end)
+            arrow.lineTo(
+                QPointF(
+                    end.x() + cos(head_angle) * 13.0,
+                    end.y() + sin(head_angle) * 13.0,
+                )
+            )
+        item = QGraphicsPathItem(arrow)
+        item.setPen(
+            QPen(
+                QColor("#55d6be"),
+                2.2,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        item.setZValue(1002)
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        item.setToolTip(f"Wind blows toward {wind.direction_to_deg:.0f} degrees")
+        self._scene.addItem(item)
+
+    def _add_overlay_text(self, text: str, x: float, y: float, color: str) -> None:
+        label = QGraphicsSimpleTextItem(text)
+        label.setBrush(QColor(color))
+        label.setPos(x, y)
+        label.setZValue(1003)
+        label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        self._scene.addItem(label)
+
     def _add_terrain_mesh(self) -> None:
         step = max(25.0, self._model.terrain.resolution, self._model.grid_size * 2.0)
         x_values = _sample_axis(float(self._model.width), step)
@@ -436,11 +606,18 @@ class MapView(QGraphicsView):
             outline=QColor("#ff9aa6"),
             object_id=obstacle.id,
         )
+        bounds = obstacle.bounds.normalized
         anchor = self._project(
-            Point(obstacle.bounds.normalized.x, obstacle.bounds.normalized.y),
-            obstacle.height,
+            Point(bounds.x, bounds.y),
+            self._terrain_altitude(Point(bounds.x, bounds.y)) + obstacle.height,
         )
-        self._add_label(obstacle.id, anchor.x() + 5, anchor.y() - 8, "#ffb2bc")
+        self._add_label(
+            obstacle.id,
+            anchor.x() + 5,
+            anchor.y() - 8,
+            "#ffb2bc",
+            avoid_overlap=True,
+        )
 
     def _add_no_fly_item_25d(self, zone: NoFlyZone) -> None:
         self._add_prism(
@@ -450,11 +627,18 @@ class MapView(QGraphicsView):
             outline=QColor("#dda8ff"),
             object_id=zone.id,
         )
+        bounds = zone.bounds.normalized
         anchor = self._project(
-            Point(zone.bounds.normalized.x, zone.bounds.normalized.y),
-            zone.ceiling_altitude,
+            Point(bounds.x, bounds.y),
+            self._terrain_altitude(Point(bounds.x, bounds.y)) + zone.ceiling_altitude,
         )
-        self._add_label(zone.id, anchor.x() + 5, anchor.y() - 8, "#e4bdff")
+        self._add_label(
+            zone.id,
+            anchor.x() + 5,
+            anchor.y() - 8,
+            "#e4bdff",
+            avoid_overlap=True,
+        )
 
     def _add_prism(
         self,
@@ -481,18 +665,21 @@ class MapView(QGraphicsView):
         ]
         side_color = QColor(color)
         side_color.setAlpha(max(60, min(190, color.alpha() - 20)))
+        selected = self._is_selected(object_id)
+        outline_color = QColor("#ffffff") if selected else outline
+        pen_width = 2.4 if selected else 0.8
         for index in range(4):
             next_index = (index + 1) % 4
             side = QGraphicsPathItem(
                 _closed_path([base[index], base[next_index], top[next_index], top[index]])
             )
-            side.setPen(QPen(outline, 0.8))
+            side.setPen(QPen(outline_color, pen_width))
             side.setBrush(side_color)
             side.setZValue(-5 + index * 0.01)
             self._tag(side, object_id)
             self._scene.addItem(side)
         top_item = QGraphicsPathItem(_closed_path(top))
-        top_item.setPen(QPen(outline, 1.5))
+        top_item.setPen(QPen(outline_color, 3.0 if selected else 1.5))
         top_item.setBrush(color)
         top_item.setZValue(2)
         self._tag(top_item, object_id)
@@ -506,7 +693,13 @@ class MapView(QGraphicsView):
             [self._project(point, self._terrain_altitude(point) + 1.0) for point in polygon]
         )
         item = QGraphicsPathItem(path)
-        item.setPen(QPen(QColor("#4ce0d2"), 2, Qt.PenStyle.DashLine))
+        item.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(area.id) else QColor("#4ce0d2"),
+                3.2 if self._is_selected(area.id) else 2,
+                Qt.PenStyle.DashLine,
+            )
+        )
         item.setBrush(QColor(35, 148, 140, 35))
         item.setZValue(-4)
         self._tag(item, area.id)
@@ -519,15 +712,33 @@ class MapView(QGraphicsView):
             projected.x() + 7,
             projected.y() + 7,
             "#78f1e5",
+            avoid_overlap=True,
         )
 
     def _add_coverage_overlay_25d(self) -> None:
-        for area_id, cells in self._coverage_cells.items():
+        for area_id, uncovered_centers in self._uncovered_cells.items():
+            resolution = self._coverage_resolutions.get(area_id, 0.0)
+            if resolution <= 0:
+                continue
+            size = max(2.5, min(7.0, resolution * 0.12))
+            for center in uncovered_centers:
+                altitude = self._terrain_altitude(center) + 2.5
+                projected = self._project(center, altitude)
+                item = QGraphicsEllipseItem(-size / 2, -size / 2, size, size)
+                item.setPos(projected)
+                item.setBrush(QColor(255, 122, 144, 90))
+                item.setPen(Qt.PenStyle.NoPen)
+                item.setZValue(-3)
+                item.setData(0, area_id)
+                item.setToolTip(f"{area_id}: uncovered replanning cell")
+                item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+                self._scene.addItem(item)
+        for area_id, visited_cells in self._coverage_cells.items():
             resolution = self._coverage_resolutions.get(area_id, 0.0)
             if resolution <= 0:
                 continue
             size = max(3.0, min(9.0, resolution * 0.15))
-            for center, visit_count in cells:
+            for center, visit_count in visited_cells:
                 altitude = self._terrain_altitude(center) + 2.0
                 projected = self._project(center, altitude)
                 item = QGraphicsEllipseItem(-size / 2, -size / 2, size, size)
@@ -556,6 +767,8 @@ class MapView(QGraphicsView):
         if len(drone.planned_path) < 2:
             return
         colors = ["#4d8df7", "#55d6be", "#f9ca5b", "#c77dff", "#ff7a90"]
+        selected = self._route_selected(drone)
+        risks = self._route_risks(drone)
         first = drone.planned_path[0]
         route = QPainterPath(self._project(first, self._flight_altitude(drone, first)))
         for point in drone.planned_path[1:]:
@@ -571,37 +784,95 @@ class MapView(QGraphicsView):
             )
         )
         halo.setZValue(6)
+        self._tag(halo, drone.id)
+        halo.setToolTip(self._route_tooltip(drone, risks))
         self._scene.addItem(halo)
         item = QGraphicsPathItem(route)
         item.setPen(
             QPen(
-                QColor(colors[index % len(colors)]),
-                2.8,
+                QColor("#ffffff") if selected else QColor(colors[index % len(colors)]),
+                4.2 if selected else 2.8,
                 Qt.PenStyle.SolidLine,
                 Qt.PenCapStyle.RoundCap,
                 Qt.PenJoinStyle.RoundJoin,
             )
         )
         item.setZValue(7)
+        self._tag(item, drone.id)
+        item.setToolTip(self._route_tooltip(drone, risks))
         self._scene.addItem(item)
+        self._add_altitude_risk_segments(drone, risks, terrain_view=True)
+
+    def _add_altitude_risk_segments(
+        self,
+        drone: Drone,
+        risks: tuple[AltitudeRisk, ...],
+        *,
+        terrain_view: bool,
+    ) -> None:
+        by_segment = self._risks_by_segment(risks)
+        if not by_segment:
+            return
+        for index, (start, end) in enumerate(pairwise(drone.planned_path), start=1):
+            segment_risks = by_segment.get(index)
+            if not segment_risks:
+                continue
+            if terrain_view:
+                path = QPainterPath(self._project(start, self._flight_altitude(drone, start)))
+                path.lineTo(self._project(end, self._flight_altitude(drone, end)))
+                z_value = 9.0
+            else:
+                path = QPainterPath(QPointF(start.x, start.y))
+                path.lineTo(end.x, end.y)
+                z_value = 2.0
+            item = QGraphicsPathItem(path)
+            item.setPen(
+                QPen(
+                    self._risk_color(segment_risks),
+                    5.2,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            item.setZValue(z_value)
+            self._tag(item, drone.id)
+            item.setToolTip(self._risk_tooltip(segment_risks))
+            self._scene.addItem(item)
 
     def _add_base_item_25d(self, base: BaseStation) -> None:
         projected = self._project(base.position, self._terrain_altitude(base.position) + 4.0)
         item = QGraphicsEllipseItem(-8, -8, 16, 16)
         item.setPos(projected)
-        item.setPen(QPen(QColor("#a7fff0"), 2))
+        item.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(base.id) else QColor("#a7fff0"),
+                3 if self._is_selected(base.id) else 2,
+            )
+        )
         item.setBrush(QColor("#46bba6"))
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         self._tag(item, base.id)
         self._scene.addItem(item)
-        self._add_label(base.id, projected.x() + 11, projected.y() - 13, "#86efdc")
+        self._add_label(
+            base.id,
+            projected.x() + 11,
+            projected.y() - 13,
+            "#86efdc",
+            avoid_overlap=True,
+        )
 
     def _add_task_item_25d(self, task: MissionTask) -> None:
         altitude = max(task.target_altitude, self._terrain_altitude(task.position) + 8.0)
         projected = self._project(task.position, altitude)
         item = QGraphicsEllipseItem(-6, -6, 12, 12)
         item.setPos(projected)
-        item.setPen(QPen(QColor("#ffe396"), 2))
+        item.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(task.id) else QColor("#ffe396"),
+                3 if self._is_selected(task.id) else 2,
+            )
+        )
         item.setBrush(QColor("#9e7118"))
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         self._tag(item, task.id)
@@ -611,6 +882,7 @@ class MapView(QGraphicsView):
             projected.x() + 9,
             projected.y() - 12,
             "#ffe396",
+            avoid_overlap=True,
         )
 
     def _add_drone_item_25d(self, drone: Drone) -> None:
@@ -625,7 +897,14 @@ class MapView(QGraphicsView):
         path.closeSubpath()
         item = QGraphicsPathItem(path)
         item.setPos(projected)
-        item.setPen(QPen(QColor("#ff9aa6" if failed else "#a9c5ff"), 2))
+        item.setPen(
+            QPen(
+                QColor("#ffffff")
+                if self._is_selected(drone.id)
+                else QColor("#ff9aa6" if failed else "#a9c5ff"),
+                3 if self._is_selected(drone.id) else 2,
+            )
+        )
         item.setBrush(QColor("#b83449" if failed else "#2f6de0"))
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         item.setZValue(12)
@@ -644,6 +923,7 @@ class MapView(QGraphicsView):
             projected.x() + 12,
             projected.y() - 14,
             "#ff9aa6" if failed else "#a9c5ff",
+            avoid_overlap=True,
         )
 
     def _inside(self, point: Point) -> bool:
@@ -664,17 +944,52 @@ class MapView(QGraphicsView):
         item.setData(0, object_id)
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
 
-    def _add_label(self, text: str, x: float, y: float, color: str = "#ced9e9") -> None:
+    def _add_label(
+        self,
+        text: str,
+        x: float,
+        y: float,
+        color: str = "#ced9e9",
+        *,
+        avoid_overlap: bool = False,
+        z_value: float = 40.0,
+    ) -> None:
+        if not self._should_show_labels():
+            return
         label = QGraphicsSimpleTextItem(text)
         label.setBrush(QColor(color))
-        label.setPos(x, y)
+        candidate = QPointF(x, y)
+        if avoid_overlap:
+            for dx, dy in (
+                (0.0, 0.0),
+                (12.0, 12.0),
+                (12.0, -26.0),
+                (-80.0, 12.0),
+                (-80.0, -26.0),
+                (26.0, 30.0),
+            ):
+                candidate = QPointF(x + dx, y + dy)
+                bounds = QRectF(label.boundingRect()).translated(candidate)
+                if not any(bounds.intersects(existing) for existing in self._label_bounds):
+                    self._label_bounds.append(bounds.adjusted(-4.0, -3.0, 4.0, 3.0))
+                    break
+            else:
+                bounds = QRectF(label.boundingRect()).translated(candidate)
+                self._label_bounds.append(bounds.adjusted(-4.0, -3.0, 4.0, 3.0))
+        label.setPos(candidate)
+        label.setZValue(z_value)
         label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         self._scene.addItem(label)
 
     def _add_base_item(self, base: BaseStation) -> None:
         ring = QGraphicsEllipseItem(-16, -16, 32, 32)
         ring.setPos(base.position.x, base.position.y)
-        ring.setPen(QPen(QColor("#55d6be"), 2.5))
+        ring.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(base.id) else QColor("#55d6be"),
+                3.4 if self._is_selected(base.id) else 2.5,
+            )
+        )
         ring.setBrush(QColor(17, 68, 67, 210))
         self._tag(ring, base.id)
         self._scene.addItem(ring)
@@ -693,7 +1008,14 @@ class MapView(QGraphicsView):
         item = QGraphicsPathItem(path)
         item.setPos(drone.position.x, drone.position.y)
         failed = drone.status.value in {"failed", "emergency"}
-        item.setPen(QPen(QColor("#ff9aa6" if failed else "#87aefe"), 2))
+        item.setPen(
+            QPen(
+                QColor("#ffffff")
+                if self._is_selected(drone.id)
+                else QColor("#ff9aa6" if failed else "#87aefe"),
+                3 if self._is_selected(drone.id) else 2,
+            )
+        )
         item.setBrush(QColor("#b83449" if failed else "#2f6de0"))
         self._tag(item, drone.id)
         self._scene.addItem(item)
@@ -711,7 +1033,12 @@ class MapView(QGraphicsView):
     def _add_task_item(self, task: MissionTask) -> None:
         outer = QGraphicsEllipseItem(-10, -10, 20, 20)
         outer.setPos(task.position.x, task.position.y)
-        outer.setPen(QPen(QColor("#f9ca5b"), 2))
+        outer.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(task.id) else QColor("#f9ca5b"),
+                3 if self._is_selected(task.id) else 2,
+            )
+        )
         outer.setBrush(QColor(101, 73, 18, 175))
         self._tag(outer, task.id)
         self._scene.addItem(outer)
@@ -723,7 +1050,12 @@ class MapView(QGraphicsView):
     def _add_obstacle_item(self, obstacle: Obstacle) -> None:
         bounds = obstacle.bounds.normalized
         item = QGraphicsRectItem(bounds.x, bounds.y, bounds.width, bounds.height)
-        item.setPen(QPen(QColor("#ef6a79"), 1.8))
+        item.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(obstacle.id) else QColor("#ef6a79"),
+                3.0 if self._is_selected(obstacle.id) else 1.8,
+            )
+        )
         item.setBrush(QColor(134, 40, 55, 150))
         self._tag(item, obstacle.id)
         self._scene.addItem(item)
@@ -732,7 +1064,13 @@ class MapView(QGraphicsView):
     def _add_no_fly_item(self, zone: NoFlyZone) -> None:
         bounds = zone.bounds.normalized
         item = QGraphicsRectItem(bounds.x, bounds.y, bounds.width, bounds.height)
-        item.setPen(QPen(QColor("#c77dff"), 2, Qt.PenStyle.DashLine))
+        item.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(zone.id) else QColor("#c77dff"),
+                3.0 if self._is_selected(zone.id) else 2,
+                Qt.PenStyle.DashLine,
+            )
+        )
         item.setBrush(QColor(100, 45, 135, 100))
         self._tag(item, zone.id)
         self._scene.addItem(item)
@@ -747,7 +1085,13 @@ class MapView(QGraphicsView):
             path.lineTo(point.x, point.y)
         path.closeSubpath()
         item = QGraphicsPathItem(path)
-        item.setPen(QPen(QColor("#4ce0d2"), 2, Qt.PenStyle.DashLine))
+        item.setPen(
+            QPen(
+                QColor("#ffffff") if self._is_selected(area.id) else QColor("#4ce0d2"),
+                3.2 if self._is_selected(area.id) else 2,
+                Qt.PenStyle.DashLine,
+            )
+        )
         item.setBrush(QColor(35, 148, 140, 35))
         item.setZValue(-6)
         self._tag(item, area.id)
@@ -762,12 +1106,30 @@ class MapView(QGraphicsView):
         )
 
     def _add_coverage_overlay(self) -> None:
-        for area_id, cells in self._coverage_cells.items():
+        for area_id, uncovered_centers in self._uncovered_cells.items():
+            resolution = self._coverage_resolutions.get(area_id, 0.0)
+            if resolution <= 0:
+                continue
+            size = resolution * 0.55
+            for center in uncovered_centers:
+                item = QGraphicsRectItem(
+                    center.x - size / 2,
+                    center.y - size / 2,
+                    size,
+                    size,
+                )
+                item.setBrush(QColor(255, 122, 144, 68))
+                item.setPen(QPen(QColor(255, 122, 144, 105), 0))
+                item.setZValue(-5.5)
+                item.setData(0, area_id)
+                item.setToolTip(f"{area_id}: uncovered replanning cell")
+                self._scene.addItem(item)
+        for area_id, visited_cells in self._coverage_cells.items():
             resolution = self._coverage_resolutions.get(area_id, 0.0)
             if resolution <= 0:
                 continue
             size = resolution * 0.82
-            for center, visit_count in cells:
+            for center, visit_count in visited_cells:
                 item = QGraphicsRectItem(
                     center.x - size / 2,
                     center.y - size / 2,
@@ -796,6 +1158,8 @@ class MapView(QGraphicsView):
         if len(drone.planned_path) < 2:
             return
         colors = ["#4d8df7", "#55d6be", "#f9ca5b", "#c77dff", "#ff7a90"]
+        selected = self._route_selected(drone)
+        risks = self._route_risks(drone)
         route = QPainterPath(QPointF(drone.planned_path[0].x, drone.planned_path[0].y))
         for point in drone.planned_path[1:]:
             route.lineTo(point.x, point.y)
@@ -810,19 +1174,24 @@ class MapView(QGraphicsView):
             )
         )
         halo.setZValue(-1)
+        self._tag(halo, drone.id)
+        halo.setToolTip(self._route_tooltip(drone, risks))
         self._scene.addItem(halo)
         item = QGraphicsPathItem(route)
         item.setPen(
             QPen(
-                QColor(colors[index % len(colors)]),
-                2.8,
+                QColor("#ffffff") if selected else QColor(colors[index % len(colors)]),
+                4.2 if selected else 2.8,
                 Qt.PenStyle.SolidLine,
                 Qt.PenCapStyle.RoundCap,
                 Qt.PenJoinStyle.RoundJoin,
             )
         )
         item.setZValue(0)
+        self._tag(item, drone.id)
+        item.setToolTip(self._route_tooltip(drone, risks))
         self._scene.addItem(item)
+        self._add_altitude_risk_segments(drone, risks, terrain_view=False)
 
 
 def _sample_axis(limit: float, step: float) -> list[float]:

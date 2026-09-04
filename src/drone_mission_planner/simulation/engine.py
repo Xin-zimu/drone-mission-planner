@@ -84,9 +84,7 @@ class SimulationEngine:
             for task in map_model.tasks
         }
         self.coverage_monitor = CoverageMonitor(map_model)
-        self.coverage_monitor.update(
-            {runtime.id: runtime.position for runtime in self.runtimes.values()}
-        )
+        self.coverage_monitor.update(self._coverage_positions())
         self.event_manager = EventManager()
         self._replan_requests: list[str] = []
         self.conflict_detector = ConflictDetector()
@@ -142,9 +140,7 @@ class SimulationEngine:
             for task in self.tasks.values()
         }
         self.coverage_monitor.reset()
-        self.coverage_monitor.update(
-            {runtime.id: runtime.position for runtime in self.runtimes.values()}
-        )
+        self.coverage_monitor.update(self._coverage_positions())
         self.event_manager.clear()
         self._replan_requests.clear()
         self.replan_count = 0
@@ -214,8 +210,11 @@ class SimulationEngine:
             drone = self.map_model.find(drone_id)
             if isinstance(drone, Drone):
                 runtime.assigned_task_ids = list(drone.assigned_tasks)
-            if path and runtime.status != DroneStatus.EXECUTING:
-                runtime.status = DroneStatus.FLYING
+            if path:
+                if runtime.status != DroneStatus.EXECUTING:
+                    runtime.status = DroneStatus.FLYING
+            else:
+                runtime.status = DroneStatus.COMPLETED
         for task in self.tasks.values():
             if self.task_statuses.get(task.id) not in {
                 TaskStatus.COMPLETED,
@@ -260,7 +259,9 @@ class SimulationEngine:
             for runtime in self.runtimes.values()
             if runtime.path and runtime.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
         ]
-        return bool(active) and all(runtime.status == DroneStatus.COMPLETED for runtime in active)
+        if not active:
+            return True
+        return all(runtime.status == DroneStatus.COMPLETED for runtime in active)
 
     def snapshot(self) -> SimulationSnapshot:
         drones = tuple(
@@ -324,10 +325,15 @@ class SimulationEngine:
                 runtime.waiting_time += dt
             else:
                 self._update_runtime(runtime, dt)
-        self.coverage_monitor.update(
-            {runtime.id: runtime.position for runtime in self.runtimes.values()}
-        )
+        self.coverage_monitor.update(self._coverage_positions())
         self.time += dt
+
+    def _coverage_positions(self) -> dict[str, Point]:
+        return {
+            runtime.id: runtime.position
+            for runtime in self.runtimes.values()
+            if runtime.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
+        }
 
     def _motion_states(self) -> list[MotionState]:
         states: list[MotionState] = []
@@ -453,6 +459,9 @@ class SimulationEngine:
                 task.status = TaskStatus.PENDING
                 task.assigned_drone_id = None
                 self.task_statuses[task_id] = TaskStatus.PENDING
+        runtime.assigned_task_ids.clear()
+        runtime.path = [runtime.position]
+        runtime.segment_index = 1
         self._replan_requests.append(runtime.id)
         self.event_manager.record(event, self.time, f"{reason}; drone stopped and replan requested")
         return True
