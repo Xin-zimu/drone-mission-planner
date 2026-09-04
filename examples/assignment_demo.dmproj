@@ -1,0 +1,240 @@
+{
+  "map": {
+    "bases": [
+      {
+        "communication_range": 450,
+        "id": "B-01",
+        "name": "Mountain command",
+        "position": {
+          "x": 100,
+          "y": 600
+        }
+      }
+    ],
+    "drones": [
+      {
+        "assigned_tasks": [],
+        "battery_capacity": 180,
+        "communication_range": 180.0,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.045,
+        "home_base_id": "B-01",
+        "id": "D-01",
+        "max_speed": 14,
+        "name": "Atlas",
+        "payload_capacity": 4,
+        "planned_path": [],
+        "position": {
+          "x": 135,
+          "y": 575
+        },
+        "remaining_battery": 180,
+        "safety_radius": 6.0,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [],
+        "battery_capacity": 145,
+        "communication_range": 180.0,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.05,
+        "home_base_id": "B-01",
+        "id": "D-02",
+        "max_speed": 22,
+        "name": "Swift",
+        "payload_capacity": 2,
+        "planned_path": [],
+        "position": {
+          "x": 105,
+          "y": 635
+        },
+        "remaining_battery": 145,
+        "safety_radius": 6.0,
+        "status": "idle"
+      },
+      {
+        "assigned_tasks": [],
+        "battery_capacity": 220,
+        "communication_range": 180.0,
+        "current_payload": 0.0,
+        "energy_per_meter": 0.04,
+        "home_base_id": "B-01",
+        "id": "D-03",
+        "max_speed": 11,
+        "name": "Carrier",
+        "payload_capacity": 10,
+        "planned_path": [],
+        "position": {
+          "x": 165,
+          "y": 625
+        },
+        "remaining_battery": 220,
+        "safety_radius": 6.0,
+        "status": "idle"
+      }
+    ],
+    "grid_size": 25.0,
+    "height": 700,
+    "no_fly_zones": [
+      {
+        "bounds": {
+          "height": 100,
+          "width": 130,
+          "x": 450,
+          "y": 500
+        },
+        "id": "N-01",
+        "name": "Emergency airspace",
+        "points": [],
+        "shape": "rectangle"
+      }
+    ],
+    "obstacles": [
+      {
+        "bounds": {
+          "height": 220,
+          "width": 150,
+          "x": 300,
+          "y": 150
+        },
+        "id": "O-01",
+        "name": "North ridge",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 100,
+          "width": 180,
+          "x": 570,
+          "y": 360
+        },
+        "id": "O-02",
+        "name": "Rock wall",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 130,
+          "width": 130,
+          "x": 720,
+          "y": 80
+        },
+        "id": "O-03",
+        "name": "Dense forest",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      }
+    ],
+    "tasks": [
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-01",
+        "name": "High-priority beacon",
+        "position": {
+          "x": 540,
+          "y": 110
+        },
+        "priority": 10,
+        "required_payload": 0.0,
+        "status": "pending",
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-02",
+        "name": "Bridge inspection",
+        "position": {
+          "x": 865,
+          "y": 300
+        },
+        "priority": 8,
+        "required_payload": 0.0,
+        "status": "pending",
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-03",
+        "name": "Medical delivery",
+        "position": {
+          "x": 810,
+          "y": 575
+        },
+        "priority": 9,
+        "required_payload": 5,
+        "status": "pending",
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-04",
+        "name": "Slope inspection",
+        "position": {
+          "x": 500,
+          "y": 430
+        },
+        "priority": 6,
+        "required_payload": 0.0,
+        "status": "pending",
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-05",
+        "name": "Radio tower",
+        "position": {
+          "x": 250,
+          "y": 90
+        },
+        "priority": 5,
+        "required_payload": 0.0,
+        "status": "pending",
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-06",
+        "name": "Trail checkpoint",
+        "position": {
+          "x": 270,
+          "y": 545
+        },
+        "priority": 4,
+        "required_payload": 0.0,
+        "status": "pending",
+        "task_type": "inspection"
+      }
+    ],
+    "width": 1000
+  },
+  "name": "Multi-UAV inspection assignment",
+  "planning_settings": {},
+  "simulation_settings": {
+    "fixed_dt": 0.05,
+    "random_seed": 42
+  },
+  "version": "1.0"
+}

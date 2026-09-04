@@ -1,0 +1,283 @@
+{
+  "map": {
+    "bases": [
+      {
+        "communication_range": 1000.0,
+        "id": "B-01",
+        "name": "Valley operations base",
+        "position": {
+          "x": 80.0,
+          "y": 620.0
+        }
+      }
+    ],
+    "drones": [
+      {
+        "air_speed": 16.0,
+        "assigned_tasks": [],
+        "battery_capacity": 190.0,
+        "climb_power": 120.0,
+        "climb_rate": 3.2,
+        "communication_range": 900.0,
+        "cruise_altitude": 130.0,
+        "current_payload": 0.0,
+        "descent_power": 30.0,
+        "descent_rate": 2.8,
+        "energy_per_meter": 0.035,
+        "home_base_id": "B-01",
+        "horizontal_power": 105.0,
+        "hover_power": 85.0,
+        "id": "D-01",
+        "max_speed": 16.0,
+        "min_clearance": 35.0,
+        "name": "Ridge climber",
+        "payload_capacity": 3.0,
+        "planned_path": [],
+        "position": {
+          "x": 80.0,
+          "y": 620.0
+        },
+        "remaining_battery": 190.0,
+        "safety_radius": 8.0,
+        "status": "idle"
+      },
+      {
+        "air_speed": 18.0,
+        "assigned_tasks": [],
+        "battery_capacity": 165.0,
+        "climb_power": 260.0,
+        "climb_rate": 2.4,
+        "communication_range": 900.0,
+        "cruise_altitude": 110.0,
+        "current_payload": 0.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.03,
+        "home_base_id": "B-01",
+        "horizontal_power": 100.0,
+        "hover_power": 90.0,
+        "id": "D-02",
+        "max_speed": 18.0,
+        "min_clearance": 30.0,
+        "name": "Fast valley scout",
+        "payload_capacity": 2.0,
+        "planned_path": [],
+        "position": {
+          "x": 110.0,
+          "y": 650.0
+        },
+        "remaining_battery": 165.0,
+        "safety_radius": 7.0,
+        "status": "idle"
+      },
+      {
+        "air_speed": 14.0,
+        "assigned_tasks": [],
+        "battery_capacity": 230.0,
+        "climb_power": 180.0,
+        "climb_rate": 2.8,
+        "communication_range": 950.0,
+        "cruise_altitude": 120.0,
+        "current_payload": 0.0,
+        "descent_power": 32.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.042,
+        "home_base_id": "B-01",
+        "horizontal_power": 120.0,
+        "hover_power": 105.0,
+        "id": "D-03",
+        "max_speed": 14.0,
+        "min_clearance": 35.0,
+        "name": "Heavy endurance",
+        "payload_capacity": 8.0,
+        "planned_path": [],
+        "position": {
+          "x": 55.0,
+          "y": 585.0
+        },
+        "remaining_battery": 230.0,
+        "safety_radius": 9.0,
+        "status": "idle"
+      }
+    ],
+    "grid_size": 20.0,
+    "height": 760,
+    "no_fly_zones": [
+      {
+        "bounds": {
+          "height": 120.0,
+          "width": 150.0,
+          "x": 540.0,
+          "y": 310.0
+        },
+        "ceiling_altitude": 180.0,
+        "id": "N-01",
+        "name": "Helicopter evacuation corridor",
+        "points": [],
+        "shape": "rectangle",
+        "temporary": false
+      }
+    ],
+    "obstacles": [
+      {
+        "bounds": {
+          "height": 130.0,
+          "width": 145.0,
+          "x": 345.0,
+          "y": 205.0
+        },
+        "height": 95.0,
+        "id": "O-01",
+        "name": "North granite ridge",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 115.0,
+          "width": 135.0,
+          "x": 760.0,
+          "y": 465.0
+        },
+        "height": 80.0,
+        "id": "O-02",
+        "name": "South rock shelf",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      }
+    ],
+    "search_areas": [],
+    "tasks": [
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-01",
+        "name": "Valley thermal check",
+        "position": {
+          "x": 245.0,
+          "y": 575.0
+        },
+        "priority": 5,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 115.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 5.0,
+        "id": "T-02",
+        "name": "North ridge inspection",
+        "position": {
+          "x": 520.0,
+          "y": 170.0
+        },
+        "priority": 9,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 250.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 5.0,
+        "id": "T-03",
+        "name": "East saddle relay check",
+        "position": {
+          "x": 835.0,
+          "y": 250.0
+        },
+        "priority": 7,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 190.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 6.0,
+        "id": "T-04",
+        "name": "South peak supply drop",
+        "position": {
+          "x": 735.0,
+          "y": 565.0
+        },
+        "priority": 8,
+        "required_payload": 5.0,
+        "status": "pending",
+        "target_altitude": 210.0,
+        "task_type": "delivery"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-05",
+        "name": "Windward slope scan",
+        "position": {
+          "x": 650.0,
+          "y": 120.0
+        },
+        "priority": 6,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 230.0,
+        "task_type": "inspection"
+      }
+    ],
+    "terrain": {
+      "base_altitude": 25.0,
+      "max_altitude": 207.59529162787604,
+      "min_altitude": 25.051102764923823,
+      "peaks": [
+        {
+          "center": {
+            "x": 410.0,
+            "y": 210.0
+          },
+          "height": 165.0,
+          "radius": 150.0
+        },
+        {
+          "center": {
+            "x": 760.0,
+            "y": 560.0
+          },
+          "height": 115.0,
+          "radius": 210.0
+        }
+      ],
+      "resolution": 20.0,
+      "terrain_type": "procedural"
+    },
+    "width": 1100,
+    "wind": {
+      "direction_to_deg": 45.0,
+      "enabled": true,
+      "gust_factor": 0.2,
+      "speed": 6.0
+    }
+  },
+  "name": "Mountain Wind Mission",
+  "planning_settings": {
+    "mission_mode": "point_tasks"
+  },
+  "simulation_settings": {
+    "communication_grace": 5.0,
+    "communication_policy": "log_only",
+    "fixed_dt": 0.05,
+    "random_seed": 42
+  },
+  "version": "1.2"
+}
