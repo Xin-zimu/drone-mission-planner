@@ -137,7 +137,7 @@ M20 产品化基础
 | M13A | 三维航点模型 | 建立 `Waypoint` 和兼容迁移 | 已完成核心实现 |
 | M13B | 真 3D 视图 | 展示地形、航线、空域和高度 | 已完成核心实现 |
 | M13C | 三维航线编辑 | 表格和属性面板编辑高度/速度/动作 | 已完成核心实现 |
-| M13D | 三维仿真 | 状态机执行高度变化和航点动作 | 计划中 |
+| M13D | 三维仿真 | 状态机执行高度变化和航点动作 | 已完成核心实现 |
 | M12 | 真实航线导出 | 导出 JSON/CSV/QGC/ArduPilot | 计划中 |
 | M10 | 报告与示例 | 重新生成展示级报告、示例、文档 | 计划中 |
 | M11 | 地图底图 | 本地地图图片、比例尺、坐标校准 | 计划中 |
@@ -374,6 +374,14 @@ class Waypoint:
 - `domain/waypoint.py` 新增 `waypoint_msl_altitude` 作为 MSL/AGL 换算唯一实现；高度校验器在航点数量与路径一致时改用航点 MSL 高度（沿段线性插值），编辑高度即刻改变地形/障碍/禁飞风险；Altitude profile 能耗也改用航点高度作为起止高度。
 - 选中表格行时 2D/2.5D 地图与 3D 视图同步显示琥珀色航点高亮环。
 - 延后至 M13D：仿真状态机按航点 speed 执行段速度、按 action 执行拍照/悬停等动作（本阶段只完成编辑数据流与展示）。
+
+### 实施记录（M13D，2026-09-05）
+
+- `DroneStatus` 扩展 CLIMBING/DESCENDING/HOVERING/SCANNING/LANDING；`DroneRuntime` 持有与路径对齐的航点剖面（MSL 海拔、速度上限、动作、悬停秒数），路径与航点数量或坐标不一致时自动退回旧 2D 模型。
+- 运动模型：水平推进使用航点 speed 作为段速度上限；高度沿航点剖面线性内插，并以 climb_rate/descent_rate 限速逼近；能耗仍由 estimate_segment_energy 计算，3D 航段的飞行时间取实际限速时间。
+- 动作执行：HOVER 停留 hold_seconds（计悬停能耗与等待时间）；TAKE_PHOTO 记录 WAYPOINT_PHOTO 事件并短暂停留 2 s；LAND 在终点降落至地形高度并记录 WAYPOINT_LANDING 事件；RETURN_TO_LAUNCH 沿用返航航段。SCAN 开始/结束不单独记事件，以 SCANNING 状态呈现（避免事件表刷屏，偏差已在文档标注）。
+- 覆盖门控：只有当前航段两端点之一为 SCAN 的运行时才向 CoverageMonitor 提供位置（验收标准"coverage 只在 SCAN 或可覆盖动作中更新"）；rescue 示例已重新生成为 1.4 schema 并携带 SCAN 航点。
+- 报告：每机新增 photos_taken、max_altitude、min_clearance（HTML/CSV/JSON 同步）。
 
 ## 10. M13D：三维仿真与高度动作
 

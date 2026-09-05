@@ -32,6 +32,9 @@ class DroneReport:
     base_link: str
     hop_count: int | None
     altitude_risk_count: int = 0
+    photos_taken: int = 0
+    max_altitude: float = 0.0
+    min_clearance: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +124,9 @@ def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
                 base_link,
                 link.hop_count if link is not None else None,
                 risk_counts.get(state.id, 0),
+                stats.photos_taken,
+                stats.max_altitude,
+                stats.min_clearance,
             )
         )
     task_statuses = tuple(snapshot.task_statuses.values())
@@ -211,6 +217,9 @@ def export_report(report: SimulationReport, path: str | Path) -> Path:
                     "base_link",
                     "hop_count",
                     "altitude_risk_count",
+                    "photos_taken",
+                    "max_altitude",
+                    "min_clearance",
                 ]
             )
             for drone in report.drones:
@@ -232,7 +241,9 @@ def _html_report(report: SimulationReport) -> str:
         f"<td>{item.altitude_gain:.1f} / {item.altitude_loss:.1f} m</td>"
         f"<td>{item.completed_tasks}</td>"
         f"<td>{escape(item.base_link)}</td><td>{item.hop_count or '—'}</td>"
-        f"<td>{item.altitude_risk_count}</td></tr>"
+        f"<td>{item.altitude_risk_count}</td>"
+        f"<td>{item.photos_taken}</td><td>{item.max_altitude:.1f} m</td>"
+        f"<td>{'—' if item.min_clearance is None else f'{item.min_clearance:.1f} m'}</td></tr>"
         for item in report.drones
     )
     coverage = (
@@ -287,5 +298,5 @@ th,td{{padding:9px 10px;border:1px solid #d8dfeb;text-align:left}} th{{backgroun
 </ul>
 <h2>Aircraft</h2><table><thead><tr><th>Drone</th><th>Status</th><th>Distance</th><th>Flight</th>
 <th>Waiting</th><th>Energy</th><th>Battery</th><th>Altitude</th><th>Climb / Descent</th>
-<th>Tasks</th><th>Link</th><th>Hops</th><th>Altitude risks</th></tr></thead>
+<th>Tasks</th><th>Link</th><th>Hops</th><th>Altitude risks</th><th>Photos</th><th>Max altitude</th><th>Min clearance</th></tr></thead>
 <tbody>{rows}</tbody></table><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""

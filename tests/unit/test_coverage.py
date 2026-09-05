@@ -79,6 +79,7 @@ def test_planned_sweep_reaches_target_coverage_in_simulation() -> None:
     result = CoveragePlanner().plan(model, area)
     for drone in model.drones:
         drone.planned_path = result.drone_paths[drone.id]
+        drone.waypoints = result.drone_waypoints[drone.id]
 
     engine = SimulationEngine(model)
     engine.run_until_complete()

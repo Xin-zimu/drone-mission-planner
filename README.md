@@ -20,7 +20,7 @@
 | 3D mission view | Read-only software-rendered 3D scene with terrain mesh, 3D routes, obstacle/no-fly volumes, coverage cells, risk segments, wind arrow, orbit camera, layer toggles, camera presets, and cross-view selection sync |
 | Assignment | Priority-first multi-drone allocation with payload, terrain/wind-aware energy, safe return, reserve, deadlines, and per-drone rejection reasons |
 | Cooperative search | Vertical strip partitioning, obstacle-safe lawnmower passes, incremental supplemental sweeps, return to base, live covered/uncovered-cell overlays, and repeat-coverage metrics |
-| Dynamic simulation | Fixed 0.05 s logic steps, 0.5x–10x playback, state machine, altitude/energy/distance/task integration, pause/step/reset |
+| Dynamic simulation | Fixed 0.05 s logic steps, 0.5x–10x playback, 3D state machine (climb/descent/hover/scan/landing, waypoint speed caps, photo and landing events), altitude/energy/distance/task integration, pause/step/reset |
 | Environment | Editable procedural terrain peaks, CSV elevation-grid import, base elevation, global wind vectors, climb/descent/hover power parameters, and a read-only 2.5D terrain view |
 | Live adaptation | Manual or seeded automatic failures, exact-position stop, unfinished-work redistribution from live state, coverage recovery without resetting history, temporary zones, task insertion/cancellation |
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |

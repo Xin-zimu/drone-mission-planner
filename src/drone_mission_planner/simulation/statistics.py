@@ -17,6 +17,9 @@ class DroneStatistics:
     altitude_loss: float
     energy_used: float
     completed_tasks: int
+    photos_taken: int = 0
+    max_altitude: float = 0.0
+    min_clearance: float | None = None
 
 
 def collect_drone_statistics(runtime: DroneRuntime) -> DroneStatistics:
@@ -31,4 +34,7 @@ def collect_drone_statistics(runtime: DroneRuntime) -> DroneStatistics:
         altitude_loss=runtime.altitude_loss,
         energy_used=runtime.energy_used,
         completed_tasks=len(runtime.completed_task_ids),
+        photos_taken=runtime.photos_taken,
+        max_altitude=runtime.max_altitude,
+        min_clearance=runtime.min_clearance_seen,
     )

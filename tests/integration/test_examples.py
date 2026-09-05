@@ -88,4 +88,5 @@ def _apply_incremental_coverage_replan(
     assert result.success, result.failures
     for drone in map_model.drones:
         drone.planned_path = result.drone_paths.get(drone.id, [])
+        drone.waypoints = result.drone_waypoints.get(drone.id, [])
     engine.apply_replan(result.drone_paths)

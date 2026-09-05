@@ -25,6 +25,15 @@ from .drone_runtime import DroneRuntime
 from .events import EventManager, EventRecord, EventType, SimulationEvent
 from .statistics import DroneStatistics, collect_drone_statistics
 
+_PHOTO_HOLD_SECONDS = 2.0
+_MOVING_STATUSES = {
+    DroneStatus.FLYING,
+    DroneStatus.RETURNING,
+    DroneStatus.CLIMBING,
+    DroneStatus.DESCENDING,
+    DroneStatus.SCANNING,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class DroneSnapshot:
@@ -39,6 +48,9 @@ class DroneSnapshot:
     energy_used: float
     completed_task_ids: tuple[str, ...]
     failure_reason: str | None
+    photos_taken: int = 0
+    max_altitude: float = 0.0
+    min_clearance: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +219,10 @@ class SimulationEngine:
                 path.insert(0, runtime.position)
             runtime.path = path
             runtime.segment_index = 1
+            runtime.hold_remaining = 0.0
+            planned_drone = self._drone_for_runtime(runtime)
+            if planned_drone is not None:
+                runtime.apply_waypoints(planned_drone, path, self.map_model.terrain)
             drone = self.map_model.find(drone_id)
             if isinstance(drone, Drone):
                 runtime.assigned_task_ids = list(drone.assigned_tasks)
@@ -277,6 +293,9 @@ class SimulationEngine:
                 runtime.energy_used,
                 tuple(runtime.completed_task_ids),
                 runtime.failure_reason,
+                runtime.photos_taken,
+                runtime.max_altitude,
+                runtime.min_clearance_seen,
             )
             for runtime in sorted(self.runtimes.values(), key=lambda item: item.id)
         )
@@ -333,12 +352,13 @@ class SimulationEngine:
             runtime.id: runtime.position
             for runtime in self.runtimes.values()
             if runtime.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
+            and (runtime.on_scan_leg() or runtime.status == DroneStatus.SCANNING)
         }
 
     def _motion_states(self) -> list[MotionState]:
         states: list[MotionState] = []
         for runtime in self.runtimes.values():
-            if runtime.status not in {DroneStatus.FLYING, DroneStatus.RETURNING}:
+            if runtime.status not in _MOVING_STATUSES:
                 continue
             priorities = [
                 self.tasks[task_id].priority
@@ -429,10 +449,12 @@ class SimulationEngine:
         runtime.assigned_task_ids.clear()
         runtime.path = route.waypoints
         runtime.segment_index = 1
+        runtime.hold_remaining = 0.0
         runtime.status = DroneStatus.RETURNING
         drone.assigned_tasks.clear()
         drone.planned_path = route.waypoints
         drone.waypoints = route.flight_waypoints
+        runtime.apply_waypoints(drone, route.waypoints, self.map_model.terrain)
         self.replan_count += 1
         self.record_external_event(
             EventType.AUTO_RETURN,
@@ -496,56 +518,89 @@ class SimulationEngine:
                 if set(runtime.completed_task_ids) >= set(runtime.assigned_task_ids)
                 else DroneStatus.FLYING
             )
+        if runtime.hold_remaining > 0:
+            runtime.status = DroneStatus.HOVERING
+            consumed = min(dt, runtime.hold_remaining)
+            self._apply_hover_energy(runtime, consumed)
+            runtime.waiting_time += consumed
+            runtime.hold_remaining = max(0.0, runtime.hold_remaining - dt)
+            if runtime.hold_remaining > 0:
+                return
+            runtime.status = DroneStatus.FLYING
+        if runtime.status == DroneStatus.LANDING:
+            self._update_landing(runtime, dt)
+            return
 
         drone = self._drone_for_runtime(runtime)
         remaining_time = dt
         while remaining_time > 1e-9 and runtime.segment_index < len(runtime.path):
-            target = runtime.path[runtime.segment_index]
+            target_index = runtime.segment_index
+            target = runtime.path[target_index]
+            leg_start = runtime.path[target_index - 1]
             segment = runtime.position.distance_to(target)
             if segment <= 1e-9:
                 runtime.position = target
                 runtime.segment_index += 1
+                if self._apply_arrival_action(runtime, target_index):
+                    break
                 continue
             speed = (
                 segment_ground_speed(drone, runtime.position, target, self.map_model.wind)
                 if drone is not None
                 else runtime.max_speed
             )
+            speed_cap = runtime.waypoint_speed_cap(target_index)
+            if speed_cap is not None:
+                speed = min(speed, speed_cap)
             travel_limit = speed * remaining_time
             old_position = runtime.position
             old_altitude = runtime.current_altitude
-            if segment <= travel_limit or isclose(segment, travel_limit):
+            arriving = segment <= travel_limit or isclose(segment, travel_limit)
+            if arriving:
                 moved = segment
-                runtime.position = target
-                runtime.segment_index += 1
+                new_position = target
             else:
                 moved = travel_limit
-                runtime.position = runtime.position.lerp(target, moved / segment)
-            remaining_time -= moved / max(speed, 1e-9)
-            runtime.distance_flown += moved
+                new_position = runtime.position.lerp(target, moved / segment)
+            time_spent = moved / max(speed, 1e-9)
+            leg_total = max(leg_start.distance_to(target), 1e-9)
+            leg_fraction = 1.0 - new_position.distance_to(target) / leg_total
+
+            new_altitude = old_altitude
             if drone is not None:
-                target_altitude = self._target_altitude_for(runtime, target)
-                segment_altitude = self._segment_end_altitude(
-                    drone,
-                    runtime.position,
-                    target,
-                    old_altitude,
-                    target_altitude,
-                    moved / max(segment, 1e-9),
-                )
+                if runtime.waypoint_altitudes:
+                    commanded = self._commanded_leg_altitude(runtime, target_index, leg_fraction)
+                    new_altitude = _rate_limited_altitude(
+                        old_altitude, commanded, drone, time_spent
+                    )
+                else:
+                    target_altitude = self._target_altitude_for(runtime, target)
+                    new_altitude = self._segment_end_altitude(
+                        drone,
+                        new_position,
+                        target,
+                        old_altitude,
+                        target_altitude,
+                        moved / segment,
+                    )
                 profile = estimate_segment_energy(
                     drone,
                     old_position,
-                    runtime.position,
+                    new_position,
                     terrain=self.map_model.terrain,
                     wind=self.map_model.wind,
                     start_altitude=old_altitude,
-                    end_altitude=segment_altitude,
+                    end_altitude=new_altitude,
                 )
                 runtime.current_altitude = profile.end_altitude
                 runtime.altitude_gain += profile.climb_meters
                 runtime.altitude_loss += profile.descent_meters
-                runtime.flight_time += profile.time
+                # Waypoint speed caps change the leg duration beyond what the
+                # distance-based energy profile assumes, so 3D flights report
+                # the actual capped leg time.
+                runtime.flight_time += (
+                    time_spent if runtime.waypoint_altitudes else profile.time
+                )
                 runtime.energy_used += profile.energy
                 runtime.remaining_battery = max(0.0, runtime.remaining_battery - profile.energy)
             else:
@@ -553,14 +608,101 @@ class SimulationEngine:
                 energy = moved * runtime.energy_per_meter
                 runtime.energy_used += energy
                 runtime.remaining_battery = max(0.0, runtime.remaining_battery - energy)
+            runtime.position = new_position
+            runtime.distance_flown += moved
+            if arriving:
+                runtime.segment_index += 1
+            self._update_motion_status(runtime, old_altitude)
+            self._track_altitude_extremes(runtime)
+            remaining_time -= time_spent
             reached_task = self._complete_reached_task(runtime, old_position)
             if reached_task is not None:
                 runtime.execution_remaining = reached_task.execution_duration
                 runtime.status = DroneStatus.EXECUTING
                 break
+            if arriving and self._apply_arrival_action(runtime, target_index):
+                break
 
         if runtime.segment_index >= len(runtime.path) and runtime.execution_remaining <= 0:
-            runtime.status = DroneStatus.COMPLETED
+            final_action = runtime.arrival_action(len(runtime.path) - 1)
+            if final_action == WaypointAction.LAND:
+                runtime.status = DroneStatus.LANDING
+            else:
+                runtime.status = DroneStatus.COMPLETED
+
+    def _update_landing(self, runtime: DroneRuntime, dt: float) -> None:
+        terrain_altitude = self.map_model.terrain.altitude_at(
+            runtime.position.x, runtime.position.y
+        )
+        drone = self._drone_for_runtime(runtime)
+        if runtime.current_altitude > terrain_altitude + 0.05:
+            descent_rate = drone.descent_rate if drone is not None else 2.5
+            delta = min(descent_rate * dt, runtime.current_altitude - terrain_altitude)
+            runtime.current_altitude -= delta
+            runtime.altitude_loss += delta
+            runtime.flight_time += delta / max(descent_rate, 1e-9)
+            if drone is not None:
+                energy = drone.descent_power * (delta / max(descent_rate, 1e-9)) / 3600.0
+                runtime.energy_used += energy
+                runtime.remaining_battery = max(0.0, runtime.remaining_battery - energy)
+            self._track_altitude_extremes(runtime)
+            return
+        runtime.current_altitude = terrain_altitude
+        self.record_external_event(
+            EventType.WAYPOINT_LANDING,
+            runtime.id,
+            f"{runtime.id} landed at terrain altitude {terrain_altitude:.1f} m",
+        )
+        runtime.status = DroneStatus.COMPLETED
+
+    def _apply_arrival_action(self, runtime: DroneRuntime, vertex_index: int) -> bool:
+        """Execute the action of a reached waypoint; True pauses movement."""
+
+        action = runtime.arrival_action(vertex_index)
+        if action is None:
+            return False
+        if action == WaypointAction.HOVER:
+            runtime.hold_remaining = max(
+                runtime.hold_remaining, runtime.arrival_hold(vertex_index)
+            )
+        elif action == WaypointAction.TAKE_PHOTO:
+            runtime.photos_taken += 1
+            runtime.hold_remaining = max(runtime.hold_remaining, _PHOTO_HOLD_SECONDS)
+            self.record_external_event(
+                EventType.WAYPOINT_PHOTO,
+                runtime.id,
+                f"{runtime.id} took photo #{runtime.photos_taken} at waypoint "
+                f"{vertex_index + 1}",
+            )
+        return runtime.hold_remaining > 0
+
+    def _commanded_leg_altitude(
+        self, runtime: DroneRuntime, target_index: int, fraction: float
+    ) -> float:
+        altitudes = runtime.waypoint_altitudes
+        start_altitude = altitudes[target_index - 1]
+        end_altitude = altitudes[target_index]
+        clamped = max(0.0, min(1.0, fraction))
+        return start_altitude + (end_altitude - start_altitude) * clamped
+
+    def _update_motion_status(self, runtime: DroneRuntime, old_altitude: float) -> None:
+        if runtime.current_altitude > old_altitude + 1e-6:
+            runtime.status = DroneStatus.CLIMBING
+        elif runtime.current_altitude < old_altitude - 1e-6:
+            runtime.status = DroneStatus.DESCENDING
+        elif runtime.on_scan_leg():
+            runtime.status = DroneStatus.SCANNING
+        elif runtime.status not in {DroneStatus.RETURNING, DroneStatus.FLYING}:
+            runtime.status = DroneStatus.FLYING
+
+    def _track_altitude_extremes(self, runtime: DroneRuntime) -> None:
+        runtime.max_altitude = max(runtime.max_altitude, runtime.current_altitude)
+        terrain_altitude = self.map_model.terrain.altitude_at(
+            runtime.position.x, runtime.position.y
+        )
+        clearance = runtime.current_altitude - terrain_altitude
+        if runtime.min_clearance_seen is None or clearance < runtime.min_clearance_seen:
+            runtime.min_clearance_seen = clearance
 
     def _drone_for_runtime(self, runtime: DroneRuntime) -> Drone | None:
         drone = self.map_model.find(runtime.id)
@@ -638,6 +780,21 @@ class SimulationEngine:
                 self.task_statuses[task_id] = TaskStatus.COMPLETED
                 return task
         return None
+
+
+def _rate_limited_altitude(
+    current: float, commanded: float, drone: Drone, seconds: float
+) -> float:
+    """Move the altitude toward the commanded value within climb/descent rates."""
+
+    delta = commanded - current
+    if abs(delta) < 1e-9:
+        return commanded
+    rate = drone.climb_rate if delta > 0 else drone.descent_rate
+    limit = max(rate, 1e-9) * max(seconds, 0.0)
+    if abs(delta) <= limit:
+        return commanded
+    return current + (limit if delta > 0 else -limit)
 
 
 def _point_to_segment_distance(point: Point, start: Point, end: Point) -> float:

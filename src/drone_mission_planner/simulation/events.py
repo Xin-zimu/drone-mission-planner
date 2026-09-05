@@ -13,6 +13,8 @@ class EventType(StrEnum):
     COMMUNICATION_LOSS = "communication_loss"
     COMMUNICATION_RESTORED = "communication_restored"
     AUTO_RETURN = "auto_return"
+    WAYPOINT_PHOTO = "waypoint_photo"
+    WAYPOINT_LANDING = "waypoint_landing"
 
 
 @dataclass(frozen=True, slots=True)

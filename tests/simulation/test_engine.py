@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from drone_mission_planner.domain.enums import DroneStatus, TaskStatus
+from drone_mission_planner.domain.enums import DroneStatus, TaskStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
     BaseStation,
@@ -12,6 +12,7 @@ from drone_mission_planner.domain.models import (
     SearchArea,
 )
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.simulation.engine import SimulationEngine
 
@@ -159,6 +160,11 @@ def test_failed_drone_stops_contributing_coverage() -> None:
             "B-01",
             max_speed=10,
             planned_path=[Point(10, 10), Point(250, 10), Point(10, 10)],
+            waypoints=[
+                Waypoint(10.0, 10.0, altitude=50.0, action=WaypointAction.SCAN),
+                Waypoint(250.0, 10.0, altitude=50.0, action=WaypointAction.SCAN),
+                Waypoint(10.0, 10.0, altitude=50.0, action=WaypointAction.RETURN_TO_LAUNCH),
+            ],
         )
     )
     model.search_areas.append(SearchArea("S-01", "Area", Rect(10, 10, 120, 120)))

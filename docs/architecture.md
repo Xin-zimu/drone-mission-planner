@@ -31,6 +31,8 @@ Terrain and wind live in the domain model as serializable Python dataclasses. Te
 
 Each drone runtime also tracks current flight altitude, accumulated climb/descent, and energy used. Flat terrain with disabled wind preserves the legacy distance-based energy model; terrain or wind activates segment-level corrections.
 
+When a drone's waypoints align with its path, the runtime executes the route in three dimensions: waypoint altitudes form the commanded MSL profile (AGL resolves against terrain), climb/descent rates limit vertical motion, waypoint speeds cap the horizontal legs, and waypoint actions drive the state machine — hover holds, photo events, scan-leg coverage contributions, and terrain landings. Drones whose waypoints diverge from their path fall back to the legacy 2D model.
+
 ## Dynamic events
 
 `EventManager` owns ordered pending events and immutable processed records. `SimulationEngine` applies due failures inside logical steps and emits a replan request; it never calls UI or planning code. The application layer synchronizes live runtime state, invokes task assignment or coverage planning, then calls `apply_replan`. That method replaces only future path state while retaining clock, battery, flight statistics, completed-task IDs, event history, and coverage cells.
