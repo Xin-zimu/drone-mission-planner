@@ -28,6 +28,7 @@
 | Persistence | Human-readable `.dmproj` JSON, schema migration through 1.4 (three-dimensional waypoints), validation, and clear corrupt/incompatible-file errors |
 | Local basemap | Map → Import basemap… overlays a local PNG/JPG under the mission grid with opacity/lock and two-point metre calibration persisted in the project |
 | Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation and explicit not-flyable local-coordinate marking |
+| Project safety | Undo/redo for common edits and planning operations; atomic saves; timed crash-recovery snapshots; recent projects; local settings; and a project validation center |
 
 ## Windows application
 
@@ -84,6 +85,8 @@ Press `F1` inside the application for the quick-start guide.
 | Draw area object | Choose Obstacle, No-fly, or Search area, then drag |
 | Pan / zoom / fit | Middle-drag or Space-drag / wheel / `F` |
 | Save | `Ctrl+S` |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
+| Recent projects / settings / validation | File → Open recent / Tools menu |
 | Edit terrain/wind | Workspace → Environment tab |
 | Import elevation CSV | Workspace → Environment tab → Import elevation CSV |
 | Point mission planning | `Ctrl+Shift+P` |
@@ -104,7 +107,7 @@ pytest
 python scripts/benchmark.py
 ```
 
-On this Windows workstation, the validated development environment is Python 3.13 in `.venv313`; use `.\.venv313\Scripts\python.exe -m pytest` for the current full suite.
+On this Windows workstation, the primary validated development environment is Python 3.12 in `.venv`; use `.\.venv\Scripts\python.exe -m pytest` for the current full suite. The Python 3.13 environment remains useful for packaging compatibility checks.
 
 The final suite covers geometry, rasterization, A*, smoothing, energy, assignment, coverage, event handling, state-preserving fault recovery, collision avoidance, multi-hop communication, reporting, persistence migration, UI smoke paths, all three release examples, and performance limits. See [the final test report](reports/final-test-report.md).
 

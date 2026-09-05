@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Headless end-to-end run of the complex workflow demo.
 
 Mirrors the GUI operation chain without Qt:
@@ -10,6 +8,8 @@ Then exports HTML / JSON / CSV reports and prints the final statistics.
 
 Nothing here hard-codes a planning result; every route is computed live.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -25,7 +25,10 @@ from drone_mission_planner.domain.models import Drone, MissionTask  # noqa: E402
 from drone_mission_planner.planning.assignment import GreedyAssignmentPlanner  # noqa: E402
 from drone_mission_planner.planning.coverage import CoveragePlanner  # noqa: E402
 from drone_mission_planner.simulation.engine import SimulationEngine  # noqa: E402
-from drone_mission_planner.simulation.reporting import build_simulation_report, export_report  # noqa: E402
+from drone_mission_planner.simulation.reporting import (  # noqa: E402
+    build_simulation_report,
+    export_report,
+)
 
 DEMO = ROOT / "examples" / "complex_workflow_demo.dmproj"
 

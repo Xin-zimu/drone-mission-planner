@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Completed the M20 productization baseline: transactional undo/redo, configurable recovery autosaves, recent projects, local settings, validation center, and atomic project saves.
+- Added sparse-ID-safe object creation and referential cleanup when bases, drones, or missions are deleted.
+- Fixed multi-area coverage clearing an earlier high-priority route, Assignment weights raising `KeyError` after confirmation, and stale Qt log handlers writing to destroyed windows.
+- Added regression coverage for project history, recovery state, atomic writes, validation metadata, deletion cleanup, and the corrected UI workflows.
+- Pinned Windows release builds to the validated Python 3.12 environment after Python 3.13 exhibited intermittent native access violations during long mixed Qt/simulation test runs.
+- Fixed packaged Windows startup failure (`DLL load failed while importing QtCore`) by isolating PyInstaller from ambient DLL paths and using PySide6's VC++ 14.44 runtime consistently at the application root.
+- Added an end-to-end release GUI regression covering project load, all view modes, assignment, simulation, replay, exports, recent files, undo/redo, recovery, and final validation.
+
 ## 1.0.0
 
 - Completed all eight planned development stages.

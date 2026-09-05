@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QDoubleSpinBox, QMessageBox
+from PySide6.QtWidgets import QDialog, QDoubleSpinBox, QMessageBox
 
 from drone_mission_planner.app.project_service import ProjectService
+from drone_mission_planner.app.workspace_state import WorkspaceState
 from drone_mission_planner.domain.enums import WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
@@ -461,3 +463,91 @@ def test_basemap_import_renders_on_2d_map(qtbot: object, tmp_path: Path) -> None
 
     # Keep the window from prompting to save when pytest tears it down.
     window.service.dirty = False
+
+
+def test_undo_redo_actions_restore_map_edits(qtbot: object) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    window.create_point_object(ToolMode.BASE, 20.0, 30.0)
+
+    assert len(window.service.project.map.bases) == 1
+    assert window.undo_action.isEnabled()
+    window.undo_project_change()
+    assert not window.service.project.map.bases
+    assert window.redo_action.isEnabled()
+    window.redo_project_change()
+    assert len(window.service.project.map.bases) == 1
+    window.service.dirty = False
+
+
+def test_multi_area_ui_keeps_route_from_higher_priority_area(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(10.0, 10.0))
+    drone = service.add_drone(Point(10.0, 10.0))
+    low = service.add_search_area(Rect(50.0, 50.0, 100.0, 100.0))
+    high = service.add_search_area(Rect(220.0, 50.0, 100.0, 100.0))
+    low.priority = 0
+    high.priority = 5
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    window.plan_all_coverage_areas()
+
+    high_path = window.coverage_results[high.id].drone_paths[drone.id]
+    assert high_path
+    assert window.service.project.map.drones[0].planned_path == high_path
+    window.service.dirty = False
+
+
+def test_assignment_weights_dialog_applies_without_key_error(
+    qtbot: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "drone_mission_planner.ui.main_window.QDialog.exec",
+        lambda _dialog: QDialog.DialogCode.Accepted,
+    )
+
+    window.edit_assignment_weights()
+
+    assert "assignment_weight_energy" in window.service.project.planning_settings
+    assert window.service.undo_label == "Edit assignment weights"
+    window.service.dirty = False
+
+
+def test_autosave_snapshot_can_be_recovered(
+    qtbot: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = WorkspaceState(tmp_path / "state")
+    source = MainWindow(state_store=store)
+    qtbot.addWidget(source)  # type: ignore[attr-defined]
+    source.service.add_base(Point(25.0, 35.0))
+    source._autosave_recovery()
+    assert store.load_recovery() is not None
+
+    recovered = MainWindow(state_store=store)
+    qtbot.addWidget(recovered)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "drone_mission_planner.ui.main_window.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    recovered.offer_recovery()
+
+    assert len(recovered.service.project.map.bases) == 1
+    assert recovered.service.dirty
+    source.service.dirty = False
+    recovered.service.dirty = False
+
+
+def test_window_unregisters_qt_log_handler_on_close(qtbot: object) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+    handler = window._log_handler
+
+    window.close()
+
+    assert handler is not None
+    assert handler not in logging.getLogger().handlers

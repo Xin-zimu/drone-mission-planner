@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSlider,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -46,6 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from drone_mission_planner.app.project_service import ProjectService
+from drone_mission_planner.app.workspace_state import UserPreferences, WorkspaceState
 from drone_mission_planner.domain.basemap import derive_calibration
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point, Rect
@@ -55,6 +57,7 @@ from drone_mission_planner.domain.terrain import (
     TerrainPeak,
     generate_mountain_terrain,
 )
+from drone_mission_planner.domain.validation import ProjectValidationError, validate_project
 from drone_mission_planner.domain.waypoint import waypoint_msl_altitude
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.persistence.mission_import import (
@@ -152,15 +155,30 @@ class QtLogHandler(logging.Handler):
     def __init__(self, target: QPlainTextEdit) -> None:
         super().__init__()
         self.target = target
+        target.destroyed.connect(self.detach)
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.target.appendPlainText(self.format(record))
+        try:
+            self.target.appendPlainText(self.format(record))
+        except RuntimeError:
+            self.detach()
+
+    def detach(self, _object: object | None = None) -> None:
+        logging.getLogger().removeHandler(self)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, service: ProjectService | None = None) -> None:
+    def __init__(
+        self,
+        service: ProjectService | None = None,
+        state_store: WorkspaceState | None = None,
+    ) -> None:
         super().__init__()
         self.service = service or ProjectService()
+        self.state_store = state_store
+        self.preferences = (
+            state_store.load_preferences() if state_store is not None else UserPreferences()
+        )
         self.route_planner = RoutePlanner()
         self.assignment_planner = GreedyAssignmentPlanner(self.route_planner)
         self.coverage_planner = CoveragePlanner(self.route_planner)
@@ -170,9 +188,11 @@ class MainWindow(QMainWindow):
         self.simulation_engine: SimulationEngine | None = None
         self.simulation_timer = QTimer(self)
         self.simulation_timer.setInterval(16)
+        self.autosave_timer = QTimer(self)
         self.simulation_clock = QElapsedTimer()
         self._selected_id: str | None = None
         self._tool_actions: dict[ToolMode, QAction] = {}
+        self._log_handler: QtLogHandler | None = None
         self.setWindowTitle("Drone Mission Planner")
         self.resize(1460, 900)
         self.setMinimumSize(1080, 680)
@@ -184,6 +204,7 @@ class MainWindow(QMainWindow):
         self._build_docks()
         self._connect_signals()
         self._install_log_handler()
+        self._configure_autosave_timer()
         self._refresh_all()
         self.statusBar().showMessage("Ready — create a base to begin planning", 5000)
         LOGGER.info("Drone Mission Planner 1.0 initialized")
@@ -197,6 +218,10 @@ class MainWindow(QMainWindow):
         self.save_action.setShortcut(QKeySequence.StandardKey.Save)
         self.save_as_action = QAction("Save as…", self)
         self.save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.exit_action = QAction("Exit", self)
         self.exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         self.delete_action = QAction("Delete selected", self)
@@ -232,6 +257,8 @@ class MainWindow(QMainWindow):
         self.import_basemap_action = QAction("Import basemap…", self)
         self.basemap_settings_action = QAction("Basemap settings…", self)
         self.equipment_action = QAction("Equipment library…", self)
+        self.settings_action = QAction("Settings…", self)
+        self.validation_action = QAction("Validation center…", self)
         self.basemap_settings_action.setEnabled(False)
         self.quick_start_action = QAction("Quick start guide", self)
         self.quick_start_action.setShortcut("F1")
@@ -270,6 +297,8 @@ class MainWindow(QMainWindow):
         file_menu.addActions(
             [self.new_action, self.open_action, self.save_action, self.save_as_action]
         )
+        self.recent_menu = file_menu.addMenu("Open recent")
+        self._refresh_recent_menu()
         file_menu.addAction(self.export_report_action)
         file_menu.addAction(self.export_route_action)
         file_menu.addAction(self.import_mission_action)
@@ -277,6 +306,8 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
         edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addActions([self.undo_action, self.redo_action])
+        edit_menu.addSeparator()
         edit_menu.addAction(self.delete_action)
         map_menu = self.menuBar().addMenu("Map")
         map_menu.addAction(self.reset_view_action)
@@ -290,6 +321,9 @@ class MainWindow(QMainWindow):
         planning_menu.addAction(self.plan_all_coverage_action)
         planning_menu.addAction(self.weights_action)
         planning_menu.addAction(self.equipment_action)
+        tools_menu = self.menuBar().addMenu("Tools")
+        tools_menu.addAction(self.validation_action)
+        tools_menu.addAction(self.settings_action)
         simulation_menu = self.menuBar().addMenu("Simulation")
         simulation_menu.addActions(
             [self.fail_drone_action, self.schedule_failure_action, self.cancel_task_action]
@@ -542,6 +576,8 @@ class MainWindow(QMainWindow):
         self.open_action.triggered.connect(self.open_project)
         self.save_action.triggered.connect(self.save_project)
         self.save_as_action.triggered.connect(lambda: self.save_project(save_as=True))
+        self.undo_action.triggered.connect(self.undo_project_change)
+        self.redo_action.triggered.connect(self.redo_project_change)
         self.exit_action.triggered.connect(self.close)
         self.delete_action.triggered.connect(self.delete_selected)
         self.reset_view_action.triggered.connect(self.map_view.reset_view)
@@ -565,8 +601,11 @@ class MainWindow(QMainWindow):
         self.equipment_action.triggered.connect(self.edit_equipment_library)
         self.import_basemap_action.triggered.connect(self.import_basemap)
         self.basemap_settings_action.triggered.connect(self.edit_basemap_settings)
+        self.settings_action.triggered.connect(self.edit_settings)
+        self.validation_action.triggered.connect(self.show_validation_center)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
+        self.autosave_timer.timeout.connect(self._autosave_recovery)
         self.about_action.triggered.connect(self.show_about)
         self.quick_start_action.triggered.connect(self.show_quick_start)
         self.view_2d_action.triggered.connect(lambda: self.set_map_render_mode(RenderMode.TWO_D))
@@ -610,10 +649,19 @@ class MainWindow(QMainWindow):
             logging.Formatter("[%(asctime)s] %(levelname)-7s %(message)s", "%H:%M:%S")
         )
         logging.getLogger().addHandler(handler)
+        self._log_handler = handler
+        self.destroyed.connect(self._remove_log_handler)
+
+    def _remove_log_handler(self, _object: object | None = None) -> None:
+        if self._log_handler is None:
+            return
+        self._log_handler.detach()
+        self._log_handler = None
 
     def new_project(self) -> None:
         if not self._confirm_discard():
             return
+        self._clear_recovery()
         self.service.new_project()
         self._discard_simulation()
         self.coverage_results.clear()
@@ -629,17 +677,32 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self._load_project_path(path)
+
+    def _load_project_path(self, path: str | Path) -> bool:
         try:
             self.service.load(path)
         except ProjectFormatError as exc:
             QMessageBox.critical(self, "Cannot open project", str(exc))
             LOGGER.error("Project load failed: %s", exc)
-            return
+            if self.state_store is not None:
+                self._refresh_recent_menu()
+            return False
+        self._clear_recovery()
+        if self.state_store is not None:
+            self.state_store.add_recent_project(path)
+            self._refresh_recent_menu()
         self._selected_id = None
         self._discard_simulation()
         self.coverage_results.clear()
         self._refresh_all()
         LOGGER.info("Opened project %s", path)
+        return True
+
+    def open_recent_project(self, path: Path) -> None:
+        if not self._confirm_discard():
+            return
+        self._load_project_path(path)
 
     def save_project(self, *, save_as: bool = False) -> bool:
         path: str | Path | None = self.service.path
@@ -657,9 +720,35 @@ class MainWindow(QMainWindow):
             LOGGER.error("Project save failed: %s", exc)
             return False
         self._update_title()
+        if self.state_store is not None:
+            self.state_store.add_recent_project(saved)
+            self.state_store.clear_recovery()
+            self._refresh_recent_menu()
         self.statusBar().showMessage(f"Saved {saved.name}", 4000)
         LOGGER.info("Saved project %s", saved)
         return True
+
+    def undo_project_change(self) -> None:
+        label = self.service.undo()
+        if label is None:
+            return
+        self._discard_simulation()
+        self.coverage_results.clear()
+        self._assignment_notes = ()
+        self._assignment_explanations = None
+        self._refresh_all()
+        self.statusBar().showMessage(f"Undid: {label}", 4000)
+
+    def redo_project_change(self) -> None:
+        label = self.service.redo()
+        if label is None:
+            return
+        self._discard_simulation()
+        self.coverage_results.clear()
+        self._assignment_notes = ()
+        self._assignment_explanations = None
+        self._refresh_all()
+        self.statusBar().showMessage(f"Redid: {label}", 4000)
 
     def create_point_object(self, kind: str, x: float, y: float) -> None:
         position = Point(x, y)
@@ -726,9 +815,9 @@ class MainWindow(QMainWindow):
             LOGGER.error("Route %s → %s failed: %s", drone.id, task.id, result.failure_reason)
             QMessageBox.warning(self, "Planning failed", result.failure_reason or "Unknown error")
             return
-        drone.planned_path = result.waypoints
-        drone.waypoints = result.flight_waypoints
-        self.service.dirty = True
+        with self.service.change("Plan route"):
+            drone.planned_path = result.waypoints
+            drone.waypoints = result.flight_waypoints
         self._render_altitude_table()
         self._render_map_if_visible()
         self._update_title()
@@ -770,13 +859,13 @@ class MainWindow(QMainWindow):
         )
         result = self.coverage_planner.plan(self.service.project.map, area)
         self._discard_simulation()
-        self.service.project.planning_settings["mission_mode"] = "coverage"
-        self.coverage_results[area.id] = result
-        for drone in self.service.project.map.drones:
-            drone.planned_path = result.drone_paths.get(drone.id, [])
-            drone.waypoints = result.drone_waypoints.get(drone.id, [])
-            drone.assigned_tasks.clear()
-        self.service.dirty = True
+        with self.service.change("Plan area coverage"):
+            self.service.project.planning_settings["mission_mode"] = "coverage"
+            self.coverage_results[area.id] = result
+            for drone in self.service.project.map.drones:
+                drone.planned_path = result.drone_paths.get(drone.id, [])
+                drone.waypoints = result.drone_waypoints.get(drone.id, [])
+                drone.assigned_tasks.clear()
         self._render_coverage_table()
         self._render_altitude_table()
         self._populate_tree()
@@ -815,32 +904,33 @@ class MainWindow(QMainWindow):
         )
         results = self.coverage_planner.plan_all_areas(self.service.project.map)
         self._discard_simulation()
-        self.service.project.planning_settings["mission_mode"] = "coverage"
         ordered = sorted(
             self.service.project.map.search_areas,
             key=lambda area: (-area.priority, area.id),
         )
         summaries: list[str] = []
         assigned: set[str] = set()
-        for area in ordered:
-            result = results[area.id]
-            self.coverage_results[area.id] = result
+        with self.service.change("Plan all coverage areas"):
+            self.service.project.planning_settings["mission_mode"] = "coverage"
             for drone in self.service.project.map.drones:
-                path = result.drone_paths.get(drone.id, [])
-                if path and drone.id not in assigned:
-                    drone.planned_path = path
-                    drone.waypoints = result.drone_waypoints.get(drone.id, [])
-                    assigned.add(drone.id)
-                elif not path:
-                    drone.planned_path = []
-                    drone.waypoints = []
-            if result.failures:
-                summaries.append(
-                    f"{area.id}: {', '.join(f'{k}: {v}' for k, v in result.failures.items())}"
-                )
-            else:
-                summaries.append(f"{area.id}: {result.total_distance:.0f} m planned")
-        self.service.dirty = True
+                drone.planned_path = []
+                drone.waypoints = []
+                drone.assigned_tasks.clear()
+            for area in ordered:
+                result = results[area.id]
+                self.coverage_results[area.id] = result
+                for drone in self.service.project.map.drones:
+                    path = result.drone_paths.get(drone.id, [])
+                    if path and drone.id not in assigned:
+                        drone.planned_path = path
+                        drone.waypoints = result.drone_waypoints.get(drone.id, [])
+                        assigned.add(drone.id)
+                if result.failures:
+                    summaries.append(
+                        f"{area.id}: {', '.join(f'{k}: {v}' for k, v in result.failures.items())}"
+                    )
+                else:
+                    summaries.append(f"{area.id}: {result.total_distance:.0f} m planned")
         self._render_coverage_table()
         self._render_altitude_table()
         self._populate_tree()
@@ -1192,31 +1282,36 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            self.service.update_basemap(
-                opacity=opacity.value(),
-                meters_per_pixel=mpp.value(),
-                origin_x=origin_x.value(),
-                origin_y=origin_y.value(),
-                rotation_deg=rotation.value(),
-                flip_y=flip.isChecked(),
-                locked=locked.isChecked(),
-            )
-            if (world2x.value() != world1x.value() or world2y.value() != world1y.value()) and (
-                pixel2x.value() != pixel1x.value() or pixel2y.value() != pixel1y.value()
-            ):
-                meters_per_pixel, rotation_deg, origin = derive_calibration(
-                    Point(world1x.value(), world1y.value()),
-                    (pixel1x.value(), pixel1y.value()),
-                    Point(world2x.value(), world2y.value()),
-                    (pixel2x.value(), pixel2y.value()),
-                    flip_y=flip.isChecked(),
-                )
+            with self.service.change("Calibrate basemap"):
                 self.service.update_basemap(
-                    meters_per_pixel=meters_per_pixel,
-                    rotation_deg=rotation_deg,
-                    origin_x=origin.x,
-                    origin_y=origin.y,
+                    opacity=opacity.value(),
+                    meters_per_pixel=mpp.value(),
+                    origin_x=origin_x.value(),
+                    origin_y=origin_y.value(),
+                    rotation_deg=rotation.value(),
+                    flip_y=flip.isChecked(),
+                    locked=locked.isChecked(),
                 )
+                if (
+                    world2x.value() != world1x.value()
+                    or world2y.value() != world1y.value()
+                ) and (
+                    pixel2x.value() != pixel1x.value()
+                    or pixel2y.value() != pixel1y.value()
+                ):
+                    meters_per_pixel, rotation_deg, origin = derive_calibration(
+                        Point(world1x.value(), world1y.value()),
+                        (pixel1x.value(), pixel1y.value()),
+                        Point(world2x.value(), world2y.value()),
+                        (pixel2x.value(), pixel2y.value()),
+                        flip_y=flip.isChecked(),
+                    )
+                    self.service.update_basemap(
+                        meters_per_pixel=meters_per_pixel,
+                        rotation_deg=rotation_deg,
+                        origin_x=origin.x,
+                        origin_y=origin.y,
+                    )
         except ValueError as exc:
             QMessageBox.warning(self, "Basemap settings rejected", str(exc))
             return
@@ -1281,9 +1376,10 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            created = apply_import(
-                self.service, preview, drone_id=target_drone.id if target_drone else None
-            )
+            with self.service.change("Import mission data"):
+                created = apply_import(
+                    self.service, preview, drone_id=target_drone.id if target_drone else None
+                )
         except (MissionImportError, ValueError) as exc:
             QMessageBox.warning(self, "Import rejected", str(exc))
             LOGGER.error("Mission import rejected: %s", exc)
@@ -1433,9 +1529,10 @@ class MainWindow(QMainWindow):
             for task_id, tips in sorted(suggestions.items())
         )
         self._discard_simulation()
-        self.service.project.planning_settings["mission_mode"] = "point_tasks"
-        self.coverage_results.clear()
-        self._apply_assignment_result(result)
+        with self.service.change("Auto assign missions"):
+            self.service.project.planning_settings["mission_mode"] = "point_tasks"
+            self.coverage_results.clear()
+            self._apply_assignment_result(result)
         self._render_assignment_table(result)
         self._render_altitude_table()
         self._populate_tree()
@@ -1558,10 +1655,10 @@ class MainWindow(QMainWindow):
         form.addRow(buttons)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        for name, spin in editors.items():
-            self.service.project.planning_settings[f"assignment_weight_{name}"] = spin.value()
-        self.service.dirty = True
-        LOGGER.info("Assignment weights updated: %s", self.service.project.planning_settings["assignment_weights"])
+        with self.service.change("Edit assignment weights"):
+            for name, spin in editors.items():
+                self.service.project.planning_settings[f"assignment_weight_{name}"] = spin.value()
+        LOGGER.info("Assignment weights updated: %s", self._assignment_weights())
         self.statusBar().showMessage(
             "Assignment weights saved; re-run Auto assign to apply them", 7000
         )
@@ -1590,31 +1687,31 @@ class MainWindow(QMainWindow):
             task_item.setToolTip("\n".join(lines))
 
     def _apply_assignment_result(self, result: AssignmentResult) -> None:
-        for drone in self.service.project.map.drones:
-            drone.assigned_tasks.clear()
-            drone.planned_path = result.drone_paths.get(drone.id, [])
-            drone.waypoints = result.drone_waypoints.get(drone.id, [])
-        for task in self.service.project.map.tasks:
-            if task.status.value != "completed":
-                task.assigned_drone_id = None
-                task.status = TaskStatus.PENDING
-        for decision in result.decisions:
-            found_task = self.service.project.map.find(decision.task_id)
-            found_drone = self.service.project.map.find(decision.drone_id)
-            if isinstance(found_task, MissionTask) and isinstance(found_drone, Drone):
-                found_task.assigned_drone_id = found_drone.id
-                found_task.status = TaskStatus.ASSIGNED
-                found_drone.assigned_tasks.append(found_task.id)
-                LOGGER.info(
-                    "%s assigned to %s: %.1f m, %.1f required energy",
-                    found_task.id,
-                    found_drone.id,
-                    decision.route.total_distance,
-                    decision.energy.total_required,
-                )
-        for failure in result.failures:
-            LOGGER.warning("%s could not be assigned — %s", failure.task_id, failure.summary())
-        self.service.dirty = True
+        with self.service.change("Apply assignment"):
+            for drone in self.service.project.map.drones:
+                drone.assigned_tasks.clear()
+                drone.planned_path = result.drone_paths.get(drone.id, [])
+                drone.waypoints = result.drone_waypoints.get(drone.id, [])
+            for task in self.service.project.map.tasks:
+                if task.status.value != "completed":
+                    task.assigned_drone_id = None
+                    task.status = TaskStatus.PENDING
+            for decision in result.decisions:
+                found_task = self.service.project.map.find(decision.task_id)
+                found_drone = self.service.project.map.find(decision.drone_id)
+                if isinstance(found_task, MissionTask) and isinstance(found_drone, Drone):
+                    found_task.assigned_drone_id = found_drone.id
+                    found_task.status = TaskStatus.ASSIGNED
+                    found_drone.assigned_tasks.append(found_task.id)
+                    LOGGER.info(
+                        "%s assigned to %s: %.1f m, %.1f required energy",
+                        found_task.id,
+                        found_drone.id,
+                        decision.route.total_distance,
+                        decision.energy.total_required,
+                    )
+            for failure in result.failures:
+                LOGGER.warning("%s could not be assigned — %s", failure.task_id, failure.summary())
 
     def _render_assignment_table(self, result: AssignmentResult) -> None:
         rows = len(result.decisions) + len(result.failures)
@@ -1755,9 +1852,9 @@ class MainWindow(QMainWindow):
                 return
             self._dynamic_replan(f"Task {selected.id} cancelled")
         else:
-            selected.status = TaskStatus.CANCELLED
-            selected.assigned_drone_id = None
-            self.service.dirty = True
+            with self.service.change("Cancel mission"):
+                selected.status = TaskStatus.CANCELLED
+                selected.assigned_drone_id = None
         LOGGER.warning("Task %s cancelled", selected.id)
         self._refresh_all(select_id=selected.id)
 
@@ -2249,9 +2346,178 @@ class MainWindow(QMainWindow):
             f"{len(map_model.search_areas)} search areas     •     {terrain}     •     {wind}"
         )
 
+    def _configure_autosave_timer(self) -> None:
+        self.autosave_timer.stop()
+        if self.state_store is None or not self.preferences.autosave_enabled:
+            return
+        self.autosave_timer.setInterval(self.preferences.autosave_interval_seconds * 1000)
+        self.autosave_timer.start()
+
+    def _autosave_recovery(self) -> None:
+        if self.state_store is None or not self.service.dirty:
+            return
+        try:
+            self.state_store.write_recovery(self.service.project, self.service.path)
+        except (OSError, ValueError) as exc:
+            LOGGER.error("Autosave failed: %s", exc)
+            self.statusBar().showMessage(f"Autosave failed: {exc}", 8000)
+            return
+        self.statusBar().showMessage("Recovery snapshot updated", 2500)
+
+    def offer_recovery(self) -> None:
+        if self.state_store is None:
+            return
+        try:
+            recovery = self.state_store.load_recovery()
+        except (OSError, ProjectFormatError) as exc:
+            LOGGER.error("Recovery snapshot is unreadable: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Recovery unavailable",
+                f"The recovery snapshot could not be opened and will be removed.\n\n{exc}",
+            )
+            self.state_store.clear_recovery()
+            return
+        if recovery is None:
+            return
+        source = str(recovery.source_path) if recovery.source_path else "an unsaved project"
+        answer = QMessageBox.question(
+            self,
+            "Recover autosaved project",
+            f"A recovery snapshot from {recovery.saved_at} was found for {source}.\n\n"
+            "Recover it now? Choosing No discards the snapshot.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.state_store.clear_recovery()
+            return
+        self.service.restore_recovery(recovery.project, recovery.source_path)
+        self._discard_simulation()
+        self.coverage_results.clear()
+        self._refresh_all()
+        self.statusBar().showMessage("Recovered autosaved project — save to keep it", 9000)
+        LOGGER.warning("Recovered autosave for %s", source)
+
+    def _clear_recovery(self) -> None:
+        if self.state_store is not None:
+            self.state_store.clear_recovery()
+
+    def _refresh_recent_menu(self) -> None:
+        if not hasattr(self, "recent_menu"):
+            return
+        self.recent_menu.clear()
+        paths = (
+            self.state_store.recent_projects(self.preferences.recent_project_limit)
+            if self.state_store is not None
+            else ()
+        )
+        if not paths:
+            empty = self.recent_menu.addAction("No recent projects")
+            empty.setEnabled(False)
+            return
+        for path in paths:
+            action = self.recent_menu.addAction(path.name)
+            action.setToolTip(str(path))
+            action.triggered.connect(
+                lambda checked=False, selected=path: self.open_recent_project(selected)
+            )
+
+    def edit_settings(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Settings")
+        form = QFormLayout(dialog)
+        autosave = QCheckBox("Keep crash-recovery snapshots")
+        autosave.setChecked(self.preferences.autosave_enabled)
+        interval = QSpinBox()
+        interval.setRange(10, 3600)
+        interval.setSuffix(" seconds")
+        interval.setValue(self.preferences.autosave_interval_seconds)
+        recent_limit = QSpinBox()
+        recent_limit.setRange(1, 20)
+        recent_limit.setValue(self.preferences.recent_project_limit)
+        form.addRow(autosave)
+        form.addRow("Autosave interval", interval)
+        form.addRow("Recent project count", recent_limit)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        preferences = UserPreferences(
+            autosave_enabled=autosave.isChecked(),
+            autosave_interval_seconds=interval.value(),
+            recent_project_limit=recent_limit.value(),
+        ).normalized()
+        self.preferences = (
+            self.state_store.save_preferences(preferences)
+            if self.state_store is not None
+            else preferences
+        )
+        if not self.preferences.autosave_enabled:
+            self._clear_recovery()
+        self._configure_autosave_timer()
+        self._refresh_recent_menu()
+        self.statusBar().showMessage("Settings saved", 4000)
+
+    def show_validation_center(self) -> None:
+        issues: list[str] = []
+        try:
+            validate_project(self.service.project)
+        except ProjectValidationError as exc:
+            issues.extend(exc.issues)
+        task_ids = {task.id for task in self.service.project.map.tasks}
+        for drone in self.service.project.map.drones:
+            for task_id in drone.assigned_tasks:
+                if task_id not in task_ids:
+                    issues.append(f"{drone.id} references missing assigned mission {task_id}")
+            for index, waypoint in enumerate(drone.waypoints, start=1):
+                if waypoint.task_id is not None and waypoint.task_id not in task_ids:
+                    issues.append(
+                        f"{drone.id} waypoint {index} references missing mission "
+                        f"{waypoint.task_id}"
+                    )
+            if bool(drone.planned_path) != bool(drone.waypoints):
+                issues.append(f"{drone.id} route representations are out of sync")
+            elif len(drone.planned_path) != len(drone.waypoints):
+                issues.append(f"{drone.id} path and waypoint counts differ")
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Validation center")
+        layout = QVBoxLayout(dialog)
+        if issues:
+            heading = QLabel(f"{len(issues)} issue(s) require attention")
+            details = QPlainTextEdit("\n".join(f"• {issue}" for issue in issues))
+        else:
+            heading = QLabel("Project data is valid")
+            details = QPlainTextEdit(
+                f"{len(self.service.project.map.objects())} objects checked.\n"
+                "Map bounds, IDs, references, terrain, aircraft limits, and route "
+                "representations are consistent."
+            )
+        details.setReadOnly(True)
+        layout.addWidget(heading)
+        layout.addWidget(details)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.resize(620, 360)
+        dialog.exec()
+
+    def _update_history_actions(self) -> None:
+        undo_label = self.service.undo_label
+        redo_label = self.service.redo_label
+        self.undo_action.setEnabled(undo_label is not None)
+        self.redo_action.setEnabled(redo_label is not None)
+        self.undo_action.setText(f"Undo {undo_label}" if undo_label else "Undo")
+        self.redo_action.setText(f"Redo {redo_label}" if redo_label else "Redo")
+
     def _update_title(self) -> None:
         marker = " *" if self.service.dirty else ""
         self.setWindowTitle(f"{self.service.project.name}{marker} — Drone Mission Planner")
+        self._update_history_actions()
 
     def _confirm_discard(self) -> bool:
         if not self.service.dirty:
@@ -2266,7 +2532,10 @@ class MainWindow(QMainWindow):
         )
         if answer == QMessageBox.StandardButton.Save:
             return self.save_project()
-        return answer == QMessageBox.StandardButton.Discard
+        if answer == QMessageBox.StandardButton.Discard:
+            self._clear_recovery()
+            return True
+        return False
 
     def show_about(self) -> None:
         QMessageBox.about(
@@ -2290,5 +2559,11 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_discard():
+            event.ignore()
+            return
         self.simulation_timer.stop()
-        event.accept() if self._confirm_discard() else event.ignore()
+        self.autosave_timer.stop()
+        self._remove_log_handler()
+        self._clear_recovery()
+        event.accept()

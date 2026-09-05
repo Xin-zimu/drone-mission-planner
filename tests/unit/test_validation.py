@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from drone_mission_planner.app.project_service import ProjectService
-from drone_mission_planner.domain.geometry import Point
+from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
     BaseStation,
     Drone,
@@ -11,9 +11,11 @@ from drone_mission_planner.domain.models import (
     NoFlyZone,
     Obstacle,
     ProjectModel,
+    SearchArea,
 )
 from drone_mission_planner.domain.terrain import TerrainModel, TerrainPeak
 from drone_mission_planner.domain.validation import ProjectValidationError, validate_project
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.domain.wind import WindModel
 
 
@@ -114,3 +116,34 @@ def test_rejects_invalid_altitude_fields() -> None:
     assert "target altitude" in str(captured.value)
     assert "height" in str(captured.value)
     assert "ceiling altitude" in str(captured.value)
+
+
+def test_rejects_invalid_role_and_coverage_metadata() -> None:
+    project = ProjectModel()
+    project.map.drones.append(
+        Drone(
+            "D-01",
+            "Broken",
+            Point(10.0, 10.0),
+            role="observer",
+            assigned_tasks=["T-missing"],
+            waypoints=[Waypoint(20.0, 20.0, 100.0, task_id="T-missing")],
+        )
+    )
+    project.map.search_areas.append(
+        SearchArea(
+            "S-01",
+            "Broken area",
+            Rect(10.0, 10.0, 100.0, 100.0),
+            holes=[[Point(20.0, 20.0), Point(30.0, 20.0)]],
+            scan_direction="diagonal",
+        )
+    )
+
+    with pytest.raises(ProjectValidationError) as captured:
+        validate_project(project)
+
+    message = str(captured.value)
+    assert "role must be mission or relay" in message
+    assert "scan direction" in message
+    assert "hole 1 must contain at least three points" in message

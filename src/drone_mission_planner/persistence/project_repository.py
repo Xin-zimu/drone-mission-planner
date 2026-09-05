@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
@@ -206,10 +207,16 @@ class ProjectRepository:
         target.parent.mkdir(parents=True, exist_ok=True)
         data = _json_ready(asdict(project))
         data["version"] = CURRENT_VERSION
-        target.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        temporary = target.with_name(f".{target.name}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, target)
+        except OSError:
+            temporary.unlink(missing_ok=True)
+            raise
         return target
 
     def load(self, path: str | Path) -> ProjectModel:

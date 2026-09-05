@@ -45,6 +45,12 @@ Algorithms accept domain dataclasses and return typed result objects with explic
 
 `ConflictDetector` samples future motion and returns yielding IDs. `CommunicationMonitor` builds a bidirectional range graph, calculates base-hop counts, and issues a one-shot auto-return request after the configured grace period.
 
+### Edit history and recovery
+
+`ProjectService.change()` wraps a model mutation as one transaction. Nested service calls collapse into the outer operation, successful changes retain a bounded deep snapshot for undo/redo, and exceptions restore the complete pre-operation project. New/load resets history; the saved-project snapshot determines the dirty marker even when the user moves backward or forward through history.
+
+`WorkspaceState` stores user preferences, prunes missing recent-project entries, and writes one validated recovery project plus metadata in the platform application-data directory. Recovery writes do not alter `ProjectService.path` or clear its dirty state. `ProjectRepository.save()` writes a same-directory temporary file and atomically replaces the destination.
+
 ## Project format changes
 
 Change `CURRENT_VERSION`, add a migration in `persistence/migrations.py`, retain older fixtures, and add round-trip plus migration tests. Never silently reinterpret unknown future versions.

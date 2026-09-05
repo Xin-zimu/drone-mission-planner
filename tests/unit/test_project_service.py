@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from drone_mission_planner.app.project_service import ProjectService
+from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.terrain import (
     TerrainModel,
@@ -10,6 +13,7 @@ from drone_mission_planner.domain.terrain import (
     generate_mountain_terrain,
 )
 from drone_mission_planner.domain.validation import ProjectValidationError
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.domain.wind import WindModel
 
 
@@ -72,3 +76,31 @@ def test_update_environment_rolls_back_invalid_models() -> None:
 
     assert service.project.map.terrain is previous_terrain
     assert service.project.map.wind is previous_wind
+
+
+def test_remove_cleans_references_and_remains_saveable(tmp_path: Path) -> None:
+    service = ProjectService()
+    base = service.add_base(Point(10.0, 10.0))
+    drone = service.add_drone(Point(20.0, 20.0))
+    task = service.add_task(Point(30.0, 30.0))
+    drone.assigned_tasks.append(task.id)
+    task.assigned_drone_id = drone.id
+    task.status = TaskStatus.ASSIGNED
+
+    service.remove(base.id)
+    assert drone.home_base_id is None
+    service.remove(drone.id)
+    assert task.assigned_drone_id is None
+    assert task.status == TaskStatus.PENDING
+
+    replacement = service.add_drone(Point(40.0, 40.0))
+    linked = service.add_task(Point(50.0, 50.0))
+    replacement.assigned_tasks.append(linked.id)
+    replacement.waypoints.append(
+        Waypoint(50.0, 50.0, altitude=100.0, task_id=linked.id)
+    )
+    service.remove(linked.id)
+    assert linked.id not in replacement.assigned_tasks
+    assert replacement.waypoints[0].task_id is None
+
+    service.save(tmp_path / "clean.dmproj")

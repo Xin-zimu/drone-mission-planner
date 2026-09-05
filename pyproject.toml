@@ -32,7 +32,7 @@ dev = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers -p no:cacheprovider --basetemp=.pytest-tmp"
 testpaths = ["tests"]
 pythonpath = ["src"]
 qt_api = "pyside6"

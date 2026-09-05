@@ -4,6 +4,10 @@ Create a project, choose a placement tool, and click the map. Obstacles are draw
 
 The map uses metres. Use the mouse wheel to zoom, middle-drag or Space-drag to pan, and **Fit map** to restore the full extent. Save with `Ctrl+S`; projects use the `.dmproj` extension.
 
+Common editor and planning changes can be reverted with **Edit → Undo** (`Ctrl+Z`) and reapplied with **Redo** (`Ctrl+Y`). The action label shows exactly which operation will be restored. A failed grouped operation is rolled back as a whole, and undoing a planning result discards stale simulation state before refreshing every view.
+
+The application writes a crash-recovery snapshot while a project has unsaved changes. On the next launch it offers to recover that snapshot without silently overwriting the original project. A normal Save or an explicit Discard removes the recovery copy. Configure the interval under **Tools → Settings…**, open existing files through **File → Open recent**, and use **Tools → Validation center…** to check object IDs, references, bounds, terrain values, aircraft limits, and route/waypoint consistency. Normal project saves use atomic replacement so an interrupted write does not leave a partially written mission file.
+
 Use **Planning → Plan selected route** for a single drone/task pair. Use **Planning → Auto assign all missions** to evaluate every pending mission against all drones. The Assignments tab lists distance, required energy, and failures. A task's assigned-drone ID can be edited in the inspector for a manual override.
 
 The bottom simulation bar provides Play, Pause, Step, Reset, and 0.5x–10x speed. Play automatically performs assignment if no routes exist. Step always advances one `0.05 s` logical tick. Reset restores initial positions, battery, and assigned task states.

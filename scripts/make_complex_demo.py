@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Build a high-complexity mixed workflow demo project.
 
 Scenario: an urban logistics + rescue drill on a 1000 x 700 m map with
@@ -13,6 +11,8 @@ Scenario: an urban logistics + rescue drill on a 1000 x 700 m map with
 The project is intentionally authored through the domain model so every
 value passes validation and nothing is a hard-coded planning result.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path

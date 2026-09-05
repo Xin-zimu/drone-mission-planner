@@ -109,6 +109,8 @@ def validate_project(project: ProjectModel) -> None:
             issues.append(f"{drone.id} communication range must be positive")
         if drone.safety_radius < 0:
             issues.append(f"{drone.id} safety radius cannot be negative")
+        if drone.role not in {"mission", "relay"}:
+            issues.append(f"{drone.id} role must be mission or relay")
         for waypoint_index, waypoint in enumerate(drone.waypoints, start=1):
             _position(
                 f"{drone.id} waypoint {waypoint_index}",
@@ -151,8 +153,15 @@ def validate_project(project: ProjectModel) -> None:
             issues.append(f"{area.id} scan spacing/margin is invalid")
         if not 0 < area.target_coverage <= 1:
             issues.append(f"{area.id} target coverage must be in (0, 1]")
+        if area.scan_direction not in {"horizontal", "vertical"}:
+            issues.append(f"{area.id} scan direction must be horizontal or vertical")
         for point in area.points:
             _position(area.id, point, model.width, model.height, issues)
+        for hole_index, hole in enumerate(area.holes, start=1):
+            if len(hole) < 3:
+                issues.append(f"{area.id} hole {hole_index} must contain at least three points")
+            for point in hole:
+                _position(f"{area.id} hole {hole_index}", point, model.width, model.height, issues)
     if issues:
         raise ProjectValidationError(issues)
 

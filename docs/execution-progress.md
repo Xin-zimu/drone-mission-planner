@@ -4,7 +4,7 @@ Last updated: 2026-09-05
 
 ## Current checkpoint
 
-M18 (cooperative deconfliction and relays) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
+M20 (productization baseline), its regression fixes, and the hardened Windows package are complete and are captured by the current checkpoint. Earlier checkpoints:
 
 - Commit: `7ca7778 Initial project import`
 - Commit: `a7c0e40 Complete M8 altitude and incremental replanning`
@@ -23,10 +23,13 @@ M18 (cooperative deconfliction and relays) is complete in the working tree and i
 - Commit: `7c500a3 Implement M11 local map basemap`
 - Commit: `112d488 Implement M16 equipment library`
 - Commit: `1e993ec Implement M17 advanced coverage planning`
+- Commit: `9d3885f Implement M18 cooperative deconfliction and relays`
 - Branch: `main`
 
 ## Completed in this pass
 
+- M20 (this pass): bounded transactional undo/redo in `ProjectService` with nested operation grouping, complete rollback on unexpected failure, and saved-state-aware dirty tracking; Edit menu actions refresh all views and invalidate stale simulations. `WorkspaceState` persists normalized local settings, existing recent projects, and one validated recovery snapshot; configurable timed autosave, startup recovery choice, recent-file menu, settings dialog, and validation center are wired into the desktop application. Project saves now use same-directory atomic replacement, and loaded sparse IDs continue from the highest numeric suffix instead of list length.
+- Bug fixes (this pass): multi-area coverage no longer clears a high-priority drone route while processing a later area with no available drone; accepting Assignment weights no longer raises `KeyError` while logging; closed windows unregister their Qt log handler instead of retaining a deleted widget (the cause of later logging errors and intermittent native crashes); cancelling a close prompt no longer leaves the autosave/simulation timers stopped. Pytest now keeps its temporary root inside the repository so restricted Windows environments do not fail on the system temp folder.
 - M18 (this pass): `planning/deconfliction.py` reserves assigned routes in priority order on a spatiotemporal table and inserts hold-based wait points where a later route would cross an earlier one inside the safety separation (waits delay departure of the crossing leg and conflicts are re-checked until resolved); `Drone.role` adds dedicated relay drones that are skipped by assignment/coverage and hover in place during simulation while extending the communication graph (2-hop reach tested); crossing and wait details flow into assignment notes and exported reports. Deferred: narrow-corridor gating and formation following.
 - M17 (this pass): search areas gained holes (excluded from coverage targets and scanlines via interval subtraction), priority, and a horizontal/vertical `scan_direction` (transposed lawnmower); `CoveragePlanner.plan_all_areas` plans areas in priority order without reusing drones so scarce aircraft protect high-priority zones; supplemental sweeps now merge grid rows to the scan pitch (previously 2.5x overscanned); Planning → Plan all coverage areas UI. Deferred: wind-based automatic direction choice.
 - M16 (this pass): `domain/equipment.py` equipment library (drone models, battery packs with effective-capacity maths, payloads, mission templates) persisted as project schema 1.6 with a 1.5→1.6 migration; ProjectService helpers create drones from models (all flight/energy parameters carried over), re-fit batteries (usable energy recomputed), attach payloads (weight feeds assignment feasibility AND energy through `required_payload + current_payload`), and apply mission templates; Planning → Equipment library… dialog manages it all. Deferred: global (cross-project) library storage.
@@ -42,10 +45,14 @@ M18 (cooperative deconfliction and relays) is complete in the working tree and i
 
 ## Validation
 
-- `.venv313\Scripts\python.exe -m pytest -q`: 212 passed.
-- `.venv313\Scripts\python.exe -m mypy src tests`: success.
-- `.venv313\Scripts\python.exe -m ruff check src tests`: all checks passed.
-- `.venv313\Scripts\python.exe -m compileall -q src tests`: success.
+- `.venv\Scripts\python.exe -m pytest -q` (Python 3.12): 225 passed.
+- Release GUI acceptance: the real `MainWindow` loaded the complex example, switched 2D/2.5D/3D views, assigned missions, stepped simulation, recorded replay, exported report/replay/project files, updated recent projects, performed undo/redo, wrote recovery state, and passed final project validation.
+- `.venv\Scripts\python.exe -m mypy src tests`: success.
+- `.venv\Scripts\python.exe -m ruff check src tests`: all checks passed.
+- `.venv\Scripts\python.exe -m compileall -q src tests`: success.
+- `.venv313\Scripts\python.exe -X faulthandler -u scripts\benchmark.py`: success (route 0.019 s median; 20-drone/200-task assignment 1.53 s).
+- `packaging/build-windows.ps1`: success under Python 3.12; 49,750,838-byte `dist/DroneMissionPlanner.exe` with a sanitized DLL search path and a unified VC++ 14.44 runtime.
+- Packaged-application startup smoke: both one-file processes remained responsive, the visible window title was `Untitled mission — Drone Mission Planner`, and no Python, application-error, or unhandled-exception dialog was present.
 - `git diff --check`: success.
 
 ## Previous passes (short)
@@ -58,5 +65,5 @@ M18 (cooperative deconfliction and relays) is complete in the working tree and i
 
 ## Remaining
 
-1. M9-full imports (GeoJSON/KML/waypoint CSV) — next planned phase.
-2. M15 replay, M19 explainability, M10 report/example polish (GUI screenshots pending), M11 basemap, M16+.
+1. Refresh the printable Word/PDF manual and optional showcase media after final GUI review.
+2. Optional roadmap enhancements: basemap texture in 3D, report replay keyframes, wind-selected coverage direction, narrow-corridor gating, relay formation following, window-layout persistence, and a cross-project equipment library.
