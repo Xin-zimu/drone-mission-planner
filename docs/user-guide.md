@@ -40,6 +40,12 @@ Coverage recovery is incremental. Previously observed cells are kept as planning
 
 Placing a Mission while an engine exists inserts it dynamically and triggers reassignment. Selecting an unfinished mission and choosing **Cancel selected mission** removes it from future routes. Drawing a No-fly zone while an engine exists marks it temporary, invalidates active routes, and replans around it. If no operational aircraft can continue, the status bar and activity log give the per-task planning reason.
 
+## 3D mission view
+
+Switch between **2D edit view**, **2.5D terrain view**, and **3D mission view** from the toolbar or the View menu. The 3D view is read-only and renders the mission as a real three-dimensional scene: a terrain mesh using the same altitude colors as the 2.5D view, three-dimensional route polylines at their planned waypoint altitudes, obstacle and no-fly volumes standing on the terrain, search-area outlines, coverage cells, the global wind arrow, and drone markers that follow live simulation positions.
+
+Left-drag orbits the camera, right-drag (or middle-drag) pans, and the wheel zooms. Clicking a drone, route, obstacle, or no-fly volume selects it everywhere — the object tree, inspector, and 2D map stay in sync. The **View → 3D layers** submenu toggles terrain, routes, obstacles, no-fly zones, coverage, risk segments, and labels; **View → 3D camera** offers top, iso, side, and follow-drone presets. Orange and red route segments show altitude warnings and critical risks exactly as on the 2D map.
+
 ## Safety and communication
 
 Open the **Safety & links** tab during simulation. Each drone reports Direct, Relay, or Lost; shortest hop count; nearest-base distance; disconnect duration; active policy; and accumulated priority holds. Dashed teal lines on the map are currently valid radio edges.

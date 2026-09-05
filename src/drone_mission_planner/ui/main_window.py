@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -65,7 +66,9 @@ from drone_mission_planner.simulation.reporting import build_simulation_report, 
 from .environment_panel import EnvironmentPanel
 from .map_view import MapView, RenderMode, ToolMode
 from .property_panel import PropertyPanel
+from .scene3d_export import build_scene3d
 from .statistics_panel import StatisticsPanel
+from .view3d import LAYERS, VIEW_PRESETS, ThreeDView
 
 LOGGER = logging.getLogger(__name__)
 
@@ -179,11 +182,30 @@ class MainWindow(QMainWindow):
         self.view_2d_action.setCheckable(True)
         self.view_25d_action = QAction("2.5D terrain view", self)
         self.view_25d_action.setCheckable(True)
+        self.view_3d_action = QAction("3D mission view", self)
+        self.view_3d_action.setCheckable(True)
         view_group = QActionGroup(self)
         view_group.setExclusive(True)
         view_group.addAction(self.view_2d_action)
         view_group.addAction(self.view_25d_action)
+        view_group.addAction(self.view_3d_action)
         self.view_2d_action.setChecked(True)
+        self.view_3d_preset_actions: dict[str, QAction] = {}
+        for preset in VIEW_PRESETS:
+            action = QAction(f"3D {preset} camera", self)
+            action.triggered.connect(
+                lambda checked=False, name=preset: self.three_d_view.apply_view_preset(name)
+            )
+            self.view_3d_preset_actions[preset] = action
+        self.view_3d_layer_actions: dict[str, QAction] = {}
+        for layer in LAYERS:
+            action = QAction(f"Show 3D {layer.replace('_', ' ')}", self)
+            action.setCheckable(True)
+            action.setChecked(True)
+            action.toggled.connect(
+                lambda checked, name=layer: self.three_d_view.set_layer_visible(name, checked)
+            )
+            self.view_3d_layer_actions[layer] = action
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
@@ -211,6 +233,13 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(self.view_2d_action)
         view_menu.addAction(self.view_25d_action)
+        view_menu.addAction(self.view_3d_action)
+        layer_menu = view_menu.addMenu("3D layers")
+        for layer in LAYERS:
+            layer_menu.addAction(self.view_3d_layer_actions[layer])
+        preset_menu = view_menu.addMenu("3D camera")
+        for preset in VIEW_PRESETS:
+            preset_menu.addAction(self.view_3d_preset_actions[preset])
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction(self.quick_start_action)
         help_menu.addAction(self.about_action)
@@ -248,6 +277,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.reset_view_action)
         toolbar.addAction(self.view_2d_action)
         toolbar.addAction(self.view_25d_action)
+        toolbar.addAction(self.view_3d_action)
         toolbar.addSeparator()
         project_label = QLabel("  LOCAL MISSION WORKSPACE")
         project_label.setStyleSheet("color: #70809a; font-size: 9pt; font-weight: 700;")
@@ -255,6 +285,10 @@ class MainWindow(QMainWindow):
 
     def _build_central(self) -> None:
         self.map_view = MapView(self)
+        self.three_d_view = ThreeDView()
+        self._view_stack = QStackedWidget()
+        self._view_stack.addWidget(self.map_view)
+        self._view_stack.addWidget(self.three_d_view)
         overlay = QWidget(self.map_view.viewport())
         overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         overlay.setStyleSheet("background: transparent;")
@@ -268,7 +302,7 @@ class MainWindow(QMainWindow):
         self.map_badge.setFixedWidth(220)
         overlay_layout.addWidget(self.map_badge, alignment=Qt.AlignmentFlag.AlignLeft)
         overlay_layout.addStretch()
-        self.setCentralWidget(self.map_view)
+        self.setCentralWidget(self._view_stack)
         self._overlay = overlay
 
     def _build_simulation_toolbar(self) -> None:
@@ -445,6 +479,10 @@ class MainWindow(QMainWindow):
         self.view_25d_action.triggered.connect(
             lambda: self.set_map_render_mode(RenderMode.TERRAIN_25D)
         )
+        self.view_3d_action.triggered.connect(
+            lambda: self.set_map_render_mode(RenderMode.THREE_D)
+        )
+        self.three_d_view.object_selected.connect(self.select_object)
         self.map_view.create_point_requested.connect(self.create_point_object)
         self.map_view.create_rect_requested.connect(self.create_rect_object)
         self.map_view.object_selected.connect(self.select_object)
@@ -885,7 +923,7 @@ class MainWindow(QMainWindow):
         self._render_assignment_table(result)
         self._render_altitude_table()
         self._populate_tree()
-        self.map_view.render_model()
+        self._render_map_if_visible()
         self._update_title()
         self.statusBar().showMessage(
             f"Assigned {result.assigned_count}/{len(self.service.project.map.tasks)} missions; "
@@ -1130,7 +1168,7 @@ class MainWindow(QMainWindow):
 
         engine.apply_replan(paths)
         self.service.dirty = True
-        self.map_view.render_model()
+        self._render_map_if_visible()
         self._populate_tree()
         self._render_event_table()
         self._render_altitude_table()
@@ -1233,7 +1271,7 @@ class MainWindow(QMainWindow):
         self._discard_simulation()
         self.coverage_results.clear()
         self.assignment_table.setRowCount(0)
-        self.map_view.render_model()
+        self._render_map_if_visible()
         self._update_summary()
         self._render_coverage_table()
         self._render_altitude_table()
@@ -1242,6 +1280,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, 7000)
 
     def set_map_render_mode(self, mode: RenderMode) -> None:
+        if mode == RenderMode.THREE_D:
+            self._view_stack.setCurrentWidget(self.three_d_view)
+            for action in self._tool_actions.values():
+                action.setEnabled(False)
+            self._refresh_scene3d()
+            self.statusBar().showMessage(
+                "3D mission view is read-only; left-drag orbits, right-drag pans, wheel zooms",
+                7000,
+            )
+            return
+        self._view_stack.setCurrentWidget(self.map_view)
         self.map_view.set_render_mode(mode)
         terrain_view = mode == RenderMode.TERRAIN_25D
         for tool_mode, action in self._tool_actions.items():
@@ -1337,6 +1386,12 @@ class MainWindow(QMainWindow):
             if first in positions and second in positions
         )
         self.map_view.set_communication_links(links)
+        self.three_d_view.update_live_positions(
+            {
+                state.id: (state.position, state.current_altitude)
+                for state in snapshot.drones
+            }
+        )
         self._render_map_if_visible()
         self._render_coverage_table(snapshot.coverage)
         self._render_altitude_table()
@@ -1361,8 +1416,42 @@ class MainWindow(QMainWindow):
             self.safety_table.setRowCount(0)
 
     def _render_map_if_visible(self) -> None:
-        if self.map_view.isVisible():
+        if self._view_stack.currentWidget() is self.three_d_view:
+            self._refresh_scene3d()
+        elif self.map_view.isVisible():
             self.map_view.render_model()
+
+    def _refresh_scene3d(self) -> None:
+        covered: dict[str, tuple[Point, ...]] | None = None
+        uncovered: dict[str, tuple[Point, ...]] | None = None
+        cell_size = 0.0
+        live_positions: dict[str, tuple[Point, float]] | None = None
+        if self.simulation_engine is not None:
+            monitor = self.simulation_engine.coverage_monitor
+            covered = {
+                area_id: tuple(point for point, _count in cells)
+                for area_id, cells in monitor.render_cells().items()
+            }
+            uncovered = monitor.uncovered_render_cells()
+            resolutions = [
+                monitor.resolution(area_id)
+                for area_id in covered
+                if monitor.resolution(area_id) > 0.0
+            ]
+            cell_size = min(resolutions) if resolutions else 0.0
+            live_positions = {
+                state.id: (state.position, state.current_altitude)
+                for state in self.simulation_engine.snapshot().drones
+            }
+        self.three_d_view.set_scene(
+            build_scene3d(
+                self.service.project.map,
+                covered_cells=covered,
+                uncovered_cells=uncovered,
+                coverage_cell_size=cell_size,
+                live_positions=live_positions,
+            )
+        )
 
     def delete_selected(self) -> None:
         if self._selected_id:
@@ -1395,6 +1484,7 @@ class MainWindow(QMainWindow):
         self._selected_id = object_id
         self.property_panel.set_object(item)
         self.map_view.set_selected_object(object_id)
+        self.three_d_view.set_selected_object(object_id)
         self._render_altitude_table()
         matches = self.object_tree.findItems(object_id, Qt.MatchFlag.MatchRecursive, 1)
         if matches:
@@ -1413,7 +1503,7 @@ class MainWindow(QMainWindow):
             self.coverage_results.pop(item.id, None)
             self._discard_simulation()
         self._render_altitude_table()
-        self.map_view.render_model()
+        self._render_map_if_visible()
         self._populate_tree()
         self.property_panel.set_object(item)
         self._update_title()
@@ -1433,11 +1523,13 @@ class MainWindow(QMainWindow):
         self._render_altitude_table()
         self._render_event_table()
         self._render_safety_table()
+        self._refresh_scene3d()
         if select_id:
             self.select_object(select_id)
         else:
             self._selected_id = None
             self.map_view.set_selected_object(None)
+            self.three_d_view.set_selected_object(None)
             self.property_panel.show_empty()
 
     def _populate_tree(self) -> None:

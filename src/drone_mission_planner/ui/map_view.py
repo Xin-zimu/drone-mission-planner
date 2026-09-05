@@ -61,6 +61,7 @@ class ToolMode(StrEnum):
 class RenderMode(StrEnum):
     TWO_D = "2d"
     TERRAIN_25D = "terrain_25d"
+    THREE_D = "three_d"
 
 
 class MapView(QGraphicsView):

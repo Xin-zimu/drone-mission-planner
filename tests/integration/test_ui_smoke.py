@@ -210,3 +210,55 @@ def test_coverage_sync_pushes_uncovered_cells_and_resolution(qtbot: object) -> N
     assert window.map_view._uncovered_cells != {}
     resolution = engine.coverage_monitor.resolution(area.id)
     assert window.map_view._coverage_resolutions.get(area.id) == resolution
+
+
+def test_3d_view_switch_syncs_scene_and_selection(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    drone = service.add_drone(Point(40.0, 20.0))
+    obstacle = service.add_obstacle(Rect(150.0, 100.0, 60.0, 40.0))
+    task = service.add_task(Point(300.0, 120.0))
+    drone.planned_path = [drone.position, task.position]
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    window.set_map_render_mode(RenderMode.THREE_D)
+
+    assert window._view_stack.currentWidget() is window.three_d_view
+    scene = window.three_d_view._scene
+    assert scene is not None
+    assert [route.object_id for route in scene.routes] == [drone.id]
+    assert {volume.object_id for volume in scene.volumes} == {obstacle.id}
+
+    window.select_object(drone.id)
+    assert window.three_d_view.selected_object == drone.id
+
+    window.view_2d_action.trigger()
+    assert window._view_stack.currentWidget() is window.map_view
+
+
+def test_3d_view_receives_live_simulation_positions(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 200.0))
+    drone = service.add_drone(Point(40.0, 200.0))
+    drone.planned_path = [drone.position, Point(400.0, 200.0)]
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    from drone_mission_planner.simulation.engine import SimulationEngine
+
+    engine = SimulationEngine(service.project.map)
+    window.simulation_engine = engine
+    engine.start()
+    engine.advance(3.0)
+    engine.pause()
+
+    window.set_map_render_mode(RenderMode.THREE_D)
+
+    scene = window.three_d_view._scene
+    assert scene is not None
+    marker = scene.markers[0]
+    live_position = engine.snapshot().drones[0].position
+    assert (marker.x, marker.y) == (live_position.x, live_position.y)

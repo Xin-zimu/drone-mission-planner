@@ -17,6 +17,7 @@
 | Mission editor | Zoomable grid map; bases, drones, point missions, obstacles, no-fly zones, polygon/rectangular search areas; inspector and object tree |
 | Route planning | Deterministic 8-connected A*, Octile heuristic, safety-radius inflation, corner-cut prevention, smoothing, final validation, and altitude-risk checks |
 | 3D waypoints | Every planned route also produces `x/y/altitude` waypoints with MSL/AGL mode, per-waypoint speed, actions (fly/hover/photo/scan/land/RTL), hold times, and task links |
+| 3D mission view | Read-only software-rendered 3D scene with terrain mesh, 3D routes, obstacle/no-fly volumes, coverage cells, risk segments, wind arrow, orbit camera, layer toggles, camera presets, and cross-view selection sync |
 | Assignment | Priority-first multi-drone allocation with payload, terrain/wind-aware energy, safe return, reserve, deadlines, and per-drone rejection reasons |
 | Cooperative search | Vertical strip partitioning, obstacle-safe lawnmower passes, incremental supplemental sweeps, return to base, live covered/uncovered-cell overlays, and repeat-coverage metrics |
 | Dynamic simulation | Fixed 0.05 s logic steps, 0.5x–10x playback, state machine, altitude/energy/distance/task integration, pause/step/reset |
@@ -82,6 +83,7 @@ Press `F1` inside the application for the quick-start guide.
 | Import elevation CSV | Workspace → Environment tab → Import elevation CSV |
 | Point mission planning | `Ctrl+Shift+P` |
 | Cooperative coverage | `Ctrl+Shift+C` |
+| 3D view | Toolbar or View menu; left-drag orbit, right-drag pan, wheel zoom; click to select |
 | Play / step | `Ctrl+Space` / `.` |
 | Inject selected-drone fault | `Ctrl+Shift+F` |
 | Export report | `Ctrl+E` |
