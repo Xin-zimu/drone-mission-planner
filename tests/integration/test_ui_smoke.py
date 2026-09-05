@@ -431,3 +431,33 @@ def test_replay_tab_updates_3d_view_and_jumps_to_events(qtbot: object) -> None:
 
     window._exit_replay()
     assert window.three_d_view._replay_markers is None
+
+def test_basemap_import_renders_on_2d_map(qtbot: object, tmp_path: Path) -> None:
+    from PySide6.QtGui import QColor, QPixmap
+
+    image = tmp_path / "map.png"
+    pixmap = QPixmap(60, 40)
+    pixmap.fill(QColor("#3355aa"))
+    assert pixmap.save(str(image))
+
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    before = len(window.map_view.scene().items())
+    window.service.set_basemap_file(str(image))
+    window.set_map_render_mode(RenderMode.TWO_D)
+
+    assert window.service.project.map.basemap is not None
+    shown = len(window.map_view.scene().items())
+    assert shown > before
+
+    window.service.update_basemap(visible=False)
+    window.map_view.render_model()
+    after_hide = len(window.map_view.scene().items())
+    assert after_hide < shown
+
+    # Keep the window from prompting to save when pytest tears it down.
+    window.service.dirty = False

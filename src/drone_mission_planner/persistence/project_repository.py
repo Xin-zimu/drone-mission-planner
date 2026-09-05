@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from drone_mission_planner.domain.basemap import BasemapModel
 from drone_mission_planner.domain.enums import (
     AltitudeMode,
     DroneStatus,
@@ -32,7 +33,7 @@ from drone_mission_planner.domain.wind import WindModel
 
 from .migrations import MigrationError, migrate_project
 
-CURRENT_VERSION = "1.4"
+CURRENT_VERSION = "1.5"
 
 
 class ProjectFormatError(ValueError):
@@ -237,11 +238,28 @@ class ProjectRepository:
         map_data = raw.get("map", {})
         grid_size = float(map_data.get("grid_size", 25.0))
         terrain = _terrain(map_data.get("terrain"), grid_size)
+        basemap_data = map_data.get("basemap")
+        basemap = (
+            BasemapModel(
+                file=str(basemap_data.get("file", "")),
+                opacity=float(basemap_data.get("opacity", 0.5)),
+                visible=bool(basemap_data.get("visible", True)),
+                locked=bool(basemap_data.get("locked", True)),
+                meters_per_pixel=float(basemap_data.get("meters_per_pixel", 1.0)),
+                origin_x=float(basemap_data.get("origin_x", 0.0)),
+                origin_y=float(basemap_data.get("origin_y", 0.0)),
+                flip_y=bool(basemap_data.get("flip_y", False)),
+                rotation_deg=float(basemap_data.get("rotation_deg", 0.0)),
+            )
+            if isinstance(basemap_data, dict) and basemap_data.get("file")
+            else None
+        )
         map_model = MapModel(
             width=int(map_data.get("width", 1000)),
             height=int(map_data.get("height", 700)),
             grid_size=grid_size,
             terrain=terrain,
+            basemap=basemap,
             wind=_wind(map_data.get("wind")),
             bases=[
                 BaseStation(

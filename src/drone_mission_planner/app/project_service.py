@@ -5,6 +5,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
+from drone_mission_planner.domain.basemap import BasemapModel
 from drone_mission_planner.domain.enums import AltitudeMode, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
@@ -155,6 +156,30 @@ class ProjectService:
             raise
         self.dirty = True
         return item
+
+    def set_basemap_file(self, file: str) -> BasemapModel:
+        """Attach a local image basemap (or clear it with an empty string)."""
+
+        self.project.map.basemap = BasemapModel(file=file)
+        self.dirty = True
+        return self.project.map.basemap
+
+    def update_basemap(self, **fields: Any) -> BasemapModel:
+        """Update calibration/display fields of the current basemap."""
+
+        basemap = self.project.map.basemap
+        if basemap is None:
+            raise ValueError("no basemap imported")
+        allowed = {
+            "opacity", "visible", "locked", "meters_per_pixel",
+            "origin_x", "origin_y", "flip_y", "rotation_deg",
+        }
+        for name, value in fields.items():
+            if name not in allowed:
+                raise ValueError(f"Basemap field {name!r} is not editable")
+            setattr(basemap, name, value)
+        self.dirty = True
+        return basemap
 
     def update_waypoint(self, drone_id: str, index: int, name: str, value: Any) -> Waypoint:
         """Edit one editable field of a drone waypoint and keep the path in sync."""

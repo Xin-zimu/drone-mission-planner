@@ -26,6 +26,7 @@
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
 | Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, event history, and HTML/JSON/CSV export |
 | Persistence | Human-readable `.dmproj` JSON, schema migration through 1.4 (three-dimensional waypoints), validation, and clear corrupt/incompatible-file errors |
+| Local basemap | Map → Import basemap… overlays a local PNG/JPG under the mission grid with opacity/lock and two-point metre calibration persisted in the project |
 | Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation and explicit not-flyable local-coordinate marking |
 
 ## Windows application

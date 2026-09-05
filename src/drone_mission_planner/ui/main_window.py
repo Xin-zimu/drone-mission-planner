@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -44,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from drone_mission_planner.app.project_service import ProjectService
+from drone_mission_planner.domain.basemap import derive_calibration
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import Drone, MapObject, MissionTask, SearchArea
@@ -100,6 +103,16 @@ from .scene3d_export import build_scene3d
 from .statistics_panel import StatisticsPanel
 from .view3d import LAYERS, VIEW_PRESETS, ThreeDView
 from .waypoint_panel import WaypointPanel
+
+
+def _pair_row(first: QDoubleSpinBox, second: QDoubleSpinBox) -> QWidget:
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(first)
+    layout.addWidget(second)
+    return row
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -213,6 +226,9 @@ class MainWindow(QMainWindow):
         self.import_mission_action = QAction("Import mission data…", self)
         self.export_replay_action = QAction("Export replay…", self)
         self.weights_action = QAction("Assignment weights…", self)
+        self.import_basemap_action = QAction("Import basemap…", self)
+        self.basemap_settings_action = QAction("Basemap settings…", self)
+        self.basemap_settings_action.setEnabled(False)
         self.quick_start_action = QAction("Quick start guide", self)
         self.quick_start_action.setShortcut("F1")
         self.about_action = QAction("About Drone Mission Planner", self)
@@ -261,6 +277,8 @@ class MainWindow(QMainWindow):
         map_menu = self.menuBar().addMenu("Map")
         map_menu.addAction(self.reset_view_action)
         map_menu.addAction(self.generate_environment_action)
+        map_menu.addAction(self.import_basemap_action)
+        map_menu.addAction(self.basemap_settings_action)
         planning_menu = self.menuBar().addMenu("Planning")
         planning_menu.addAction(self.plan_route_action)
         planning_menu.addAction(self.auto_assign_action)
@@ -537,6 +555,8 @@ class MainWindow(QMainWindow):
         self.import_mission_action.triggered.connect(self.import_mission_data)
         self.export_replay_action.triggered.connect(self.export_replay_json)
         self.weights_action.triggered.connect(self.edit_assignment_weights)
+        self.import_basemap_action.triggered.connect(self.import_basemap)
+        self.basemap_settings_action.triggered.connect(self.edit_basemap_settings)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
@@ -1034,6 +1054,116 @@ class MainWindow(QMainWindow):
         LOGGER.info("Simulation report exported to %s", saved)
         self.statusBar().showMessage(f"Report exported: {saved.name}", 6000)
 
+    def import_basemap(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self, "Import basemap image", "", "Images (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if not selected:
+            return
+        self.service.set_basemap_file(selected)
+        self.basemap_settings_action.setEnabled(True)
+        self._refresh_all()
+        LOGGER.info("Basemap imported: %s", selected)
+        self.statusBar().showMessage(
+            f"Basemap loaded: {Path(selected).name}; calibrate it in Basemap settings", 8000
+        )
+
+    def edit_basemap_settings(self) -> None:
+        basemap = self.service.project.map.basemap
+        if basemap is None:
+            QMessageBox.information(self, "No basemap", "Import a basemap image first.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Basemap settings")
+        form = QFormLayout(dialog)
+        opacity = QDoubleSpinBox()
+        opacity.setRange(0.05, 1.0)
+        opacity.setSingleStep(0.05)
+        opacity.setValue(basemap.opacity)
+        mpp = QDoubleSpinBox()
+        mpp.setRange(0.001, 1000.0)
+        mpp.setDecimals(4)
+        mpp.setValue(basemap.meters_per_pixel)
+        origin_x = QDoubleSpinBox()
+        origin_x.setRange(-100000.0, 100000.0)
+        origin_x.setValue(basemap.origin_x)
+        origin_y = QDoubleSpinBox()
+        origin_y.setRange(-100000.0, 100000.0)
+        origin_y.setValue(basemap.origin_y)
+        rotation = QDoubleSpinBox()
+        rotation.setRange(-180.0, 180.0)
+        rotation.setValue(basemap.rotation_deg)
+        flip = QCheckBox("Flip image y axis")
+        flip.setChecked(basemap.flip_y)
+        locked = QCheckBox("Lock basemap")
+        locked.setChecked(basemap.locked)
+        form.addRow("Opacity", opacity)
+        form.addRow("Metres per pixel", mpp)
+        form.addRow("Origin x", origin_x)
+        form.addRow("Origin y", origin_y)
+        form.addRow("Rotation (deg)", rotation)
+        form.addRow(flip)
+        form.addRow(locked)
+        cal_group = QGroupBox("Calibrate from two points")
+        cal_form = QFormLayout(cal_group)
+        world1x = QDoubleSpinBox()
+        world1x.setRange(-100000.0, 100000.0)
+        world1y = QDoubleSpinBox()
+        world1y.setRange(-100000.0, 100000.0)
+        pixel1x = QDoubleSpinBox()
+        pixel1x.setRange(-100000.0, 100000.0)
+        pixel1y = QDoubleSpinBox()
+        pixel1y.setRange(-100000.0, 100000.0)
+        world2x = QDoubleSpinBox()
+        world2x.setRange(-100000.0, 100000.0)
+        world2y = QDoubleSpinBox()
+        world2y.setRange(-100000.0, 100000.0)
+        pixel2x = QDoubleSpinBox()
+        pixel2x.setRange(-100000.0, 100000.0)
+        pixel2y = QDoubleSpinBox()
+        pixel2y.setRange(-100000.0, 100000.0)
+        cal_form.addRow("Point 1 world x / y", _pair_row(world1x, world1y))
+        cal_form.addRow("Point 1 image x / y", _pair_row(pixel1x, pixel1y))
+        cal_form.addRow("Point 2 world x / y", _pair_row(world2x, world2y))
+        cal_form.addRow("Point 2 image x / y", _pair_row(pixel2x, pixel2y))
+        form.addRow(cal_group)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.service.update_basemap(
+                opacity=opacity.value(),
+                meters_per_pixel=mpp.value(),
+                origin_x=origin_x.value(),
+                origin_y=origin_y.value(),
+                rotation_deg=rotation.value(),
+                flip_y=flip.isChecked(),
+                locked=locked.isChecked(),
+            )
+            if (world2x.value() != world1x.value() or world2y.value() != world1y.value()) and (
+                pixel2x.value() != pixel1x.value() or pixel2y.value() != pixel1y.value()
+            ):
+                meters_per_pixel, rotation_deg, origin = derive_calibration(
+                    Point(world1x.value(), world1y.value()),
+                    (pixel1x.value(), pixel1y.value()),
+                    Point(world2x.value(), world2y.value()),
+                    (pixel2x.value(), pixel2y.value()),
+                    flip_y=flip.isChecked(),
+                )
+                self.service.update_basemap(
+                    meters_per_pixel=meters_per_pixel,
+                    rotation_deg=rotation_deg,
+                    origin_x=origin.x,
+                    origin_y=origin.y,
+                )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Basemap settings rejected", str(exc))
+            return
+        self._refresh_all()
+        self.statusBar().showMessage("Basemap settings applied", 5000)
     def import_mission_data(self) -> None:
         selected_file, _ = QFileDialog.getOpenFileName(
             self,

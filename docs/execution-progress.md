@@ -4,7 +4,7 @@ Last updated: 2026-09-05
 
 ## Current checkpoint
 
-M10 (reports/examples/docs polish, headless scope) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
+M11 (local map basemap) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
 
 - Commit: `7ca7778 Initial project import`
 - Commit: `a7c0e40 Complete M8 altitude and incremental replanning`
@@ -19,11 +19,13 @@ M10 (reports/examples/docs polish, headless scope) is complete in the working tr
 - Commit: `6ea4008 Implement M9-full mission data import`
 - Commit: `1f7a168 Implement M15 simulation replay system`
 - Commit: `7722381 Implement M19 explainable planning`
+- Commit: `23d6989 Implement M10 examples and docs polish`
 - Branch: `main`
 
 ## Completed in this pass
 
-- M10 (this pass): three new example projects generated and regression-tested end to end (`3d_inspection_demo`, `altitude_risk_demo`, `waypoint_edit_demo`), added to the example integration test; the algorithms doc gained the 2D-A*-vs-waypoints-vs-3D-view boundary note; README example table updated. Pending GUI work: showcase screenshots/short video and the Word/PDF manual refresh.
+- M11 (this pass): `domain/basemap.py` adds the basemap model with pixel↔world transforms and two-point calibration (solving metres-per-pixel, rotation, and origin from two world/pixel pairs, with y-flip support); project schema 1.5 persists `map.basemap` with a 1.4→1.5 migration and round-trip coverage; the 2D map renders the image underlay beneath the mission grid with opacity/lock/z-order; Map → Import basemap… and Basemap settings… (display fields plus the calibration group) complete the UI. Deferred: using the basemap as a 3D terrain texture; exports remain marked not-flyable until real georeferencing exists.
+- M10 (previous pass): three new example projects generated and regression-tested end to end (`3d_inspection_demo`, `altitude_risk_demo`, `waypoint_edit_demo`), added to the example integration test; the algorithms doc gained the 2D-A*-vs-waypoints-vs-3D-view boundary note; README example table updated. Pending GUI work: showcase screenshots/short video and the Word/PDF manual refresh.
 - M19 (previous pass): configurable `AssignmentWeights` (defaults preserve the legacy ranking) accepted by `GreedyAssignmentPlanner`; `explain_assignments` scores every pending task/drone pair with the same feasibility rules and rejection reasons; `build_assignment_suggestions` turns those reasons into actionable tips. The Assignments table shows the top candidates per task in row tooltips; Planning → Assignment weights… edits and persists scalar weights into `planning_settings`; `SimulationReport.assignment_notes` embeds the assignment rationale in exported reports.
 - M15 (previous pass): `simulation/replay.py` records fixed-interval 3D snapshots inside the engine step (per-drone x/y/z/status/battery, coverage, processed-event count), exports replay JSON, and supports event-time jumps. The Replay workspace tab drives a timeline slider that shows historical drone positions as amber rings in the 3D view (labels marked "replay"); live position pushes pause while a replay is active, and Exit replay restores the live scene. Double-clicking an Events row jumps to that event's frame; File → Export replay… writes the JSON. Recording is read-only — a dedicated test proves it cannot change the deterministic simulation result.
 - M9-full (previous pass): `persistence/mission_import.py` parses GeoJSON (Polygon/Point/LineString), basic KML placemarks, and waypoint CSVs into a preview with counts, out-of-bounds/duplicate/empty-geometry warnings, and line-numbered errors; `apply_import` creates the objects through ProjectService (polygons keep their points, geometry routes get cruise/clearance altitudes, waypoint routes require a target drone). `ProjectService.replace_waypoints` replaces a whole waypoint list with validation and rollback. UI entry: File → Import mission data…
@@ -34,7 +36,7 @@ M10 (reports/examples/docs polish, headless scope) is complete in the working tr
 
 ## Validation
 
-- `.venv313\Scripts\python.exe -m pytest -q`: 187 passed.
+- `.venv313\Scripts\python.exe -m pytest -q`: 193 passed.
 - `.venv313\Scripts\python.exe -m mypy src tests`: success.
 - `.venv313\Scripts\python.exe -m ruff check src tests`: all checks passed.
 - `.venv313\Scripts\python.exe -m compileall -q src tests`: success.

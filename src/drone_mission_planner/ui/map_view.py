@@ -13,6 +13,8 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
+    QTransform,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -95,6 +97,8 @@ class MapView(QGraphicsView):
         self._communication_links: tuple[tuple[Point, Point], ...] = ()
         self._selected_id: str | None = None
         self._waypoint_highlight: tuple[str, int] | None = None
+        self._basemap_pixmap: QPixmap | None = None
+        self._basemap_loaded_for: str | None = None
         self._label_bounds: list[QRectF] = []
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
@@ -170,6 +174,7 @@ class MapView(QGraphicsView):
             self._add_terrain_legend()
             self._add_wind_overlay()
             return
+        self._add_basemap_item()
         for area in self._model.search_areas:
             self._add_search_area_item(area)
         self._add_coverage_overlay()
@@ -390,6 +395,31 @@ class MapView(QGraphicsView):
         min_y = min(point.y() for point in projected) - 80.0
         max_y = max(point.y() for point in projected) + 80.0
         self.setSceneRect(min_x, min_y, max_x - min_x, max_y - min_y)
+
+    def _add_basemap_item(self) -> None:
+        basemap = self._model.basemap
+        if basemap is None or not basemap.visible:
+            return
+        if self._basemap_loaded_for != basemap.file:
+            loaded = QPixmap(basemap.file)
+            if loaded.isNull():
+                self._basemap_pixmap = None
+                self._basemap_loaded_for = None
+                return
+            self._basemap_pixmap = loaded
+            self._basemap_loaded_for = basemap.file
+        if self._basemap_pixmap is None:
+            return
+        item = self._scene.addPixmap(self._basemap_pixmap)
+        transform = QTransform()
+        transform.translate(basemap.origin_x, basemap.origin_y)
+        transform.rotate(basemap.rotation_deg)
+        scale_y = -basemap.meters_per_pixel if basemap.flip_y else basemap.meters_per_pixel
+        transform.scale(basemap.meters_per_pixel, scale_y)
+        item.setTransform(transform)
+        item.setOpacity(max(0.05, min(1.0, basemap.opacity)))
+        item.setZValue(-100)
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not basemap.locked)
 
     def _add_waypoint_highlight(self) -> None:
         highlighted = self._highlighted_waypoint_2d()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .basemap import BasemapModel
 from .enums import DroneStatus, ObstacleShape, TaskStatus, TaskType
 from .geometry import Point, Rect
 from .terrain import TerrainModel
@@ -115,6 +116,7 @@ class MapModel:
     height: int = 700
     grid_size: float = 25.0
     terrain: TerrainModel = field(default_factory=TerrainModel)
+    basemap: BasemapModel | None = None
     wind: WindModel = field(default_factory=WindModel)
     obstacles: list[Obstacle] = field(default_factory=list)
     no_fly_zones: list[NoFlyZone] = field(default_factory=list)
