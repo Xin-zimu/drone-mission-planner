@@ -1,0 +1,146 @@
+{
+  "map": {
+    "bases": [
+      {
+        "communication_range": 180.0,
+        "id": "B-01",
+        "name": "Base 1",
+        "position": {
+          "x": 40.0,
+          "y": 40.0
+        }
+      }
+    ],
+    "drones": [
+      {
+        "air_speed": 0.0,
+        "assigned_tasks": [
+          "T-01"
+        ],
+        "battery_capacity": 100.0,
+        "climb_power": 140.0,
+        "climb_rate": 3.0,
+        "communication_range": 180.0,
+        "cruise_altitude": 60.0,
+        "current_payload": 0.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.08,
+        "home_base_id": "B-01",
+        "horizontal_power": 110.0,
+        "hover_power": 90.0,
+        "id": "D-01",
+        "max_speed": 15.0,
+        "min_clearance": 40.0,
+        "name": "Drone 1",
+        "payload_capacity": 3.0,
+        "planned_path": [
+          {
+            "x": 60.0,
+            "y": 60.0
+          },
+          {
+            "x": 420.0,
+            "y": 120.0
+          }
+        ],
+        "position": {
+          "x": 60.0,
+          "y": 60.0
+        },
+        "remaining_battery": 100.0,
+        "safety_radius": 6.0,
+        "status": "idle",
+        "waypoints": [
+          {
+            "action": "fly_to",
+            "altitude": 60.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 0.0,
+            "speed": null,
+            "task_id": null,
+            "x": 60.0,
+            "y": 60.0
+          },
+          {
+            "action": "hover",
+            "altitude": 90.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 3.0,
+            "speed": null,
+            "task_id": "T-01",
+            "x": 420.0,
+            "y": 120.0
+          }
+        ]
+      }
+    ],
+    "grid_size": 25.0,
+    "height": 700,
+    "no_fly_zones": [],
+    "obstacles": [
+      {
+        "bounds": {
+          "height": 60.0,
+          "width": 80.0,
+          "x": 220.0,
+          "y": 90.0
+        },
+        "height": 150.0,
+        "id": "O-01",
+        "name": "Obstacle 1",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      }
+    ],
+    "search_areas": [],
+    "tasks": [
+      {
+        "assigned_drone_id": "D-01",
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-01",
+        "name": "Inspection 1",
+        "position": {
+          "x": 420.0,
+          "y": 120.0
+        },
+        "priority": 5,
+        "required_payload": 0.0,
+        "status": "assigned",
+        "target_altitude": 90.0,
+        "task_type": "inspection"
+      }
+    ],
+    "terrain": {
+      "base_altitude": 0.0,
+      "grid_altitudes": [],
+      "grid_height": 0,
+      "grid_origin": null,
+      "grid_width": 0,
+      "max_altitude": 0.0,
+      "min_altitude": 0.0,
+      "peaks": [],
+      "resolution": 25.0,
+      "terrain_type": "flat"
+    },
+    "width": 1000,
+    "wind": {
+      "direction_to_deg": 0.0,
+      "enabled": false,
+      "gust_factor": 0.0,
+      "speed": 0.0
+    }
+  },
+  "name": "Altitude risk demo",
+  "planning_settings": {},
+  "simulation_settings": {
+    "communication_grace": 5.0,
+    "communication_policy": "log_only",
+    "fixed_dt": 0.05,
+    "random_seed": 42
+  },
+  "version": "1.4"
+}

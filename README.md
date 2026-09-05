@@ -70,6 +70,9 @@ Press `F1` inside the application for the quick-start guide.
 | `examples/mountain_wind_demo.dmproj` | Terrain and wind-aware task assignment with two procedural peaks, northeast wind, and altitude-specific inspections |
 | `examples/safety_constraints_demo.dmproj` | Crossing-flight priority hold and a three-relay communication chain |
 | `examples/fault_replanning_demo.dmproj` | Point-mission failure and redistribution from live state |
+| `examples/3d_inspection_demo.dmproj` | Two-drone mountain inspection with target altitudes, hover/photo task actions, and 3D simulation |
+| `examples/altitude_risk_demo.dmproj` | A low cruise route into a tall obstacle, showing critical altitude risks in reports and export validation |
+| `examples/waypoint_edit_demo.dmproj` | Waypoints-tab showcase: AGL/MSL modes, per-waypoint speed, hover/photo/land actions |
 
 ## Controls
 

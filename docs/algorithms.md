@@ -1,5 +1,11 @@
 # Algorithms
 
+The pipeline deliberately separates three layers: the **2D A\*** grid owns
+horizontal obstacle avoidance, the **three-dimensional waypoint model** owns
+commanded altitudes/speeds/actions attached to the resulting geometry, and the
+**3D visualization** renders those waypoints without re-planning. No 3D search
+is performed: altitude is validated and simulated after the 2D route exists.
+
 ## Grid conversion
 
 World coordinates are converted to a configurable planning grid. Rectangular obstacles and no-fly zones mark occupied cells. Each occupied region is expanded by the active drone's safety radius before planning.

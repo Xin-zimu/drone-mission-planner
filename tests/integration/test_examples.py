@@ -14,7 +14,16 @@ from drone_mission_planner.simulation.engine import SimulationEngine
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 
-@pytest.mark.parametrize("filename", ["inspection_demo.dmproj", "delivery_demo.dmproj"])
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "inspection_demo.dmproj",
+        "delivery_demo.dmproj",
+        "3d_inspection_demo.dmproj",
+        "altitude_risk_demo.dmproj",
+        "waypoint_edit_demo.dmproj",
+    ],
+)
 def test_point_mission_examples_open_and_complete(filename: str) -> None:
     project = ProjectRepository().load(EXAMPLES / filename)
     engine = SimulationEngine(project.map)
