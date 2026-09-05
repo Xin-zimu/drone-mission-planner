@@ -100,6 +100,41 @@ def scanline_intervals(polygon: list[Point], y: float) -> list[tuple[float, floa
     ]
 
 
+def _in_any_hole(point: Point, area: SearchArea) -> bool:
+    return any(point_in_polygon(point, hole) for hole in area.holes if len(hole) >= 3)
+
+
+def scanline_intervals_with_holes(
+    polygon: list[Point], holes: list[list[Point]], y: float
+) -> list[tuple[float, float]]:
+    """Polygon scanline intervals minus the intervals covered by holes."""
+
+    intervals = scanline_intervals(polygon, y)
+    for hole in holes:
+        if len(hole) < 3:
+            continue
+        for hole_start, hole_end in scanline_intervals(hole, y):
+            intervals = _subtract_interval(intervals, hole_start, hole_end)
+    return intervals
+
+
+def _subtract_interval(
+    intervals: list[tuple[float, float]],
+    remove_start: float,
+    remove_end: float,
+) -> list[tuple[float, float]]:
+    result: list[tuple[float, float]] = []
+    for start, end in intervals:
+        if remove_end <= start or remove_start >= end:
+            result.append((start, end))
+            continue
+        if remove_start > start:
+            result.append((start, remove_start))
+        if remove_end < end:
+            result.append((remove_end, end))
+    return result
+
+
 def coverage_resolution_for(map_model: MapModel, area: SearchArea) -> float:
     return max(5.0, min(map_model.grid_size, area.scan_spacing / 2.0))
 
@@ -128,7 +163,11 @@ def target_cells_for_area(
         for y in range(floor(min_y / cell_resolution), ceil(max_y / cell_resolution)):
             cell = (x, y)
             center = coverage_cell_center(cell, cell_resolution)
-            if point_in_polygon(center, polygon) and not _blocked_for_coverage(map_model, center):
+            if (
+                point_in_polygon(center, polygon)
+                and not _in_any_hole(center, area)
+                and not _blocked_for_coverage(map_model, center)
+            ):
                 targets.add(cell)
     return frozenset(targets)
 
@@ -148,10 +187,11 @@ class CoveragePlanner:
         covered_cells: Iterable[CoverageCell] | None = None,
         coverage_resolution: float | None = None,
     ) -> CoveragePlanResult:
+        pool = map_model.drones if drones is None else drones
         selected = sorted(
             (
                 drone
-                for drone in (drones or map_model.drones)
+                for drone in pool
                 if drone.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
             ),
             key=lambda item: item.id,
@@ -180,7 +220,13 @@ class CoveragePlanner:
         if incremental:
             safety_radius = max(drone.safety_radius for drone in selected)
             grid = GridMap.from_map(map_model, safety_radius=safety_radius)
-            strips = self._build_incremental_strips(remaining, resolution, selected, grid)
+            strips = self._build_incremental_strips(
+                remaining,
+                resolution,
+                selected,
+                grid,
+                row_pitch=max(resolution, area.scan_spacing),
+            )
         else:
             strips = self.build_strips(map_model, area, selected)
         result = CoveragePlanResult(
@@ -199,6 +245,81 @@ class CoveragePlanner:
         )
         return result
 
+    def _build_strips_vertical(
+        self, map_model: MapModel, area: SearchArea, drones: list[Drone]
+    ) -> tuple[CoverageStrip, ...]:
+        """Vertical lawnmower: columns separated along x, passes along y."""
+
+        polygon = area.polygon()
+        min_x = min(point.x for point in polygon)
+        max_x = max(point.x for point in polygon)
+        min_y = min(point.y for point in polygon)
+        max_y = max(point.y for point in polygon)
+        height = max_y - min_y
+        spacing = max(1.0, area.scan_spacing)
+        margin = max(0.0, area.boundary_margin)
+        x_start = min_x + margin
+        x_end = max_x - margin
+        if x_start > x_end:
+            x_start = x_end = (min_x + max_x) / 2.0
+        column_count = max(1, floor((x_end - x_start) / spacing) + 1)
+        columns = [x_start + index * spacing for index in range(column_count)]
+        if columns[-1] < x_end - spacing * 0.35:
+            columns.append(x_end)
+        swapped_polygon = [Point(point.y, point.x) for point in polygon]
+        swapped_holes = [[Point(point.y, point.x) for point in hole] for hole in area.holes]
+        strips: list[CoverageStrip] = []
+        for index, drone in enumerate(drones):
+            strip_min = min_y + height * index / len(drones)
+            strip_max = min_y + height * (index + 1) / len(drones)
+            grid = GridMap.from_map(map_model, safety_radius=drone.safety_radius)
+            passes: list[CoveragePass] = []
+            reverse = bool(index % 2)
+            for x in columns:
+                column_segments: list[tuple[Point, Point]] = []
+                for interval_min, interval_max in scanline_intervals_with_holes(
+                    swapped_polygon, swapped_holes, x
+                ):
+                    top = max(strip_min, interval_min + margin)
+                    bottom = min(strip_max, interval_max - margin)
+                    column_segments.extend(_free_segments_vertical(grid, top, bottom, x))
+                if not column_segments:
+                    continue
+                ordered = list(reversed(column_segments)) if reverse else column_segments
+                for start_point, end_point in ordered:
+                    start, end = (
+                        (end_point, start_point) if reverse else (start_point, end_point)
+                    )
+                    passes.append(CoveragePass(start, end))
+                    reverse = not reverse
+            strips.append(CoverageStrip(index, drone.id, strip_min, strip_max, tuple(passes)))
+        return tuple(strips)
+
+    def plan_all_areas(
+        self,
+        map_model: MapModel,
+        *,
+        covered_by_area: dict[str, Iterable[CoverageCell]] | None = None,
+    ) -> dict[str, CoveragePlanResult]:
+        """Plan every search area, honouring priority order and drone reuse."""
+
+        covered_map = covered_by_area or {}
+        results: dict[str, CoveragePlanResult] = {}
+        used_drone_ids: set[str] = set()
+        operational = [
+            drone
+            for drone in map_model.drones
+            if drone.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
+        ]
+        for area in sorted(map_model.search_areas, key=lambda item: (-item.priority, item.id)):
+            pool = [drone for drone in operational if drone.id not in used_drone_ids]
+            result = self.plan(map_model, area, pool, covered_cells=covered_map.get(area.id))
+            results[area.id] = result
+            for drone_id, path in result.drone_paths.items():
+                if path:
+                    used_drone_ids.add(drone_id)
+        return results
+
     def coverage_resolution_for(self, map_model: MapModel, area: SearchArea) -> float:
         return coverage_resolution_for(map_model, area)
 
@@ -216,6 +337,8 @@ class CoveragePlanner:
     def build_strips(
         self, map_model: MapModel, area: SearchArea, drones: list[Drone]
     ) -> tuple[CoverageStrip, ...]:
+        if area.scan_direction == "vertical":
+            return self._build_strips_vertical(map_model, area, drones)
         polygon = area.polygon()
         min_x = min(point.x for point in polygon)
         max_x = max(point.x for point in polygon)
@@ -242,7 +365,9 @@ class CoveragePlanner:
             reverse = bool(index % 2)
             for y in rows:
                 row_segments: list[tuple[Point, Point]] = []
-                for interval_min, interval_max in scanline_intervals(polygon, y):
+                for interval_min, interval_max in scanline_intervals_with_holes(
+                    polygon, area.holes, y
+                ):
                     left = max(strip_min, interval_min + margin)
                     right = min(strip_max, interval_max - margin)
                     row_segments.extend(_free_segments(grid, left, right, y))
@@ -262,12 +387,19 @@ class CoveragePlanner:
         resolution: float,
         drones: list[Drone],
         grid: GridMap,
+        *,
+        row_pitch: float | None = None,
     ) -> tuple[CoverageStrip, ...]:
         loads = {drone.id: 0.0 for drone in drones}
         strips: list[CoverageStrip] = []
         clusters = sorted(_cluster_cells(remaining_cells), key=_cluster_sort_key)
         for index, cluster in enumerate(clusters):
-            passes = _passes_for_cluster(cluster, resolution, grid)
+            passes = _passes_for_cluster(
+                cluster,
+                resolution,
+                grid,
+                row_skip=max(1, round(row_pitch / resolution)) if row_pitch else 1,
+            )
             if not passes:
                 continue
             center = _cluster_center(cluster, resolution)
@@ -354,6 +486,40 @@ class CoveragePlanner:
                 ).energy
 
 
+def _free_segments_vertical(
+    grid: GridMap, top: float, bottom: float, x: float
+) -> list[tuple[Point, Point]]:
+    """Free column segments, mirroring the horizontal sampler."""
+
+    if bottom - top < grid.resolution * 0.35:
+        return []
+    step = max(1.0, grid.resolution * 0.25)
+    segments: list[tuple[Point, Point]] = []
+    segment_start: Point | None = None
+    previous_free: Point | None = None
+    candidate = top
+    while candidate <= bottom:
+        point = Point(x, candidate)
+        free = not grid.is_blocked(grid.world_to_cell(point))
+        if free:
+            if segment_start is None:
+                segment_start = point
+            previous_free = point
+        elif segment_start is not None and previous_free is not None:
+            if previous_free.y - segment_start.y >= grid.resolution * 0.35:
+                segments.append((segment_start, previous_free))
+            segment_start = None
+            previous_free = None
+        candidate += step
+    if segment_start is not None and previous_free is not None:
+        end_y = bottom if not grid.is_blocked(grid.world_to_cell(Point(x, bottom))) else (
+            previous_free.y
+        )
+        if end_y - segment_start.y >= grid.resolution * 0.35:
+            segments.append((segment_start, Point(x, end_y)))
+    return segments
+
+
 def _free_segments(grid: GridMap, left: float, right: float, y: float) -> list[tuple[Point, Point]]:
     if right - left < grid.resolution * 0.35:
         return []
@@ -428,13 +594,18 @@ def _passes_for_cluster(
     cells: frozenset[CoverageCell],
     resolution: float,
     grid: GridMap | None = None,
+    *,
+    row_skip: int = 1,
 ) -> tuple[CoveragePass, ...]:
     rows: dict[int, list[int]] = defaultdict(list)
     for x, y in cells:
         rows[y].append(x)
     passes: list[CoveragePass] = []
     reverse = False
-    for y in sorted(rows):
+    # Sweep rows at the configured pitch instead of every grid row; the
+    # sensor footprint (90% of scan spacing) still covers the skipped rows.
+    selected_rows = sorted(rows)[:: max(1, row_skip)] if row_skip > 1 else sorted(rows)
+    for y in selected_rows:
         chunks = _contiguous_chunks(sorted(rows[y]))
         ordered = list(reversed(chunks)) if reverse else chunks
         for min_x, max_x in ordered:

@@ -95,6 +95,9 @@ class SearchArea:
     scan_spacing: float = 45.0
     boundary_margin: float = 8.0
     target_coverage: float = 0.95
+    holes: list[list[Point]] = field(default_factory=list)
+    priority: int = 0
+    scan_direction: str = "horizontal"
 
     def polygon(self) -> list[Point]:
         if self.points:

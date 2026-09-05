@@ -141,7 +141,7 @@ class PropertyPanel(QScrollArea):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
         for field in fields(item):
-            if field.name in {"assigned_tasks", "planned_path", "waypoints", "points"}:
+            if field.name in {"assigned_tasks", "planned_path", "waypoints", "points", "holes"}:
                 continue
             value = getattr(item, field.name)
             label = DISPLAY_NAMES.get(field.name, field.name.replace("_", " ").title())

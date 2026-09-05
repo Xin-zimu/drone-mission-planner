@@ -322,6 +322,13 @@ class ProjectRepository:
                     scan_spacing=float(item.get("scan_spacing", 45.0)),
                     boundary_margin=float(item.get("boundary_margin", 8.0)),
                     target_coverage=float(item.get("target_coverage", 0.95)),
+                    holes=[
+                        [_point(point) for point in hole]
+                        for hole in item.get("holes", [])
+                        if isinstance(hole, list)
+                    ],
+                    priority=int(item.get("priority", 0)),
+                    scan_direction=str(item.get("scan_direction", "horizontal")),
                 )
                 for item in map_data.get("search_areas", [])
             ],

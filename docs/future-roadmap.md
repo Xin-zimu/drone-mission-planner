@@ -145,7 +145,7 @@ M20 产品化基础
 | M14 | 风险评估 | 电量/通信/地形/空域风险评分 | 已完成核心实现 |
 | M15 | 回放系统 | 时间轴和历史状态复盘 | 已完成核心实现 |
 | M16 | 设备库 | 机型、电池、载荷、任务模板 | 已完成核心实现 |
-| M17 | 高级覆盖 | 多区域、洞、优先级、方向优化 | 计划中 |
+| M17 | 高级覆盖 | 多区域、洞、优先级、方向优化 | 已完成核心实现 |
 | M18 | 协同优化 | 时空预约、等待点、通道管制、中继机 | 计划中 |
 | M19 | 可解释规划 | 分配解释、失败原因、优化建议 | 已完成核心实现 |
 | M20 | 产品化 | 撤销/重做、自动保存、最近项目、设置页 | 计划中 |
@@ -685,6 +685,15 @@ class Waypoint:
 - 多区域能同时生成覆盖路线。
 - 故障后补扫路径明显短于完整重扫。
 - 风向调整能减少逆风长航段。
+
+### 实施记录（M17，2026-09-05）
+
+- SearchArea 新增 `holes`（内部洞多边形）、`priority`、`scan_direction`（horizontal/vertical），随 schema 持久化（带默认值，老项目无需迁移步骤）。
+- 覆盖目标格与扫描线均扣除洞：`target_cells_for_area` 排除洞内格；`scanline_intervals_with_holes` 在扫描线上做区间减法，条带端点不进入洞。
+- `scan_direction="vertical"`：列间距沿 x、扫描沿 y 的转置式 lawnmower（含 `_free_segments_vertical` 采样）。
+- `CoveragePlanner.plan_all_areas`：按 (-priority, id) 排序多区域规划，无人机跨区域不复用，电量/可用性不足的区域给出 "No drones available" 失败原因（保关键区域）；UI Planning → Plan all coverage areas。
+- 补扫优化：增量扫描行按 scan_spacing 合并（此前按网格分辨率逐行，扫描长度约为所需的 2.5 倍），传感器足迹仍覆盖被合并行。
+- 偏差说明：按风向自动选择扫描方向未实现，先提供手动 scan_direction。
 
 ## 19. M18：协同避碰与中继优化
 

@@ -209,6 +209,8 @@ class MainWindow(QMainWindow):
         self.auto_assign_action.setShortcut("Ctrl+Shift+P")
         self.plan_coverage_action = QAction("Plan area coverage", self)
         self.plan_coverage_action.setShortcut("Ctrl+Shift+C")
+        self.plan_all_coverage_action = QAction("Plan all coverage areas", self)
+        self.plan_all_coverage_action.setShortcut("Ctrl+Shift+A")
         self.play_action = QAction("Play", self)
         self.play_action.setShortcut("Ctrl+Space")
         self.pause_action = QAction("Pause", self)
@@ -284,6 +286,7 @@ class MainWindow(QMainWindow):
         planning_menu.addAction(self.plan_route_action)
         planning_menu.addAction(self.auto_assign_action)
         planning_menu.addAction(self.plan_coverage_action)
+        planning_menu.addAction(self.plan_all_coverage_action)
         planning_menu.addAction(self.weights_action)
         planning_menu.addAction(self.equipment_action)
         simulation_menu = self.menuBar().addMenu("Simulation")
@@ -545,6 +548,7 @@ class MainWindow(QMainWindow):
         self.plan_route_action.triggered.connect(self.plan_selected_route)
         self.auto_assign_action.triggered.connect(self.auto_assign_tasks)
         self.plan_coverage_action.triggered.connect(self.plan_area_coverage)
+        self.plan_all_coverage_action.triggered.connect(self.plan_all_coverage_areas)
         self.play_action.triggered.connect(self.play_simulation)
         self.pause_action.triggered.connect(self.pause_simulation)
         self.step_action.triggered.connect(self.step_simulation)
@@ -795,6 +799,56 @@ class MainWindow(QMainWindow):
             f"{result.total_distance:.1f} m total",
             8000,
         )
+
+    def plan_all_coverage_areas(self) -> None:
+        if not self.service.project.map.search_areas or not self.service.project.map.drones:
+            QMessageBox.information(
+                self,
+                "Nothing to cover",
+                "Add search areas and drones before planning coverage.",
+            )
+            return
+        LOGGER.info(
+            "Planning %d coverage areas by priority",
+            len(self.service.project.map.search_areas),
+        )
+        results = self.coverage_planner.plan_all_areas(self.service.project.map)
+        self._discard_simulation()
+        self.service.project.planning_settings["mission_mode"] = "coverage"
+        ordered = sorted(
+            self.service.project.map.search_areas,
+            key=lambda area: (-area.priority, area.id),
+        )
+        summaries: list[str] = []
+        assigned: set[str] = set()
+        for area in ordered:
+            result = results[area.id]
+            self.coverage_results[area.id] = result
+            for drone in self.service.project.map.drones:
+                path = result.drone_paths.get(drone.id, [])
+                if path and drone.id not in assigned:
+                    drone.planned_path = path
+                    drone.waypoints = result.drone_waypoints.get(drone.id, [])
+                    assigned.add(drone.id)
+                elif not path:
+                    drone.planned_path = []
+                    drone.waypoints = []
+            if result.failures:
+                summaries.append(
+                    f"{area.id}: {', '.join(f'{k}: {v}' for k, v in result.failures.items())}"
+                )
+            else:
+                summaries.append(f"{area.id}: {result.total_distance:.0f} m planned")
+        self.service.dirty = True
+        self._render_coverage_table()
+        self._render_altitude_table()
+        self._populate_tree()
+        self._render_map_if_visible()
+        self._update_title()
+        self.workspace_tabs.setCurrentWidget(self.coverage_table)
+        message = " | ".join(summaries)
+        LOGGER.info("Multi-area coverage: %s", message)
+        self.statusBar().showMessage(message, 10000)
 
     def _render_coverage_table(
         self, snapshots: tuple[AreaCoverageSnapshot, ...] | None = None

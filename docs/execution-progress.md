@@ -4,7 +4,7 @@ Last updated: 2026-09-05
 
 ## Current checkpoint
 
-M16 (equipment library) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
+M17 (advanced coverage planning) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
 
 - Commit: `7ca7778 Initial project import`
 - Commit: `a7c0e40 Complete M8 altitude and incremental replanning`
@@ -21,10 +21,12 @@ M16 (equipment library) is complete in the working tree and is intended to be ca
 - Commit: `7722381 Implement M19 explainable planning`
 - Commit: `23d6989 Implement M10 examples and docs polish`
 - Commit: `7c500a3 Implement M11 local map basemap`
+- Commit: `112d488 Implement M16 equipment library`
 - Branch: `main`
 
 ## Completed in this pass
 
+- M17 (this pass): search areas gained holes (excluded from coverage targets and scanlines via interval subtraction), priority, and a horizontal/vertical `scan_direction` (transposed lawnmower); `CoveragePlanner.plan_all_areas` plans areas in priority order without reusing drones so scarce aircraft protect high-priority zones; supplemental sweeps now merge grid rows to the scan pitch (previously 2.5x overscanned); Planning → Plan all coverage areas UI. Deferred: wind-based automatic direction choice.
 - M16 (this pass): `domain/equipment.py` equipment library (drone models, battery packs with effective-capacity maths, payloads, mission templates) persisted as project schema 1.6 with a 1.5→1.6 migration; ProjectService helpers create drones from models (all flight/energy parameters carried over), re-fit batteries (usable energy recomputed), attach payloads (weight feeds assignment feasibility AND energy through `required_payload + current_payload`), and apply mission templates; Planning → Equipment library… dialog manages it all. Deferred: global (cross-project) library storage.
 - M11 (previous pass): `domain/basemap.py` adds the basemap model with pixel↔world transforms and two-point calibration (solving metres-per-pixel, rotation, and origin from two world/pixel pairs, with y-flip support); project schema 1.5 persists `map.basemap` with a 1.4→1.5 migration and round-trip coverage; the 2D map renders the image underlay beneath the mission grid with opacity/lock/z-order; Map → Import basemap… and Basemap settings… (display fields plus the calibration group) complete the UI. Deferred: using the basemap as a 3D terrain texture; exports remain marked not-flyable until real georeferencing exists.
 - M10 (previous pass): three new example projects generated and regression-tested end to end (`3d_inspection_demo`, `altitude_risk_demo`, `waypoint_edit_demo`), added to the example integration test; the algorithms doc gained the 2D-A*-vs-waypoints-vs-3D-view boundary note; README example table updated. Pending GUI work: showcase screenshots/short video and the Word/PDF manual refresh.
@@ -38,7 +40,7 @@ M16 (equipment library) is complete in the working tree and is intended to be ca
 
 ## Validation
 
-- `.venv313\Scripts\python.exe -m pytest -q`: 202 passed.
+- `.venv313\Scripts\python.exe -m pytest -q`: 207 passed.
 - `.venv313\Scripts\python.exe -m mypy src tests`: success.
 - `.venv313\Scripts\python.exe -m ruff check src tests`: all checks passed.
 - `.venv313\Scripts\python.exe -m compileall -q src tests`: success.
