@@ -52,6 +52,12 @@ Switch between **2D edit view**, **2.5D terrain view**, and **3D mission view** 
 
 Left-drag orbits the camera, right-drag (or middle-drag) pans, and the wheel zooms. Clicking a drone, route, obstacle, or no-fly volume selects it everywhere — the object tree, inspector, and 2D map stay in sync. The **View → 3D layers** submenu toggles terrain, routes, obstacles, no-fly zones, coverage, risk segments, and labels; **View → 3D camera** offers top, iso, side, and follow-drone presets. Orange and red route segments show altitude warnings and critical risks exactly as on the 2D map.
 
+## Route export
+
+Use **File → Export route…** (`Ctrl+Shift+E`) after planning to write the selected drone's three-dimensional waypoints. The format follows the chosen extension: internal **JSON** (every waypoint field plus altitude-risk summaries), **CSV** (one waypoint per line for spreadsheets), **QGroundControl `.plan`** (MAVLink takeoff/waypoint/loiter/camera/RTL items), or **ArduPilot WPL** text. Export is refused — with the offending drone and leg named — when the route has critical altitude risks, insufficient battery, no home base, or no waypoints.
+
+All exporters write the project's local metric coordinates and mark the file `flyable: false` with an explicit warning: without a georeferencing calibration these files are for inspection only and must not be flown directly.
+
 ## Safety and communication
 
 Open the **Safety & links** tab during simulation. Each drone reports Direct, Relay, or Lost; shortest hop count; nearest-base distance; disconnect duration; active policy; and accumulated priority holds. Dashed teal lines on the map are currently valid radio edges.

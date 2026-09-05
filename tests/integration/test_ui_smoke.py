@@ -353,3 +353,48 @@ def test_waypoint_delete_guards_reject_structural_vertices(
     window._on_waypoint_delete_requested(drone.id, 1)
 
     assert len(window.service.project.map.drones[0].waypoints) == 2
+
+def test_route_export_menu_writes_and_rejects(
+    qtbot: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json as _json
+
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    drone = service.add_drone(Point(40.0, 20.0))
+    drone.planned_path = [drone.position, Point(300.0, 120.0)]
+    drone.waypoints = [
+        Waypoint(40.0, 20.0, altitude=100.0),
+        Waypoint(300.0, 120.0, altitude=120.0),
+    ]
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+    window.select_object(drone.id)
+
+    target = tmp_path / "route.json"
+    monkeypatch.setattr(
+        "drone_mission_planner.ui.main_window.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(target), "Route JSON (*.json)"),
+    )
+    window.export_selected_route()
+
+    payload = _json.loads(target.read_text(encoding="utf-8"))
+    assert payload["drone_id"] == drone.id
+    assert len(payload["waypoints"]) == 2
+
+    empty_service = ProjectService()
+    empty_window = MainWindow(empty_service)
+    qtbot.addWidget(empty_window)  # type: ignore[attr-defined]
+    shown: list[tuple[str, str]] = []
+
+    def capture_information(parent: object, title: str, message: str) -> object:
+        shown.append((title, message))
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(
+        "drone_mission_planner.ui.main_window.QMessageBox.information",
+        capture_information,
+    )
+    empty_window.export_selected_route()
+    assert shown and shown[0][0] == "Nothing to export"

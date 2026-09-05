@@ -49,6 +49,13 @@ from drone_mission_planner.domain.terrain import (
 from drone_mission_planner.domain.waypoint import waypoint_msl_altitude
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
+from drone_mission_planner.persistence.route_export import (
+    RouteExportError,
+    export_route_csv,
+    export_route_json,
+    export_route_qgc_plan,
+    export_route_wpl,
+)
 from drone_mission_planner.persistence.terrain_import import TerrainImportError, load_terrain_csv
 from drone_mission_planner.planning.altitude_validator import (
     AltitudeRisk,
@@ -177,6 +184,8 @@ class MainWindow(QMainWindow):
         self.cancel_task_action = QAction("Cancel selected mission", self)
         self.export_report_action = QAction("Export simulation report…", self)
         self.export_report_action.setShortcut("Ctrl+E")
+        self.export_route_action = QAction("Export route…", self)
+        self.export_route_action.setShortcut("Ctrl+Shift+E")
         self.quick_start_action = QAction("Quick start guide", self)
         self.quick_start_action.setShortcut("F1")
         self.about_action = QAction("About Drone Mission Planner", self)
@@ -215,6 +224,7 @@ class MainWindow(QMainWindow):
             [self.new_action, self.open_action, self.save_action, self.save_as_action]
         )
         file_menu.addAction(self.export_report_action)
+        file_menu.addAction(self.export_route_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
         edit_menu = self.menuBar().addMenu("Edit")
@@ -475,6 +485,7 @@ class MainWindow(QMainWindow):
         self.schedule_failure_action.triggered.connect(self.schedule_automatic_failure)
         self.cancel_task_action.triggered.connect(self.cancel_selected_task)
         self.export_report_action.triggered.connect(self.export_simulation_report)
+        self.export_route_action.triggered.connect(self.export_selected_route)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
@@ -959,6 +970,59 @@ class MainWindow(QMainWindow):
             return
         LOGGER.info("Simulation report exported to %s", saved)
         self.statusBar().showMessage(f"Report exported: {saved.name}", 6000)
+
+    def export_selected_route(self) -> None:
+        map_model = self.service.project.map
+        selected = self.service.project.map.find(self._selected_id or "")
+        drone = selected if isinstance(selected, Drone) else next(
+            (item for item in map_model.drones if item.waypoints),
+            None,
+        )
+        if drone is None:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "Plan a route first; the export writes the 3D waypoints of one drone.",
+            )
+            return
+        selected_path, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Export route for {drone.id}",
+            f"{self.service.project.name}-{drone.id}.json",
+            "Route JSON (*.json);;Waypoint CSV (*.csv);;QGroundControl plan (*.plan);;"
+            "ArduPilot WPL (*.waypoints *.txt)",
+        )
+        if not selected_path:
+            return
+        suffix = Path(selected_path).suffix.lower()
+        try:
+            if suffix == ".json":
+                saved = export_route_json(map_model, drone, selected_path)
+            elif suffix == ".csv":
+                saved = export_route_csv(map_model, drone, selected_path)
+            elif suffix == ".plan":
+                saved = export_route_qgc_plan(map_model, drone, selected_path)
+            elif suffix in {".waypoints", ".txt"}:
+                saved = export_route_wpl(map_model, drone, selected_path)
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Unsupported route format",
+                    "Use .json, .csv, .plan, or .waypoints extensions.",
+                )
+                return
+        except RouteExportError as exc:
+            QMessageBox.warning(self, "Route export rejected", str(exc))
+            LOGGER.error("Route export rejected: %s", exc)
+            return
+        except OSError as exc:
+            QMessageBox.critical(self, "Cannot export route", str(exc))
+            LOGGER.error("Route export failed: %s", exc)
+            return
+        LOGGER.info("Route for %s exported to %s", drone.id, saved)
+        self.statusBar().showMessage(
+            f"Route exported: {saved.name} (local coordinates, not flyable)", 8000
+        )
 
     def auto_assign_tasks(self) -> None:
         if not self.service.project.map.drones or not self.service.project.map.tasks:

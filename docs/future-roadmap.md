@@ -138,7 +138,7 @@ M20 产品化基础
 | M13B | 真 3D 视图 | 展示地形、航线、空域和高度 | 已完成核心实现 |
 | M13C | 三维航线编辑 | 表格和属性面板编辑高度/速度/动作 | 已完成核心实现 |
 | M13D | 三维仿真 | 状态机执行高度变化和航点动作 | 已完成核心实现 |
-| M12 | 真实航线导出 | 导出 JSON/CSV/QGC/ArduPilot | 计划中 |
+| M12 | 真实航线导出 | 导出 JSON/CSV/QGC/ArduPilot | 已完成核心实现 |
 | M10 | 报告与示例 | 重新生成展示级报告、示例、文档 | 计划中 |
 | M11 | 地图底图 | 本地地图图片、比例尺、坐标校准 | 计划中 |
 | M9-full | 完整真实数据导入 | GeoJSON/KML/航点 CSV 完整导入 | 计划中 |
@@ -467,6 +467,13 @@ class Waypoint:
 - 有坐标校准后能导出 QGroundControl `.plan`。
 - 没有坐标校准时 UI 明确说明“只能导出本地坐标检查文件，不能直接飞”。
 - 导出前风险提示可定位到具体 drone/waypoint。
+
+### 实施记录（M12，2026-09-05）
+
+- 新增纯 Python 模块 `persistence/route_export.py`：`build_route_payload` 统一做导出前校验（无航点/无 home base/critical 高度风险/电量不足即抛 `RouteExportError`，警告级风险写入 payload），四种导出共享同一数据源。
+- JSON 保留全部航点字段（含 altitude_msl 换算与风险摘要）；CSV 一行一航点；QGC `.plan` 输出 MAVLink 命令序列（22 起飞 / 16 航点 / 19 悬停 / 2000 拍照 / 21 降落 / 20 返航），WPL 输出 `QGC WPL 110` 文本。
+- 坐标仍为本地米制：两种文件均写入 `coordinate_reference: local_metric_ungeoreferenced`、`flyable: false` 与"不可直接飞"注释，满足验收标准的明确提示要求。
+- UI 入口 File → Export route…（`Ctrl+Shift+E`），按扩展名分发格式，校验失败弹窗定位到具体原因。
 
 ## 12. M10：报告、示例和文档打磨
 

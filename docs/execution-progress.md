@@ -4,7 +4,7 @@ Last updated: 2026-09-05
 
 ## Current checkpoint
 
-M13D (three-dimensional simulation with waypoint actions) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
+M12 (real route export) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
 
 - Commit: `7ca7778 Initial project import`
 - Commit: `a7c0e40 Complete M8 altitude and incremental replanning`
@@ -13,22 +13,20 @@ M13D (three-dimensional simulation with waypoint actions) is complete in the wor
 - Commit: `1a03418 Implement M13A three-dimensional waypoint model`
 - Commit: `cdd3a7e Implement M13B true 3D mission view`
 - Commit: `45c354c Implement M13C three-dimensional route editing`
+- Commit: `efa315a Implement M13D three-dimensional simulation with waypoint actions`
 - Branch: `main`
 
 ## Completed in this pass
 
-- `DroneStatus` extended with climbing, descending, hovering, scanning, and landing; `EventType` gained waypoint photo and waypoint landing records.
-- `DroneRuntime` holds waypoint profiles aligned with the path (MSL altitudes, per-vertex speed caps, actions, hold seconds). Drones whose waypoints diverge from their path automatically fall back to the legacy 2D motion model.
-- The engine's fixed-step motion advances horizontal distance and altitude together: waypoint altitudes form the commanded MSL profile interpolated along each leg, vertical motion is limited by climb/descent rates, and waypoint speeds cap the horizontal ground speed (the reported flight time uses the capped leg time).
-- Waypoint actions execute on vertex arrival: hover holds for the configured time with hover energy, take-photo pauses 2 s, increments the photo counter, and records a `WAYPOINT_PHOTO` event, and land descends to terrain altitude at the final vertex and records `WAYPOINT_LANDING`. Return-to-launch legs reuse the returning flow.
-- Coverage contributions are gated: only runtimes currently on a leg with a scan endpoint feed the `CoverageMonitor`, satisfying "coverage only updates during scan-capable actions". The rescue example was regenerated as schema 1.4 with scan waypoints so its pre-planned sweeps keep contributing.
-- Reports (HTML/CSV/JSON) gained per-drone photos taken, max altitude, and minimum clearance seen.
-- Tests: 8 new simulation tests covering altitude profile with rate limits, hover energy/waiting, photo events, speed caps, landing, scan-gated coverage, AGL-to-MSL resolution, and altitude extremes; coverage tests now carry the planner's waypoints like the UI does.
-- Documentation updated in `README.md`, `docs/architecture.md`, `docs/future-roadmap.md`, and this file.
+- M13D (previous pass): 3D simulation state machine with waypoint altitude profiles, climb/descent rate limits, waypoint speed caps, hover/photo/land actions, scan-gated coverage, photo/landing events, and per-drone max altitude / min clearance / photo report fields; the rescue example was regenerated as schema 1.4 with scan waypoints.
+- M12 (this pass): `persistence/route_export.py` exports one drone's 3D route as internal JSON, inspection CSV, QGroundControl `.plan` (MAVLink item sequence: takeoff/waypoint/loiter/camera/land/RTL), or ArduPilot WPL text. All four formats share `build_route_payload`, which refuses exports with critical altitude risks, insufficient battery, missing home base, or missing waypoints, attaches warning-level risk summaries, and marks every file `flyable: false` with the local-coordinate not-flyable warning.
+- UI: File → Export route… (`Ctrl+Shift+E`) dispatches by file extension and surfaces validation failures with the offending drone and reason.
+- Tests: 8 route-export unit tests (format content for all four writers plus every rejection branch) and 1 UI smoke test (export writes a payload, empty project is rejected).
+- Documentation updated in `README.md`, `docs/user-guide.md`, `docs/future-roadmap.md`, and this file.
 
 ## Validation
 
-- `.venv313\Scripts\python.exe -m pytest -q`: 148 passed.
+- `.venv313\Scripts\python.exe -m pytest -q`: 157 passed.
 - `.venv313\Scripts\python.exe -m mypy src tests`: success.
 - `.venv313\Scripts\python.exe -m ruff check src tests`: all checks passed.
 - `.venv313\Scripts\python.exe -m compileall -q src tests`: success.
@@ -36,5 +34,5 @@ M13D (three-dimensional simulation with waypoint actions) is complete in the wor
 
 ## Remaining
 
-1. M12 real route export (JSON/CSV/QGroundControl `.plan`/ArduPilot WPL) — next planned phase.
-2. M10 report/example polish, M11 local map underlay, M9-full imports, M14+ follow.
+1. M10 report/example polish (showcase screenshots and reports need a GUI pass), M11 local map underlay, M9-full imports (GeoJSON/KML), M14 risk scoring.
+2. The 3D main line (M13A–M13D plus M12 export) is complete; remaining phases extend import breadth, basemaps, and risk/collaboration features.

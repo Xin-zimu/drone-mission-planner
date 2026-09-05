@@ -26,6 +26,7 @@
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
 | Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, event history, and HTML/JSON/CSV export |
 | Persistence | Human-readable `.dmproj` JSON, schema migration through 1.4 (three-dimensional waypoints), validation, and clear corrupt/incompatible-file errors |
+| Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation and explicit not-flyable local-coordinate marking |
 
 ## Windows application
 
@@ -87,6 +88,7 @@ Press `F1` inside the application for the quick-start guide.
 | Play / step | `Ctrl+Space` / `.` |
 | Inject selected-drone fault | `Ctrl+Shift+F` |
 | Export report | `Ctrl+E` |
+| Export route | `Ctrl+Shift+E` |
 | In-app guide | `F1` |
 
 ## Engineering quality
