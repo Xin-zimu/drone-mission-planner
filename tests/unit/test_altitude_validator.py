@@ -12,6 +12,7 @@ from drone_mission_planner.domain.models import (
     Obstacle,
 )
 from drone_mission_planner.domain.terrain import TerrainPeak, flat_terrain
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.planning.altitude_validator import (
     AltitudeRisk,
     AltitudeRiskKind,
@@ -186,3 +187,56 @@ def test_risk_summary_lists_drone_leg_and_altitudes() -> None:
     assert "O-01" in text
     assert "obstacle top plus clearance is above commanded altitude" in text
     assert "60.0/75.0" in text
+
+
+def test_waypoint_altitudes_high_enough_clear_the_peak() -> None:
+    model = altitude_map(cruise_altitude=100.0)
+    model.terrain.peaks.append(TerrainPeak(Point(100.0, 10.0), 30.0, 120.0))
+    drone = model.drones[0]
+    path = [Point(10, 10), Point(190, 10)]
+    drone.planned_path = list(path)
+    drone.waypoints = [
+        Waypoint(10.0, 10.0, altitude=100.0),
+        Waypoint(190.0, 10.0, altitude=220.0),
+    ]
+
+    risks = validate_altitude_path(model, drone, path)
+
+    assert risks == ()
+
+
+def test_waypoint_altitudes_below_clearance_report_the_edited_altitude() -> None:
+    model = altitude_map(cruise_altitude=100.0)
+    model.terrain.peaks.append(TerrainPeak(Point(100.0, 10.0), 30.0, 120.0))
+    drone = model.drones[0]
+    path = [Point(10, 10), Point(190, 10)]
+    drone.planned_path = list(path)
+    drone.waypoints = [
+        Waypoint(10.0, 10.0, altitude=40.0),
+        Waypoint(190.0, 10.0, altitude=40.0),
+    ]
+
+    risks = validate_altitude_path(model, drone, path)
+
+    terrain_risks = [
+        risk for risk in risks if risk.kind == AltitudeRiskKind.TERRAIN_CLEARANCE
+    ]
+    assert terrain_risks
+    assert terrain_risks[0].flight_altitude == pytest.approx(40.0)
+
+
+def test_mismatched_waypoint_count_falls_back_to_commanded_altitude() -> None:
+    model = altitude_map(cruise_altitude=100.0)
+    model.terrain.peaks.append(TerrainPeak(Point(100.0, 10.0), 30.0, 120.0))
+    drone = model.drones[0]
+    path = [Point(10, 10), Point(190, 10)]
+    drone.planned_path = list(path)
+    drone.waypoints = [Waypoint(10.0, 10.0, altitude=40.0)]
+
+    risks = validate_altitude_path(model, drone, path)
+
+    terrain_risks = [
+        risk for risk in risks if risk.kind == AltitudeRiskKind.TERRAIN_CLEARANCE
+    ]
+    assert terrain_risks
+    assert terrain_risks[0].flight_altitude == pytest.approx(100.0)

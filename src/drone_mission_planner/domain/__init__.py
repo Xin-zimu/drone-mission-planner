@@ -12,7 +12,7 @@ from .geometry import Point, Rect
 from .models import BaseStation, Drone, MapModel, MissionTask, Obstacle, ProjectModel, SearchArea
 from .terrain import TerrainModel, TerrainPeak, grid_terrain
 from .validation import ProjectValidationError, validate_project
-from .waypoint import Waypoint, path_from_waypoints, waypoints_from_path
+from .waypoint import Waypoint, path_from_waypoints, waypoint_msl_altitude, waypoints_from_path
 from .wind import WindModel
 
 __all__ = [
@@ -39,5 +39,6 @@ __all__ = [
     "grid_terrain",
     "path_from_waypoints",
     "validate_project",
+    "waypoint_msl_altitude",
     "waypoints_from_path",
 ]

@@ -16,10 +16,10 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from math import cos, isfinite, pi, sin
 from typing import Any
 
-from drone_mission_planner.domain.enums import AltitudeMode, ObstacleShape
+from drone_mission_planner.domain.enums import ObstacleShape
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import Drone, MapModel
-from drone_mission_planner.domain.waypoint import Waypoint
+from drone_mission_planner.domain.waypoint import Waypoint, waypoint_msl_altitude
 from drone_mission_planner.planning.altitude_validator import (
     AltitudeRiskSeverity,
     validate_model_altitudes,
@@ -220,11 +220,9 @@ def terrain_color(altitude: float, min_altitude: float, max_altitude: float) -> 
 
 
 def waypoint_render_altitude(waypoint: Waypoint, map_model: MapModel) -> float:
-    """Convert a waypoint altitude to MSL metres for rendering."""
+    """Deprecated alias for the domain MSL conversion."""
 
-    if waypoint.altitude_mode == AltitudeMode.AGL:
-        return map_model.terrain.altitude_at(waypoint.x, waypoint.y) + waypoint.altitude
-    return waypoint.altitude
+    return waypoint_msl_altitude(waypoint, map_model.terrain)
 
 
 def _mix(
@@ -267,7 +265,7 @@ def _drone_route_points(
 ) -> list[tuple[float, float, float]]:
     if drone.waypoints:
         return [
-            (waypoint.x, waypoint.y, waypoint_render_altitude(waypoint, map_model))
+            (waypoint.x, waypoint.y, waypoint_msl_altitude(waypoint, map_model.terrain))
             for waypoint in drone.waypoints
         ]
     points: list[tuple[float, float, float]] = []

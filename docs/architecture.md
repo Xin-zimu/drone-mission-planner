@@ -17,6 +17,8 @@ Planned routes exist in two interchangeable domain representations: the legacy `
 
 The 3D mission view is a pure-PySide6 software renderer with no external web or 3D dependency. `ui/scene3d_export.py` builds a deterministic, toolkit-free scene description (terrain mesh, routes, volumes, markers, coverage cells, wind) from the domain and planning models, and `ui/view3d.py` projects it with an orbit camera and QPainter painter's-algorithm rendering. The scene builder imports no Qt, so scene content is unit-tested headlessly; the widget layer stays read-only and selection changes flow through the same `object_selected` path as the 2D map.
 
+Waypoint editing is owned by the application layer: `ProjectService.update_waypoint` and `remove_waypoint` validate and roll back edits, keep `planned_path` and `waypoints` synchronized, and mark the project dirty. The Waypoints tab only renders rows and forwards edits; the altitude validator prefers per-waypoint MSL altitudes (interpolated along each leg) over the commanded cruise/target model when the waypoint list matches the path, so edited heights immediately change reported risks and energy.
+
 ## Environment model
 
 Terrain and wind live in the domain model as serializable Python dataclasses. Terrain supports flat, procedural Gaussian-peak, and imported regular-grid elevation sources. Planning and simulation sample `altitude_at(x, y)` when estimating climb/descent energy and drawing terrain; grid terrain uses bilinear interpolation and clamps out-of-range samples to the imported bounds. Wind is a global vector expressed as the direction the wind blows toward, so path energy can apply deterministic tailwind, headwind, and crosswind corrections without adding weather services.

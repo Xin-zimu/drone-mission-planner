@@ -22,6 +22,12 @@ Open the **Altitude profile** tab after route or coverage planning to inspect ev
 
 Altitude risks are also drawn on the map. Orange segments indicate warnings and red segments indicate critical risks. The checks include terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. Select a drone to highlight its route and matching altitude rows.
 
+## Waypoints tab
+
+Open the **Waypoints** tab after planning to inspect every three-dimensional waypoint of every drone. Each row shows the leg index, drone, position, altitude with its mode (MSL or AGL), speed, action, hold time, and the linked mission. Double-click altitude, mode, speed, action, or hold to edit them; mode and action use dropdown editors, and speed accepts empty or `auto` to fall back to the cruise speed.
+
+Every accepted edit updates the project immediately, re-computes the Altitude profile (energy and risks), and refreshes the 2D/2.5D and 3D views. Selecting a row draws an amber highlight ring around that waypoint on the map and in the 3D view. Structural waypoints are protected: the departure, mission-linked, and return-to-launch waypoints cannot be deleted, and coverage scan routes only allow altitude and speed adjustments. Edits persist to `.dmproj` like any other project data.
+
 ## Cooperative search
 
 Choose **Search area** and drag a rectangle over the map. Select it to edit scan spacing, boundary margin, and target coverage in the inspector. Projects may also store irregular polygons; `examples/coverage_demo.dmproj` includes one.

@@ -136,7 +136,7 @@ M20 产品化基础
 | M9-lite | 最小高程导入 | 让 3D 地形有外部高程数据来源 | 已完成核心实现 |
 | M13A | 三维航点模型 | 建立 `Waypoint` 和兼容迁移 | 已完成核心实现 |
 | M13B | 真 3D 视图 | 展示地形、航线、空域和高度 | 已完成核心实现 |
-| M13C | 三维航线编辑 | 表格和属性面板编辑高度/速度/动作 | 计划中 |
+| M13C | 三维航线编辑 | 表格和属性面板编辑高度/速度/动作 | 已完成核心实现 |
 | M13D | 三维仿真 | 状态机执行高度变化和航点动作 | 计划中 |
 | M12 | 真实航线导出 | 导出 JSON/CSV/QGC/ArduPilot | 计划中 |
 | M10 | 报告与示例 | 重新生成展示级报告、示例、文档 | 计划中 |
@@ -366,6 +366,14 @@ class Waypoint:
 - 修改结果能保存到 `.dmproj` 并重新打开恢复。
 - 修改高度会影响风险和能耗。
 - 旧的任务规划、覆盖规划、仿真测试不退化。
+
+### 实施记录（M13C，2026-09-05）
+
+- 新增 `ui/waypoint_panel.py`（Waypoints 标签页）：index/drone/x/y/altitude/mode/speed/action/hold/task 十列；mode、action 用下拉编辑，speed 支持留空回退巡航速度；覆盖扫描航线只允许改高度/速度。
+- 编辑经 `ProjectService.update_waypoint`/`remove_waypoint` 落地：类型校验 + `validate_project` 失败回滚 + `planned_path`/`waypoints` 双表示同步 + dirty 标记；删除守卫覆盖起点、任务关联点、返航点和覆盖扫描航线。
+- `domain/waypoint.py` 新增 `waypoint_msl_altitude` 作为 MSL/AGL 换算唯一实现；高度校验器在航点数量与路径一致时改用航点 MSL 高度（沿段线性插值），编辑高度即刻改变地形/障碍/禁飞风险；Altitude profile 能耗也改用航点高度作为起止高度。
+- 选中表格行时 2D/2.5D 地图与 3D 视图同步显示琥珀色航点高亮环。
+- 延后至 M13D：仿真状态机按航点 speed 执行段速度、按 action 执行拍照/悬停等动作（本阶段只完成编辑数据流与展示）。
 
 ## 10. M13D：三维仿真与高度动作
 

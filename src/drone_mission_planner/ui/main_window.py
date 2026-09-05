@@ -46,6 +46,7 @@ from drone_mission_planner.domain.terrain import (
     TerrainPeak,
     generate_mountain_terrain,
 )
+from drone_mission_planner.domain.waypoint import waypoint_msl_altitude
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
 from drone_mission_planner.persistence.terrain_import import TerrainImportError, load_terrain_csv
@@ -69,6 +70,7 @@ from .property_panel import PropertyPanel
 from .scene3d_export import build_scene3d
 from .statistics_panel import StatisticsPanel
 from .view3d import LAYERS, VIEW_PRESETS, ThreeDView
+from .waypoint_panel import WaypointPanel
 
 LOGGER = logging.getLogger(__name__)
 
@@ -423,6 +425,8 @@ class MainWindow(QMainWindow):
         self.altitude_table.verticalHeader().setVisible(False)
         self.altitude_table.horizontalHeader().setStretchLastSection(True)
         tabs.addTab(self.altitude_table, "Altitude profile")
+        self.waypoint_panel = WaypointPanel()
+        tabs.addTab(self.waypoint_panel, "Waypoints")
         self.event_table = QTableWidget(0, 4)
         self.event_table.setHorizontalHeaderLabels(["Time", "Event", "Target", "Outcome"])
         self.event_table.setAlternatingRowColors(True)
@@ -483,6 +487,11 @@ class MainWindow(QMainWindow):
             lambda: self.set_map_render_mode(RenderMode.THREE_D)
         )
         self.three_d_view.object_selected.connect(self.select_object)
+        self.waypoint_panel.waypoint_edited.connect(self._on_waypoint_edited)
+        self.waypoint_panel.waypoint_selected.connect(self._on_waypoint_selected)
+        self.waypoint_panel.waypoint_delete_requested.connect(
+            self._on_waypoint_delete_requested
+        )
         self.map_view.create_point_requested.connect(self.create_point_object)
         self.map_view.create_rect_requested.connect(self.create_rect_object)
         self.map_view.object_selected.connect(self.select_object)
@@ -749,6 +758,7 @@ class MainWindow(QMainWindow):
             drone_selected = self._selected_id == drone.id or any(
                 task_id == self._selected_id for task_id in drone.assigned_tasks
             )
+            waypoint_altitudes = self._waypoint_altitudes(drone)
             for index, (start, end) in enumerate(pairwise(drone.planned_path), start=1):
                 profile = estimate_segment_energy(
                     drone,
@@ -756,7 +766,14 @@ class MainWindow(QMainWindow):
                     end,
                     terrain=self.service.project.map.terrain,
                     wind=self.service.project.map.wind,
-                    end_altitude=self._task_altitude_at(drone, end),
+                    start_altitude=(
+                        waypoint_altitudes[index - 1] if waypoint_altitudes else None
+                    ),
+                    end_altitude=(
+                        waypoint_altitudes[index]
+                        if waypoint_altitudes
+                        else self._task_altitude_at(drone, end)
+                    ),
                 )
                 segment_risks = risks_by_segment.get(index, ())
                 risk_text = (
@@ -794,6 +811,39 @@ class MainWindow(QMainWindow):
                     item.setForeground(QColor(color))
                 self.altitude_table.setItem(row, column, item)
         self.altitude_table.resizeColumnsToContents()
+        self._render_waypoint_table()
+
+    def _render_waypoint_table(self) -> None:
+        self.waypoint_panel.set_project_map(self.service.project.map)
+
+    def _on_waypoint_edited(self, drone_id: str, index: int, field: str, value: object) -> None:
+        try:
+            self.service.update_waypoint(drone_id, index, field, value)
+        except (KeyError, IndexError, ValueError) as exc:
+            LOGGER.error("Waypoint edit rejected: %s", exc)
+            self.statusBar().showMessage(f"Waypoint edit rejected: {exc}", 7000)
+            self._render_waypoint_table()
+            return
+        LOGGER.info("Waypoint %d of %s: %s updated", index + 1, drone_id, field)
+        self._render_altitude_table()
+        self._render_map_if_visible()
+        self._update_title()
+
+    def _on_waypoint_delete_requested(self, drone_id: str, index: int) -> None:
+        try:
+            self.service.remove_waypoint(drone_id, index)
+        except (KeyError, IndexError, ValueError) as exc:
+            LOGGER.warning("Waypoint delete rejected: %s", exc)
+            self.statusBar().showMessage(f"Waypoint delete rejected: {exc}", 7000)
+            return
+        LOGGER.info("Waypoint %d deleted from %s", index + 1, drone_id)
+        self._render_altitude_table()
+        self._render_map_if_visible()
+        self._update_title()
+
+    def _on_waypoint_selected(self, drone_id: str, index: int) -> None:
+        self.map_view.set_waypoint_highlight(drone_id, index)
+        self.three_d_view.set_highlighted_waypoint(drone_id, index)
 
     def _task_altitude_at(self, drone: Drone, point: Point) -> float | None:
         for task in self.service.project.map.tasks:
@@ -802,6 +852,14 @@ class MainWindow(QMainWindow):
             if task.position.distance_to(point) <= 1e-6:
                 return task.target_altitude
         return None
+
+    def _waypoint_altitudes(self, drone: Drone) -> list[float] | None:
+        """MSL altitudes per path vertex when the waypoint list is in sync."""
+
+        if len(drone.waypoints) != len(drone.planned_path) or len(drone.waypoints) < 2:
+            return None
+        terrain = self.service.project.map.terrain
+        return [waypoint_msl_altitude(waypoint, terrain) for waypoint in drone.waypoints]
 
     def _render_event_table(self) -> None:
         if self.simulation_engine is None:
@@ -1485,6 +1543,8 @@ class MainWindow(QMainWindow):
         self.property_panel.set_object(item)
         self.map_view.set_selected_object(object_id)
         self.three_d_view.set_selected_object(object_id)
+        if isinstance(item, Drone) and item.waypoints:
+            self.waypoint_panel.set_selected_waypoint(item.id, 0)
         self._render_altitude_table()
         matches = self.object_tree.findItems(object_id, Qt.MatchFlag.MatchRecursive, 1)
         if matches:
@@ -1530,6 +1590,8 @@ class MainWindow(QMainWindow):
             self._selected_id = None
             self.map_view.set_selected_object(None)
             self.three_d_view.set_selected_object(None)
+            self.map_view.set_waypoint_highlight(None)
+            self.three_d_view.set_highlighted_waypoint(None)
             self.property_panel.show_empty()
 
     def _populate_tree(self) -> None:

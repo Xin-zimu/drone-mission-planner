@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from .enums import AltitudeMode, WaypointAction
 from .geometry import Point
+from .terrain import TerrainModel
 
 type AltitudeProvider = Callable[[Point, int], float]
 
@@ -23,6 +24,14 @@ class Waypoint:
     @property
     def point(self) -> Point:
         return Point(self.x, self.y)
+
+
+def waypoint_msl_altitude(waypoint: Waypoint, terrain: TerrainModel) -> float:
+    """Return the waypoint altitude expressed in MSL metres."""
+
+    if waypoint.altitude_mode == AltitudeMode.AGL:
+        return terrain.altitude_at(waypoint.x, waypoint.y) + waypoint.altitude
+    return waypoint.altitude
 
 
 def waypoints_from_path(

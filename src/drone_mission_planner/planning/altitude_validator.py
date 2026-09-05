@@ -14,7 +14,7 @@ from drone_mission_planner.domain.models import (
     NoFlyZone,
     Obstacle,
 )
-from drone_mission_planner.domain.waypoint import path_from_waypoints
+from drone_mission_planner.domain.waypoint import path_from_waypoints, waypoint_msl_altitude
 
 
 class AltitudeRiskKind(StrEnum):
@@ -69,12 +69,15 @@ def validate_altitude_path(
         return ()
     spacing = sample_spacing or max(5.0, min(map_model.grid_size, 25.0))
     tasks = _tasks_by_position(map_model, drone)
+    waypoint_altitudes = _waypoint_altitudes(map_model, drone, path)
     risks: list[AltitudeRisk] = []
     seen: set[tuple[int, AltitudeRiskKind, str | None]] = set()
     for segment_index, (start, end) in enumerate(pairwise(path), start=1):
         end_task = _matching_task(end, tasks)
         for sample, ratio in _sample_segment(start, end, spacing):
-            flight_altitude = _commanded_altitude(drone, ratio, end_task)
+            flight_altitude = _sample_altitude(
+                drone, ratio, end_task, waypoint_altitudes, segment_index
+            )
             _add_terrain_risk(
                 risks,
                 seen,
@@ -152,6 +155,35 @@ def _tasks_by_position(map_model: MapModel, drone: Drone) -> tuple[MissionTask, 
 
 def _matching_task(point: Point, tasks: tuple[MissionTask, ...]) -> MissionTask | None:
     return next((task for task in tasks if task.position.distance_to(point) <= 1e-6), None)
+
+
+def _waypoint_altitudes(
+    map_model: MapModel,
+    drone: Drone,
+    path: list[Point] | tuple[Point, ...],
+) -> list[float] | None:
+    """Per-vertex MSL altitudes when the waypoint list matches the path."""
+
+    if len(drone.waypoints) != len(path):
+        return None
+    return [waypoint_msl_altitude(waypoint, map_model.terrain) for waypoint in drone.waypoints]
+
+
+def _sample_altitude(
+    drone: Drone,
+    ratio: float,
+    end_task: MissionTask | None,
+    waypoint_altitudes: list[float] | None,
+    segment_index: int,
+) -> float:
+    """Flight altitude at a sample: waypoint altitudes win over commanded ones."""
+
+    if waypoint_altitudes is not None:
+        start_altitude = waypoint_altitudes[segment_index - 1]
+        end_altitude = waypoint_altitudes[segment_index]
+        clamped = max(0.0, min(1.0, ratio))
+        return start_altitude + (end_altitude - start_altitude) * clamped
+    return _commanded_altitude(drone, ratio, end_task)
 
 
 def _commanded_altitude(drone: Drone, ratio: float, end_task: MissionTask | None) -> float:

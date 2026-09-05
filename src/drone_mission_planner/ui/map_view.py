@@ -36,6 +36,7 @@ from drone_mission_planner.domain.models import (
     Obstacle,
     SearchArea,
 )
+from drone_mission_planner.domain.waypoint import waypoint_msl_altitude
 from drone_mission_planner.planning.altitude_validator import (
     AltitudeRisk,
     AltitudeRiskSeverity,
@@ -93,6 +94,7 @@ class MapView(QGraphicsView):
         self._coverage_resolutions: dict[str, float] = {}
         self._communication_links: tuple[tuple[Point, Point], ...] = ()
         self._selected_id: str | None = None
+        self._waypoint_highlight: tuple[str, int] | None = None
         self._label_bounds: list[QRectF] = []
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing
@@ -140,6 +142,16 @@ class MapView(QGraphicsView):
         self._selected_id = object_id
         self.render_model()
 
+    def set_waypoint_highlight(
+        self, drone_id: str | None, index: int | None = None
+    ) -> None:
+        """Highlight one route waypoint on the map, or clear the highlight."""
+
+        self._waypoint_highlight = (
+            (drone_id, index) if drone_id is not None and index is not None else None
+        )
+        self.render_model()
+
     def set_render_mode(self, mode: RenderMode) -> None:
         self._render_mode = mode
         if mode == RenderMode.TERRAIN_25D:
@@ -154,6 +166,7 @@ class MapView(QGraphicsView):
         self._sync_scene_rect()
         if self._render_mode == RenderMode.TERRAIN_25D:
             self._render_model_25d()
+            self._add_waypoint_highlight_25d()
             self._add_terrain_legend()
             self._add_wind_overlay()
             return
@@ -174,6 +187,7 @@ class MapView(QGraphicsView):
             self._add_task_item(task)
         for drone in self._model.drones:
             self._add_drone_item(drone)
+        self._add_waypoint_highlight()
         self._add_terrain_legend()
         self._add_wind_overlay()
 
@@ -376,6 +390,51 @@ class MapView(QGraphicsView):
         min_y = min(point.y() for point in projected) - 80.0
         max_y = max(point.y() for point in projected) + 80.0
         self.setSceneRect(min_x, min_y, max_x - min_x, max_y - min_y)
+
+    def _add_waypoint_highlight(self) -> None:
+        highlighted = self._highlighted_waypoint_2d()
+        if highlighted is None:
+            return
+        point, _altitude = highlighted
+        radius = 9.0
+        item = self._scene.addEllipse(
+            point.x - radius,
+            point.y - radius,
+            radius * 2.0,
+            radius * 2.0,
+            QPen(QColor("#f9ca5b"), 2.2),
+        )
+        item.setZValue(1002)
+
+    def _add_waypoint_highlight_25d(self) -> None:
+        highlighted = self._highlighted_waypoint_2d()
+        if highlighted is None:
+            return
+        point, altitude = highlighted
+        centre = self._project(point, altitude)
+        radius = 9.0
+        item = self._scene.addEllipse(
+            centre.x() - radius,
+            centre.y() - radius,
+            radius * 2.0,
+            radius * 2.0,
+            QPen(QColor("#f9ca5b"), 2.2),
+        )
+        item.setZValue(1002)
+
+    def _highlighted_waypoint_2d(self) -> tuple[Point, float] | None:
+        highlighted = self._waypoint_highlight
+        if highlighted is None:
+            return None
+        drone_id, index = highlighted
+        drone = next(
+            (item for item in self._model.drones if item.id == drone_id), None
+        )
+        if drone is None or not 0 <= index < len(drone.waypoints):
+            return None
+        waypoint = drone.waypoints[index]
+        altitude = waypoint_msl_altitude(waypoint, self._model.terrain)
+        return waypoint.point, altitude
 
     def _render_model_25d(self) -> None:
         self._add_terrain_mesh()

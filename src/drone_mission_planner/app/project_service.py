@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
+from drone_mission_planner.domain.enums import AltitudeMode, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
     BaseStation,
@@ -17,8 +19,11 @@ from drone_mission_planner.domain.models import (
 )
 from drone_mission_planner.domain.terrain import TerrainModel
 from drone_mission_planner.domain.validation import validate_project
+from drone_mission_planner.domain.waypoint import Waypoint, path_from_waypoints
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.persistence.project_repository import ProjectRepository
+
+EDITABLE_WAYPOINT_FIELDS = ("altitude", "altitude_mode", "speed", "action", "hold_seconds")
 
 
 class ProjectService:
@@ -151,6 +156,62 @@ class ProjectService:
         self.dirty = True
         return item
 
+    def update_waypoint(self, drone_id: str, index: int, name: str, value: Any) -> Waypoint:
+        """Edit one editable field of a drone waypoint and keep the path in sync."""
+
+        drone = self._drone(drone_id)
+        if name not in EDITABLE_WAYPOINT_FIELDS:
+            raise ValueError(f"Waypoint field {name!r} is not editable")
+        if not 0 <= index < len(drone.waypoints):
+            raise IndexError(f"Waypoint index {index} is out of range")
+        waypoint = drone.waypoints[index]
+        previous = getattr(waypoint, name)
+        _apply_waypoint_field(waypoint, name, value)
+        self._sync_waypoint_path(drone)
+        try:
+            validate_project(self.project)
+        except ValueError:
+            setattr(waypoint, name, previous)
+            self._sync_waypoint_path(drone)
+            raise
+        self.dirty = True
+        return waypoint
+
+    def remove_waypoint(self, drone_id: str, index: int) -> Waypoint:
+        """Delete a waypoint when it is safe to remove, keeping the path in sync."""
+
+        drone = self._drone(drone_id)
+        if not 0 <= index < len(drone.waypoints):
+            raise IndexError(f"Waypoint index {index} is out of range")
+        waypoint = drone.waypoints[index]
+        if index == 0:
+            raise ValueError("The departure waypoint cannot be deleted")
+        if waypoint.task_id is not None:
+            raise ValueError(
+                f"Waypoint {index + 1} is linked to {waypoint.task_id}; cancel or reassign "
+                "the mission instead of deleting it"
+            )
+        if waypoint.action == WaypointAction.RETURN_TO_LAUNCH:
+            raise ValueError("The return-to-launch waypoint cannot be deleted")
+        if any(item.action == WaypointAction.SCAN for item in drone.waypoints):
+            raise ValueError(
+                "Coverage scan routes only allow altitude and speed adjustments"
+            )
+        removed = drone.waypoints.pop(index)
+        self._sync_waypoint_path(drone)
+        self.dirty = True
+        return removed
+
+    def _drone(self, drone_id: str) -> Drone:
+        item = self.project.map.find(drone_id)
+        if not isinstance(item, Drone):
+            raise KeyError(drone_id)
+        return item
+
+    @staticmethod
+    def _sync_waypoint_path(drone: Drone) -> None:
+        drone.planned_path = path_from_waypoints(drone.waypoints)
+
     def _next(self, kind: str) -> int:
         self._counters[kind] += 1
         return self._counters[kind]
@@ -164,3 +225,32 @@ class ProjectService:
             "task": len(self.project.map.tasks),
             "search": len(self.project.map.search_areas),
         }
+
+
+def _apply_waypoint_field(waypoint: Waypoint, name: str, value: Any) -> None:
+    """Coerce and validate one waypoint field, raising ValueError on bad input."""
+
+    if name == "altitude":
+        altitude = float(value)
+        if not isfinite(altitude) or altitude < 0.0:
+            raise ValueError("Waypoint altitude must be a non-negative number")
+        waypoint.altitude = altitude
+    elif name == "altitude_mode":
+        waypoint.altitude_mode = AltitudeMode(str(value).lower())
+    elif name == "speed":
+        if value is None or str(value).strip().lower() in {"", "none", "auto"}:
+            waypoint.speed = None
+            return
+        speed = float(value)
+        if not isfinite(speed) or speed <= 0.0:
+            raise ValueError("Waypoint speed must be positive or empty for the cruise speed")
+        waypoint.speed = speed
+    elif name == "action":
+        waypoint.action = WaypointAction(str(value).lower())
+    elif name == "hold_seconds":
+        hold = float(value)
+        if not isfinite(hold) or hold < 0.0:
+            raise ValueError("Waypoint hold time must be a non-negative number")
+        waypoint.hold_seconds = hold
+    else:
+        raise ValueError(f"Waypoint field {name!r} is not editable")

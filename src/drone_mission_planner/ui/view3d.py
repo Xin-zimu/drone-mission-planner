@@ -38,6 +38,7 @@ from .scene3d_export import (
 
 BACKGROUND_COLOR = "#0a1019"
 LABEL_TEXT_COLOR = "#dce5f3"
+HIGHLIGHT_COLOR = "#f9ca5b"
 SELECTED_PEN_WIDTH = 3.5
 ROUTE_PEN_WIDTH = 2.0
 
@@ -135,6 +136,7 @@ class ThreeDView(QWidget):
         self._dragged = False
         self._hits: list[_HitTarget] = []
         self._current_painter: QPainter | None = None
+        self._highlighted_waypoint: tuple[str, int] | None = None
         self._badge = QLabel("3D MISSION VIEW  •  READ ONLY", self)
         self._badge.setStyleSheet(
             "background: rgba(12,19,30,210); color: #8ea0b8; border: 1px solid #2b3a50; "
@@ -158,6 +160,14 @@ class ThreeDView(QWidget):
 
     def set_selected_object(self, object_id: str | None) -> None:
         self._selected_id = object_id
+        self.update()
+
+    def set_highlighted_waypoint(self, drone_id: str | None, index: int | None = None) -> None:
+        """Highlight one waypoint of a drone route, or clear the highlight."""
+
+        self._highlighted_waypoint = (
+            (drone_id, index) if drone_id is not None and index is not None else None
+        )
         self.update()
 
     @property
@@ -275,6 +285,7 @@ class ThreeDView(QWidget):
         if self._layers["no_fly"]:
             self._queue_volumes(scene, projection, air, kind="no_fly")
         self._queue_markers(scene, projection, air)
+        self._queue_waypoint_highlight(scene, projection, air)
         self._queue_wind(scene, projection, air)
         for queue in (ground, air):
             queue.sort(key=lambda item: (-item[0], item[1]))
@@ -552,6 +563,37 @@ class ThreeDView(QWidget):
             painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), text)
 
         queue.append((depth, order, self._bind_painter(draw)))
+
+    def _queue_waypoint_highlight(
+        self,
+        scene: Scene3D,
+        projection: _Projection,
+        queue: list[tuple[float, int, Callable[[], None]]],
+    ) -> None:
+        highlighted = self._highlighted_waypoint
+        if highlighted is None:
+            return
+        drone_id, index = highlighted
+        route = next((item for item in scene.routes if item.object_id == drone_id), None)
+        if route is None or not 0 <= index < len(route.points):
+            return
+        point = route.points[index]
+        projected = projection.project(*point)
+        if projected is None:
+            return
+        screen = QPointF(projected[0], projected[1])
+        depth = projected[2]
+
+        def draw(painter: QPainter | None, screen: QPointF = screen) -> None:
+            if painter is None:
+                return
+            pen = QPen(QColor(HIGHLIGHT_COLOR))
+            pen.setWidthF(2.5)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(screen, 9.0, 9.0)
+
+        queue.append((depth, 48000, self._bind_painter(draw)))
 
     def _queue_wind(
         self,
