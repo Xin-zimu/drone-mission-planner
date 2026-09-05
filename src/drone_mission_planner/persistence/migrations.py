@@ -10,25 +10,33 @@ class MigrationError(ValueError):
 
 def migrate_project(raw: dict[str, Any]) -> dict[str, Any]:
     version = str(raw.get("version", ""))
-    if version == "1.5":
+    if version == "1.6":
         return raw
     if version == "1.0":
-        return _migrate_1_4_to_1_5(
-            _migrate_1_3_to_1_4(
-                _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(_migrate_1_0_to_1_1(raw)))
+        return _migrate_1_5_to_1_6(
+            _migrate_1_4_to_1_5(
+                _migrate_1_3_to_1_4(
+                    _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(_migrate_1_0_to_1_1(raw)))
+                )
             )
         )
     if version == "1.1":
-        return _migrate_1_4_to_1_5(
-            _migrate_1_3_to_1_4(_migrate_1_2_to_1_3(_migrate_1_1_to_1_2(raw)))
+        return _migrate_1_5_to_1_6(
+            _migrate_1_4_to_1_5(
+                _migrate_1_3_to_1_4(_migrate_1_2_to_1_3(_migrate_1_1_to_1_2(raw)))
+            )
         )
     if version == "1.2":
-        return _migrate_1_4_to_1_5(_migrate_1_3_to_1_4(_migrate_1_2_to_1_3(raw)))
+        return _migrate_1_5_to_1_6(
+            _migrate_1_4_to_1_5(_migrate_1_3_to_1_4(_migrate_1_2_to_1_3(raw)))
+        )
     if version == "1.3":
-        return _migrate_1_4_to_1_5(_migrate_1_3_to_1_4(raw))
+        return _migrate_1_5_to_1_6(_migrate_1_4_to_1_5(_migrate_1_3_to_1_4(raw)))
     if version == "1.4":
-        return _migrate_1_4_to_1_5(raw)
-    raise MigrationError(f"Unsupported project version {version or 'missing'}; expected 1.5")
+        return _migrate_1_5_to_1_6(_migrate_1_4_to_1_5(raw))
+    if version == "1.5":
+        return _migrate_1_5_to_1_6(raw)
+    raise MigrationError(f"Unsupported project version {version or 'missing'}; expected 1.6")
 
 
 def _migrate_1_0_to_1_1(raw: dict[str, Any]) -> dict[str, Any]:
@@ -108,4 +116,11 @@ def _migrate_1_4_to_1_5(raw: dict[str, Any]) -> dict[str, Any]:
     map_data = migrated.setdefault("map", {})
     map_data.setdefault("basemap", None)
     migrated["version"] = "1.5"
+    return migrated
+
+
+def _migrate_1_5_to_1_6(raw: dict[str, Any]) -> dict[str, Any]:
+    migrated = deepcopy(raw)
+    migrated.setdefault("equipment", None)
+    migrated["version"] = "1.6"
     return migrated

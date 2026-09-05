@@ -31,9 +31,10 @@ from drone_mission_planner.domain.validation import validate_project
 from drone_mission_planner.domain.waypoint import Waypoint, path_from_waypoints, waypoints_from_path
 from drone_mission_planner.domain.wind import WindModel
 
+from .equipment_codec import decode_equipment
 from .migrations import MigrationError, migrate_project
 
-CURRENT_VERSION = "1.5"
+CURRENT_VERSION = "1.6"
 
 
 class ProjectFormatError(ValueError):
@@ -328,6 +329,7 @@ class ProjectRepository:
         return ProjectModel(
             name=str(raw.get("name", "Untitled mission")),
             version=CURRENT_VERSION,
+            equipment=decode_equipment(raw.get("equipment")),
             map=map_model,
             planning_settings=dict(raw.get("planning_settings", {})),
             simulation_settings=dict(raw.get("simulation_settings", {})),

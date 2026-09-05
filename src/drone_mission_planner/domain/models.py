@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from .basemap import BasemapModel
 from .enums import DroneStatus, ObstacleShape, TaskStatus, TaskType
+from .equipment import EquipmentLibrary
 from .geometry import Point, Rect
 from .terrain import TerrainModel
 from .waypoint import Waypoint
@@ -163,7 +164,8 @@ class MapModel:
 @dataclass(slots=True)
 class ProjectModel:
     name: str = "Untitled mission"
-    version: str = "1.4"
+    version: str = "1.6"
+    equipment: EquipmentLibrary = field(default_factory=EquipmentLibrary.default)
     map: MapModel = field(default_factory=MapModel)
     planning_settings: dict[str, float | int | bool | str] = field(default_factory=dict)
     simulation_settings: dict[str, float | int | bool | str] = field(

@@ -172,7 +172,7 @@ class GreedyAssignmentPlanner:
                     terrain=map_model.terrain,
                     wind=map_model.wind,
                     mission_end_altitude=task.target_altitude,
-                    payload=task.required_payload,
+                    payload=task.required_payload + drone.current_payload,
                     hover_seconds=task.execution_duration,
                 )
                 available = drone.remaining_battery - used_energy[drone.id]
@@ -296,7 +296,7 @@ def _explain_candidate(
                     terrain=map_model.terrain,
                     wind=map_model.wind,
                     mission_end_altitude=task.target_altitude,
-                    payload=task.required_payload,
+                    payload=task.required_payload + drone.current_payload,
                     hover_seconds=task.execution_duration,
                 )
                 if energy.total_required > drone.remaining_battery:

@@ -181,6 +181,64 @@ class ProjectService:
         self.dirty = True
         return basemap
 
+    def create_drone_from_model(self, model_name: str, position: Point) -> Drone:
+        """Add a drone whose parameters come from an equipment model."""
+
+        model = self.project.equipment.drone_model(model_name)
+        if model is None:
+            raise KeyError(f"Unknown drone model {model_name!r}")
+        drone = self.add_drone(position)
+        for field_name in (
+            "max_speed",
+            "air_speed",
+            "payload_capacity",
+            "communication_range",
+            "energy_per_meter",
+            "cruise_altitude",
+            "min_clearance",
+            "climb_rate",
+            "descent_rate",
+            "hover_power",
+            "climb_power",
+            "descent_power",
+            "horizontal_power",
+        ):
+            setattr(drone, field_name, getattr(model, field_name))
+        return drone
+
+    def set_drone_battery(self, drone_id: str, battery_name: str) -> Drone:
+        """Fit a battery pack and recompute the usable energy budget."""
+
+        pack = self.project.equipment.battery(battery_name)
+        if pack is None:
+            raise KeyError(f"Unknown battery pack {battery_name!r}")
+        drone = self._drone(drone_id)
+        drone.battery_capacity = pack.capacity
+        drone.remaining_battery = pack.effective_capacity()
+        self.dirty = True
+        return drone
+
+    def attach_payload(self, drone_id: str, payload_name: str) -> Drone:
+        """Mount a payload, increasing the drone's carried weight."""
+
+        payload = self.project.equipment.payload(payload_name)
+        if payload is None:
+            raise KeyError(f"Unknown payload {payload_name!r}")
+        drone = self._drone(drone_id)
+        drone.current_payload += payload.weight
+        self.dirty = True
+        return drone
+
+    def apply_mission_template(self, template_name: str) -> dict[str, float | int | bool | str]:
+        """Merge a mission template's settings into planning settings."""
+
+        template = self.project.equipment.mission_template(template_name)
+        if template is None:
+            raise KeyError(f"Unknown mission template {template_name!r}")
+        self.project.planning_settings.update(template.settings)
+        self.dirty = True
+        return dict(template.settings)
+
     def update_waypoint(self, drone_id: str, index: int, name: str, value: Any) -> Waypoint:
         """Edit one editable field of a drone waypoint and keep the path in sync."""
 

@@ -144,7 +144,7 @@ M20 产品化基础
 | M9-full | 完整真实数据导入 | GeoJSON/KML/航点 CSV 完整导入 | 已完成核心实现 |
 | M14 | 风险评估 | 电量/通信/地形/空域风险评分 | 已完成核心实现 |
 | M15 | 回放系统 | 时间轴和历史状态复盘 | 已完成核心实现 |
-| M16 | 设备库 | 机型、电池、载荷、任务模板 | 计划中 |
+| M16 | 设备库 | 机型、电池、载荷、任务模板 | 已完成核心实现 |
 | M17 | 高级覆盖 | 多区域、洞、优先级、方向优化 | 计划中 |
 | M18 | 协同优化 | 时空预约、等待点、通道管制、中继机 | 计划中 |
 | M19 | 可解释规划 | 分配解释、失败原因、优化建议 | 已完成核心实现 |
@@ -653,6 +653,15 @@ class Waypoint:
 - 更换电池型号后能耗余量重新计算。
 - 载荷影响任务可行性和能耗。
 - 模板数据能随项目或全局配置保存。
+
+### 实施记录（M16，2026-09-05）
+
+- 新增 `domain/equipment.py`：DroneModel（全飞行/能耗参数）、BatteryPack（容量/电压/可用比/安全余量/老化，`effective_capacity()` 折算可用能量）、PayloadType（重量/功耗）、MissionTemplate（预设 planning_settings）；`EquipmentLibrary.default()` 内置 3 机型/3 电池/3 载荷/4 任务模板。
+- schema 1.6：`ProjectModel.equipment` 随项目保存，1.5→1.6 迁移；`persistence/equipment_codec.py` 负责编解码，损坏数据回退默认库。
+- ProjectService：`create_drone_from_model`（整表带出参数）、`set_drone_battery`（重算可用电量预算）、`attach_payload`（增加当前载荷重量）、`apply_mission_template`。
+- 载荷联动：分配与解释的能耗按 `required_payload + current_payload` 计算，载荷可真实打破可行性；电池更换后剩余能量按有效容量重算。
+- UI：Planning → Equipment library…（加机型无人机/换电池/挂载荷/套模板）。
+- 偏差说明：全局（跨项目）配置存储未做，库随项目保存。
 
 ## 18. M17：高级覆盖规划
 

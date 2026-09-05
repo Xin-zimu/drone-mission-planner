@@ -228,6 +228,7 @@ class MainWindow(QMainWindow):
         self.weights_action = QAction("Assignment weights…", self)
         self.import_basemap_action = QAction("Import basemap…", self)
         self.basemap_settings_action = QAction("Basemap settings…", self)
+        self.equipment_action = QAction("Equipment library…", self)
         self.basemap_settings_action.setEnabled(False)
         self.quick_start_action = QAction("Quick start guide", self)
         self.quick_start_action.setShortcut("F1")
@@ -284,6 +285,7 @@ class MainWindow(QMainWindow):
         planning_menu.addAction(self.auto_assign_action)
         planning_menu.addAction(self.plan_coverage_action)
         planning_menu.addAction(self.weights_action)
+        planning_menu.addAction(self.equipment_action)
         simulation_menu = self.menuBar().addMenu("Simulation")
         simulation_menu.addActions(
             [self.fail_drone_action, self.schedule_failure_action, self.cancel_task_action]
@@ -555,6 +557,7 @@ class MainWindow(QMainWindow):
         self.import_mission_action.triggered.connect(self.import_mission_data)
         self.export_replay_action.triggered.connect(self.export_replay_json)
         self.weights_action.triggered.connect(self.edit_assignment_weights)
+        self.equipment_action.triggered.connect(self.edit_equipment_library)
         self.import_basemap_action.triggered.connect(self.import_basemap)
         self.basemap_settings_action.triggered.connect(self.edit_basemap_settings)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
@@ -1399,6 +1402,78 @@ class MainWindow(QMainWindow):
             task_load=float(settings.get("assignment_weight_task_load", 120.0)),
             deadline=float(settings.get("assignment_weight_deadline", 1.0)),
         )
+
+    def edit_equipment_library(self) -> None:
+        library = self.service.project.equipment
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Equipment library")
+        form = QFormLayout(dialog)
+
+        model_combo = QComboBox()
+        model_combo.addItems([model.name for model in library.drone_models])
+        form.addRow("Drone model", model_combo)
+        add_model_button = QPushButton("Add drone from model")
+        form.addRow(add_model_button)
+
+        battery_combo = QComboBox()
+        battery_combo.addItems([pack.name for pack in library.batteries])
+        form.addRow("Battery pack", battery_combo)
+        battery_button = QPushButton("Fit battery to selected drone")
+        form.addRow(battery_button)
+
+        payload_combo = QComboBox()
+        payload_combo.addItems([payload.name for payload in library.payloads])
+        form.addRow("Payload", payload_combo)
+        payload_button = QPushButton("Attach payload to selected drone")
+        form.addRow(payload_button)
+
+        template_combo = QComboBox()
+        template_combo.addItems([template.name for template in library.mission_templates])
+        form.addRow("Mission template", template_combo)
+        template_button = QPushButton("Apply mission template")
+        form.addRow(template_button)
+
+        status_label = QLabel("")
+        form.addRow(status_label)
+
+        def selected_drone() -> Drone | None:
+            selected = self.service.project.map.find(self._selected_id or "")
+            return selected if isinstance(selected, Drone) else None
+
+        def apply_add_model() -> None:
+            drone = self.service.create_drone_from_model(model_combo.currentText(), Point(100.0, 100.0))
+            self._refresh_all(select_id=drone.id)
+            status_label.setText(f"Added {drone.id} from {model_combo.currentText()}")
+
+        def apply_battery() -> None:
+            drone = selected_drone()
+            if drone is None:
+                status_label.setText("Select a drone first")
+                return
+            self.service.set_drone_battery(drone.id, battery_combo.currentText())
+            self._refresh_all(select_id=drone.id)
+            status_label.setText(
+                f"{drone.id} battery: {drone.remaining_battery:.1f} usable energy"
+            )
+
+        def apply_payload() -> None:
+            drone = selected_drone()
+            if drone is None:
+                status_label.setText("Select a drone first")
+                return
+            self.service.attach_payload(drone.id, payload_combo.currentText())
+            self._refresh_all(select_id=drone.id)
+            status_label.setText(f"{drone.id} carries {drone.current_payload:.1f} kg")
+
+        def apply_template() -> None:
+            settings = self.service.apply_mission_template(template_combo.currentText())
+            status_label.setText(f"Template applied: {settings}")
+
+        add_model_button.clicked.connect(apply_add_model)
+        battery_button.clicked.connect(apply_battery)
+        payload_button.clicked.connect(apply_payload)
+        template_button.clicked.connect(apply_template)
+        dialog.exec()
 
     def edit_assignment_weights(self) -> None:
         weights = self._assignment_weights()
