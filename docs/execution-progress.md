@@ -4,7 +4,7 @@ Last updated: 2026-09-05
 
 ## Current checkpoint
 
-M12 (real route export) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
+M14 (route risk assessment) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
 
 - Commit: `7ca7778 Initial project import`
 - Commit: `a7c0e40 Complete M8 altitude and incremental replanning`
@@ -14,25 +14,34 @@ M12 (real route export) is complete in the working tree and is intended to be ca
 - Commit: `cdd3a7e Implement M13B true 3D mission view`
 - Commit: `45c354c Implement M13C three-dimensional route editing`
 - Commit: `efa315a Implement M13D three-dimensional simulation with waypoint actions`
+- Commit: `b6ed844 Implement M12 real route export`
 - Branch: `main`
 
 ## Completed in this pass
 
-- M13D (previous pass): 3D simulation state machine with waypoint altitude profiles, climb/descent rate limits, waypoint speed caps, hover/photo/land actions, scan-gated coverage, photo/landing events, and per-drone max altitude / min clearance / photo report fields; the rescue example was regenerated as schema 1.4 with scan waypoints.
-- M12 (this pass): `persistence/route_export.py` exports one drone's 3D route as internal JSON, inspection CSV, QGroundControl `.plan` (MAVLink item sequence: takeoff/waypoint/loiter/camera/land/RTL), or ArduPilot WPL text. All four formats share `build_route_payload`, which refuses exports with critical altitude risks, insufficient battery, missing home base, or missing waypoints, attaches warning-level risk summaries, and marks every file `flyable: false` with the local-coordinate not-flyable warning.
-- UI: File → Export route… (`Ctrl+Shift+E`) dispatches by file extension and surfaces validation failures with the offending drone and reason.
-- Tests: 8 route-export unit tests (format content for all four writers plus every rejection branch) and 1 UI smoke test (export writes a payload, empty project is rejected).
-- Documentation updated in `README.md`, `docs/user-guide.md`, `docs/future-roadmap.md`, and this file.
+- M14 (this pass): `planning/risk_assessment.py` scores every route from battery, communication, terrain, airspace, and action factors (warning 8 / critical 25 penalty points, 0-100 score; any critical factor forces the critical level). Terrain/airspace factors reuse the altitude validator with segment/object attribution; battery compares route energy (incl. hover holds) against remaining capacity with a 15% reserve warning; communication compares the farthest route point with the effective radio range (110% exceedance is critical); action factors flag long hovers and routes that never return.
+- `build_risk_matrix` produces a per-drone matrix; the simulation report (JSON/CSV/HTML) embeds it; the Altitude profile table gains a Route risk column with factor tooltips.
+- M12 export validation now reuses the same assessment: terrain/airspace criticals or a battery critical refuse the export, and payloads carry risk_score / risk_level / risk_factors.
+- Tests: 9 risk-assessment unit tests; export tests updated for the shared model.
+- The same model is the designated source for M19 scoring displays.
 
 ## Validation
 
-- `.venv313\Scripts\python.exe -m pytest -q`: 157 passed.
+- `.venv313\Scripts\python.exe -m pytest -q`: 165 passed.
 - `.venv313\Scripts\python.exe -m mypy src tests`: success.
 - `.venv313\Scripts\python.exe -m ruff check src tests`: all checks passed.
 - `.venv313\Scripts\python.exe -m compileall -q src tests`: success.
 - `git diff --check`: success.
 
+## Previous passes (short)
+
+- M12: real route export (JSON/CSV/QGC plan/WPL) with pre-export validation.
+- M13D: 3D simulation state machine (altitude profiles, rate limits, speed caps, hover/photo/land actions, scan-gated coverage).
+- M13C: Waypoints tab editing with guards and dual-representation sync.
+- M13B: software-rendered 3D mission view with orbit camera, layers, presets, picking.
+- M13A: Waypoint domain model, schema 1.4, planning/persistence integration.
+
 ## Remaining
 
-1. M10 report/example polish (showcase screenshots and reports need a GUI pass), M11 local map underlay, M9-full imports (GeoJSON/KML), M14 risk scoring.
-2. The 3D main line (M13A–M13D plus M12 export) is complete; remaining phases extend import breadth, basemaps, and risk/collaboration features.
+1. M9-full imports (GeoJSON/KML/waypoint CSV) — next planned phase.
+2. M15 replay, M19 explainability, M10 report/example polish (GUI screenshots pending), M11 basemap, M16+.

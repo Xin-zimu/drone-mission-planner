@@ -9,6 +9,11 @@ from typing import TYPE_CHECKING
 
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.planning.altitude_validator import validate_model_altitudes
+from drone_mission_planner.planning.risk_assessment import (
+    RiskMatrixRow,
+    assess_mission_risk,
+    build_risk_matrix,
+)
 
 from .events import EventType
 
@@ -90,6 +95,7 @@ class SimulationReport:
     altitude_risks: tuple[AltitudeRiskReport, ...]
     drones: tuple[DroneReport, ...]
     coverage: tuple[CoverageReport, ...]
+    risk_matrix: tuple[RiskMatrixRow, ...] = ()
 
 
 def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
@@ -186,6 +192,7 @@ def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
         ),
         drones=tuple(drones),
         coverage=coverage,
+        risk_matrix=build_risk_matrix(assess_mission_risk(engine.map_model)),
     )
 
 
@@ -224,6 +231,21 @@ def export_report(report: SimulationReport, path: str | Path) -> Path:
             )
             for drone in report.drones:
                 writer.writerow(asdict(drone).values())
+            writer.writerow([])
+            writer.writerow(
+                [
+                    "drone_id",
+                    "risk_score",
+                    "risk_level",
+                    "battery",
+                    "communication",
+                    "terrain",
+                    "airspace",
+                    "action",
+                ]
+            )
+            for row in report.risk_matrix:
+                writer.writerow(asdict(row).values())
     elif suffix in {".html", ".htm"}:
         target.write_text(_html_report(report), encoding="utf-8")
     else:
@@ -268,6 +290,14 @@ def _html_report(report: SimulationReport) -> str:
         )
         or "<li>No altitude risks</li>"
     )
+    matrix_rows = "\n".join(
+        "<tr>"
+        f"<td>{escape(row.drone_id)}</td><td>{row.score:.0f}</td>"
+        f"<td>{escape(row.level)}</td><td>{row.battery_factors}</td>"
+        f"<td>{row.communication_factors}</td><td>{row.terrain_factors}</td>"
+        f"<td>{row.airspace_factors}</td><td>{row.action_factors}</td></tr>"
+        for row in report.risk_matrix
+    )
     wind = (
         f"{report.environment.wind_speed:.1f} m/s @ "
         f"{report.environment.wind_direction_to_deg:.0f} deg, gust "
@@ -299,4 +329,4 @@ th,td{{padding:9px 10px;border:1px solid #d8dfeb;text-align:left}} th{{backgroun
 <h2>Aircraft</h2><table><thead><tr><th>Drone</th><th>Status</th><th>Distance</th><th>Flight</th>
 <th>Waiting</th><th>Energy</th><th>Battery</th><th>Altitude</th><th>Climb / Descent</th>
 <th>Tasks</th><th>Link</th><th>Hops</th><th>Altitude risks</th><th>Photos</th><th>Max altitude</th><th>Min clearance</th></tr></thead>
-<tbody>{rows}</tbody></table><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""
+<tbody>{rows}</tbody></table><h2>Risk matrix</h2><table><thead><tr><th>Drone</th><th>Score</th><th>Level</th><th>Battery</th><th>Communication</th><th>Terrain</th><th>Airspace</th><th>Action</th></tr></thead><tbody>{matrix_rows}</tbody></table><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""

@@ -33,7 +33,9 @@ def _export_model() -> tuple[MapModel, Drone]:
         resolution=50.0,
         peaks=[TerrainPeak(Point(250.0, 200.0), 100.0, 40.0)],
     )
-    model.bases.append(BaseStation("B-01", "Base", Point(40.0, 40.0)))
+    base = BaseStation("B-01", "Base", Point(40.0, 40.0))
+    base.communication_range = 1000.0
+    model.bases.append(base)
     drone = Drone(
         "D-01",
         "Alpha",
@@ -41,6 +43,7 @@ def _export_model() -> tuple[MapModel, Drone]:
         "B-01",
         battery_capacity=500.0,
         remaining_battery=500.0,
+        communication_range=1000.0,
         planned_path=[Point(40.0, 40.0), Point(250.0, 200.0), Point(400.0, 300.0)],
         waypoints=[
             Waypoint(40.0, 40.0, altitude=60.0, speed=8.0),
@@ -78,6 +81,8 @@ def test_json_export_keeps_every_waypoint_field(tmp_path: Path) -> None:
     assert mid["task_id"] == "T-01"
     assert mid["speed"] is None
     assert mid["altitude_msl"] == pytest.approx(120.0)
+    assert payload["risk_level"] == "low"
+    assert payload["risk_score"] == pytest.approx(0.0)
     assert payload["altitude_risks"] == []
 
 

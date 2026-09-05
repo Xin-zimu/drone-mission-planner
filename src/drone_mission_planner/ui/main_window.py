@@ -65,6 +65,7 @@ from drone_mission_planner.planning.altitude_validator import (
 from drone_mission_planner.planning.assignment import AssignmentResult, GreedyAssignmentPlanner
 from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePlanResult
 from drone_mission_planner.planning.energy import estimate_segment_energy
+from drone_mission_planner.planning.risk_assessment import assess_route_risk
 from drone_mission_planner.planning.route_planner import RoutePlanner
 from drone_mission_planner.simulation.coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from drone_mission_planner.simulation.engine import SimulationEngine, SimulationSnapshot
@@ -417,7 +418,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.coverage_table, "Coverage")
         self.environment_panel = EnvironmentPanel()
         tabs.addTab(self.environment_panel, "Environment")
-        self.altitude_table = QTableWidget(0, 9)
+        self.altitude_table = QTableWidget(0, 10)
         self.altitude_table.setHorizontalHeaderLabels(
             [
                 "Drone",
@@ -429,6 +430,7 @@ class MainWindow(QMainWindow):
                 "Energy",
                 "Wind",
                 "Risk",
+                "Route risk",
             ]
         )
         self.altitude_table.setAlternatingRowColors(True)
@@ -751,8 +753,13 @@ class MainWindow(QMainWindow):
         self.coverage_table.resizeColumnsToContents()
 
     def _render_altitude_table(self) -> None:
-        rows: list[tuple[list[str], tuple[AltitudeRisk, ...], bool]] = []
+        rows: list[tuple[list[str], tuple[AltitudeRisk, ...], bool, str]] = []
         for drone in self.service.project.map.drones:
+            assessment = assess_route_risk(self.service.project.map, drone)
+            route_risk = f"{assessment.level} ({assessment.score:.0f}/100)"
+            route_risk_tooltip = (
+                "; ".join(factor.message for factor in assessment.factors) or "No risk factors"
+            )
             if len(drone.planned_path) < 2:
                 continue
             risks = validate_altitude_path(
@@ -804,17 +811,20 @@ class MainWindow(QMainWindow):
                             f"{profile.energy:.2f}",
                             f"{profile.wind_factor:.2f}x",
                             risk_text,
+                            route_risk if index == 1 else "",
                         ],
                         segment_risks,
                         drone_selected,
+                        route_risk_tooltip,
                     )
                 )
         self.altitude_table.setRowCount(len(rows))
-        for row, (values, risks, selected) in enumerate(rows):
+        for row, (values, risks, selected, tooltip) in enumerate(rows):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if selected:
                     item.setBackground(QColor("#203b57"))
+                item.setToolTip(tooltip)
                 if column == 8 and risks:
                     color = "#ff6b81" if any(
                         risk.severity == AltitudeRiskSeverity.CRITICAL for risk in risks

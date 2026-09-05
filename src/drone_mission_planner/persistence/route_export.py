@@ -16,11 +16,7 @@ from typing import Any
 from drone_mission_planner.domain.enums import WaypointAction
 from drone_mission_planner.domain.models import Drone, MapModel
 from drone_mission_planner.domain.waypoint import waypoint_msl_altitude
-from drone_mission_planner.planning.altitude_validator import (
-    AltitudeRiskSeverity,
-    validate_altitude_path,
-)
-from drone_mission_planner.planning.energy import estimate_path_energy
+from drone_mission_planner.planning.risk_assessment import RouteRiskAssessment, assess_route_risk
 
 QGC_WPL_HEADER = "QGC WPL 110"
 _NOT_FLYABLE_NOTE = (
@@ -61,6 +57,9 @@ class RouteExportPayload:
     notes: tuple[str, ...]
     altitude_risks: tuple[str, ...]
     waypoints: list[dict[str, Any]]
+    risk_score: float = 0.0
+    risk_level: str = "low"
+    risk_factors: tuple[str, ...] = ()
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +70,9 @@ class RouteExportPayload:
             "notes": list(self.notes),
             "altitude_risks": list(self.altitude_risks),
             "waypoints": self.waypoints,
+            "risk_score": self.risk_score,
+            "risk_level": self.risk_level,
+            "risk_factors": list(self.risk_factors),
         }
 
 
@@ -88,33 +90,30 @@ def build_route_payload(
     if drone.home_base_id is None:
         raise RouteExportError(f"{drone.id} has no home base assigned")
 
-    risks = validate_altitude_path(
-        map_model,
-        drone,
-        drone.planned_path or [waypoint.point for waypoint in waypoints],
-    )
-    risk_texts = tuple(risk.summary() for risk in risks)
-    critical = [risk for risk in risks if risk.severity == AltitudeRiskSeverity.CRITICAL]
-    if critical and require_no_critical_risks:
-        details = "; ".join(risk.summary() for risk in critical[:3])
-        raise RouteExportError(f"{drone.id} has critical altitude risks: {details}")
-
-    energy = estimate_path_energy(
-        drone,
-        [waypoint.point for waypoint in waypoints],
-        terrain=map_model.terrain,
-        wind=map_model.wind,
-        hover_seconds=sum(waypoint.hold_seconds for waypoint in waypoints),
-    )
-    if energy.energy > drone.remaining_battery:
-        raise RouteExportError(
-            f"{drone.id} requires {energy.energy:.1f} energy but only has "
-            f"{drone.remaining_battery:.1f} battery"
-        )
+    assessment: RouteRiskAssessment = assess_route_risk(map_model, drone)
+    risk_texts = tuple(factor.message for factor in assessment.factors)
+    if require_no_critical_risks:
+        terrain_airspace = [
+            factor
+            for factor in assessment.factors
+            if factor.kind in {"terrain", "airspace"} and factor.severity == "critical"
+        ]
+        if terrain_airspace:
+            details = "; ".join(factor.message for factor in terrain_airspace[:3])
+            raise RouteExportError(f"{drone.id} has critical altitude risks: {details}")
+        battery = [
+            factor for factor in assessment.factors
+            if factor.kind == "battery" and factor.severity == "critical"
+        ]
+        if battery:
+            raise RouteExportError(battery[0].message)
 
     notes = [_NOT_FLYABLE_NOTE]
-    if risks:
-        notes.append(f"{len(risks)} altitude warning(s) attached to the payload.")
+    if assessment.factors:
+        notes.append(
+            f"{len(assessment.factors)} risk factor(s): {assessment.level} "
+            f"({assessment.score:.0f}/100)."
+        )
     return RouteExportPayload(
         drone_id=drone.id,
         drone_name=drone.name,
@@ -137,6 +136,9 @@ def build_route_payload(
             }
             for index, waypoint in enumerate(waypoints)
         ],
+        risk_score=assessment.score,
+        risk_level=assessment.level,
+        risk_factors=risk_texts,
     )
 
 
