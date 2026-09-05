@@ -161,6 +161,7 @@ def _drone(data: dict[str, Any], terrain: TerrainModel) -> Drone:
         name=data["name"],
         position=_point(data["position"]),
         home_base_id=data.get("home_base_id"),
+        role=str(data.get("role", "mission")),
         status=DroneStatus(data.get("status", DroneStatus.IDLE)),
         max_speed=float(data.get("max_speed", 15.0)),
         battery_capacity=float(data.get("battery_capacity", 100.0)),

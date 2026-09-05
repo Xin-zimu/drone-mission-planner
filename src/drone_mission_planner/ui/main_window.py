@@ -87,6 +87,7 @@ from drone_mission_planner.planning.assignment import (
     explain_assignments,
 )
 from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePlanResult
+from drone_mission_planner.planning.deconfliction import apply_deconfliction
 from drone_mission_planner.planning.energy import estimate_segment_energy
 from drone_mission_planner.planning.risk_assessment import assess_route_risk
 from drone_mission_planner.planning.route_planner import RoutePlanner
@@ -1422,11 +1423,12 @@ class MainWindow(QMainWindow):
             route_planner=self.route_planner,
             weights=weights,
         )
+        deconfliction = apply_deconfliction(self.service.project.map, result)
         suggestions = build_assignment_suggestions(self._assignment_explanations)
         self._assignment_notes = tuple(
             f"{decision.task_id} -> {decision.drone_id} (cost {decision.cost:.0f})"
             for decision in result.decisions
-        ) + tuple(
+        ) + tuple(deconfliction.notes()) + tuple(
             f"{task_id}: suggestions - {'; '.join(tips)}"
             for task_id, tips in sorted(suggestions.items())
         )

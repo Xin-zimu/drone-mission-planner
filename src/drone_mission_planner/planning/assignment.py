@@ -140,6 +140,8 @@ class GreedyAssignmentPlanner:
                 reasons: list[str] = []
                 if drone.status in {DroneStatus.FAILED, DroneStatus.EMERGENCY}:
                     reasons.append(f"status is {drone.status.value}")
+                if drone.role == "relay":
+                    reasons.append("drone is dedicated to communication relay duty")
                 if task.required_payload + drone.current_payload > drone.payload_capacity:
                     reasons.append(
                         f"payload {task.required_payload:.1f} kg exceeds available "
@@ -268,6 +270,8 @@ def _explain_candidate(
     reasons: list[str] = []
     if drone.status in {DroneStatus.FAILED, DroneStatus.EMERGENCY}:
         reasons.append(f"status is {drone.status.value}")
+    if drone.role == "relay":
+        reasons.append("drone is dedicated to communication relay duty")
     if task.required_payload + drone.current_payload > drone.payload_capacity:
         reasons.append(
             f"payload {task.required_payload:.1f} kg exceeds available "

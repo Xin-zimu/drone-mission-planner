@@ -193,6 +193,7 @@ class CoveragePlanner:
                 drone
                 for drone in pool
                 if drone.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
+                and drone.role != "relay"
             ),
             key=lambda item: item.id,
         )

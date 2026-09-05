@@ -498,6 +498,13 @@ class SimulationEngine:
     def _update_runtime(self, runtime: DroneRuntime, dt: float) -> None:
         if runtime.status in {DroneStatus.FAILED, DroneStatus.COMPLETED}:
             return
+        if runtime.role == "relay":
+            if runtime.status != DroneStatus.HOVERING:
+                runtime.status = DroneStatus.HOVERING
+            self._apply_hover_energy(runtime, dt)
+            runtime.flight_time += dt
+            self._track_altitude_extremes(runtime)
+            return
         if not runtime.path:
             runtime.status = DroneStatus.COMPLETED
             return

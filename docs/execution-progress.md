@@ -4,7 +4,7 @@ Last updated: 2026-09-05
 
 ## Current checkpoint
 
-M17 (advanced coverage planning) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
+M18 (cooperative deconfliction and relays) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
 
 - Commit: `7ca7778 Initial project import`
 - Commit: `a7c0e40 Complete M8 altitude and incremental replanning`
@@ -22,10 +22,12 @@ M17 (advanced coverage planning) is complete in the working tree and is intended
 - Commit: `23d6989 Implement M10 examples and docs polish`
 - Commit: `7c500a3 Implement M11 local map basemap`
 - Commit: `112d488 Implement M16 equipment library`
+- Commit: `1e993ec Implement M17 advanced coverage planning`
 - Branch: `main`
 
 ## Completed in this pass
 
+- M18 (this pass): `planning/deconfliction.py` reserves assigned routes in priority order on a spatiotemporal table and inserts hold-based wait points where a later route would cross an earlier one inside the safety separation (waits delay departure of the crossing leg and conflicts are re-checked until resolved); `Drone.role` adds dedicated relay drones that are skipped by assignment/coverage and hover in place during simulation while extending the communication graph (2-hop reach tested); crossing and wait details flow into assignment notes and exported reports. Deferred: narrow-corridor gating and formation following.
 - M17 (this pass): search areas gained holes (excluded from coverage targets and scanlines via interval subtraction), priority, and a horizontal/vertical `scan_direction` (transposed lawnmower); `CoveragePlanner.plan_all_areas` plans areas in priority order without reusing drones so scarce aircraft protect high-priority zones; supplemental sweeps now merge grid rows to the scan pitch (previously 2.5x overscanned); Planning → Plan all coverage areas UI. Deferred: wind-based automatic direction choice.
 - M16 (this pass): `domain/equipment.py` equipment library (drone models, battery packs with effective-capacity maths, payloads, mission templates) persisted as project schema 1.6 with a 1.5→1.6 migration; ProjectService helpers create drones from models (all flight/energy parameters carried over), re-fit batteries (usable energy recomputed), attach payloads (weight feeds assignment feasibility AND energy through `required_payload + current_payload`), and apply mission templates; Planning → Equipment library… dialog manages it all. Deferred: global (cross-project) library storage.
 - M11 (previous pass): `domain/basemap.py` adds the basemap model with pixel↔world transforms and two-point calibration (solving metres-per-pixel, rotation, and origin from two world/pixel pairs, with y-flip support); project schema 1.5 persists `map.basemap` with a 1.4→1.5 migration and round-trip coverage; the 2D map renders the image underlay beneath the mission grid with opacity/lock/z-order; Map → Import basemap… and Basemap settings… (display fields plus the calibration group) complete the UI. Deferred: using the basemap as a 3D terrain texture; exports remain marked not-flyable until real georeferencing exists.
@@ -40,7 +42,7 @@ M17 (advanced coverage planning) is complete in the working tree and is intended
 
 ## Validation
 
-- `.venv313\Scripts\python.exe -m pytest -q`: 207 passed.
+- `.venv313\Scripts\python.exe -m pytest -q`: 212 passed.
 - `.venv313\Scripts\python.exe -m mypy src tests`: success.
 - `.venv313\Scripts\python.exe -m ruff check src tests`: all checks passed.
 - `.venv313\Scripts\python.exe -m compileall -q src tests`: success.

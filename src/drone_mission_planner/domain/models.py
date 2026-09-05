@@ -34,6 +34,7 @@ class Drone:
     current_payload: float = 0.0
     communication_range: float = 180.0
     safety_radius: float = 6.0
+    role: str = "mission"
     assigned_tasks: list[str] = field(default_factory=list)
     planned_path: list[Point] = field(default_factory=list)
     waypoints: list[Waypoint] = field(default_factory=list)

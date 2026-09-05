@@ -33,6 +33,7 @@ class DroneRuntime:
     initial_battery: float
     remaining_battery: float
     assigned_task_ids: list[str]
+    role: str = "mission"
     status: DroneStatus = DroneStatus.IDLE
     segment_index: int = 1
     takeoff_remaining: float = 1.0
@@ -71,6 +72,7 @@ class DroneRuntime:
             energy_per_meter=drone.energy_per_meter,
             initial_battery=drone.remaining_battery,
             remaining_battery=drone.remaining_battery,
+            role=drone.role,
             assigned_task_ids=list(drone.assigned_tasks),
             current_altitude=flight_altitude_at(drone, drone.position, terrain),
             waypoint_altitudes=profiles.altitudes,
