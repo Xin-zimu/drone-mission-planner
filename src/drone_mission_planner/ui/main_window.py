@@ -19,8 +19,12 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDockWidget,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -71,7 +75,14 @@ from drone_mission_planner.planning.altitude_validator import (
     AltitudeRiskSeverity,
     validate_altitude_path,
 )
-from drone_mission_planner.planning.assignment import AssignmentResult, GreedyAssignmentPlanner
+from drone_mission_planner.planning.assignment import (
+    AssignmentResult,
+    AssignmentWeights,
+    GreedyAssignmentPlanner,
+    TaskExplanation,
+    build_assignment_suggestions,
+    explain_assignments,
+)
 from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePlanResult
 from drone_mission_planner.planning.energy import estimate_segment_energy
 from drone_mission_planner.planning.risk_assessment import assess_route_risk
@@ -140,6 +151,8 @@ class MainWindow(QMainWindow):
         self.assignment_planner = GreedyAssignmentPlanner(self.route_planner)
         self.coverage_planner = CoveragePlanner(self.route_planner)
         self.coverage_results: dict[str, CoveragePlanResult] = {}
+        self._assignment_notes: tuple[str, ...] = ()
+        self._assignment_explanations: tuple[TaskExplanation, ...] | None = None
         self.simulation_engine: SimulationEngine | None = None
         self.simulation_timer = QTimer(self)
         self.simulation_timer.setInterval(16)
@@ -199,6 +212,7 @@ class MainWindow(QMainWindow):
         self.export_route_action.setShortcut("Ctrl+Shift+E")
         self.import_mission_action = QAction("Import mission data…", self)
         self.export_replay_action = QAction("Export replay…", self)
+        self.weights_action = QAction("Assignment weights…", self)
         self.quick_start_action = QAction("Quick start guide", self)
         self.quick_start_action.setShortcut("F1")
         self.about_action = QAction("About Drone Mission Planner", self)
@@ -251,6 +265,7 @@ class MainWindow(QMainWindow):
         planning_menu.addAction(self.plan_route_action)
         planning_menu.addAction(self.auto_assign_action)
         planning_menu.addAction(self.plan_coverage_action)
+        planning_menu.addAction(self.weights_action)
         simulation_menu = self.menuBar().addMenu("Simulation")
         simulation_menu.addActions(
             [self.fail_drone_action, self.schedule_failure_action, self.cancel_task_action]
@@ -521,6 +536,7 @@ class MainWindow(QMainWindow):
         self.export_route_action.triggered.connect(self.export_selected_route)
         self.import_mission_action.triggered.connect(self.import_mission_data)
         self.export_replay_action.triggered.connect(self.export_replay_json)
+        self.weights_action.triggered.connect(self.edit_assignment_weights)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
@@ -1008,7 +1024,9 @@ class MainWindow(QMainWindow):
         if not selected:
             return
         try:
-            saved = export_report(build_simulation_report(self.simulation_engine), selected)
+            saved = export_report(
+            build_simulation_report(self.simulation_engine, self._assignment_notes), selected
+        )
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Cannot export report", str(exc))
             LOGGER.error("Report export failed: %s", exc)
@@ -1209,7 +1227,22 @@ class MainWindow(QMainWindow):
             len(self.service.project.map.drones),
             len(self.service.project.map.tasks),
         )
+        weights = self._assignment_weights()
+        self.assignment_planner.weights = weights
         result = self.assignment_planner.assign(self.service.project.map)
+        self._assignment_explanations = explain_assignments(
+            self.service.project.map,
+            route_planner=self.route_planner,
+            weights=weights,
+        )
+        suggestions = build_assignment_suggestions(self._assignment_explanations)
+        self._assignment_notes = tuple(
+            f"{decision.task_id} -> {decision.drone_id} (cost {decision.cost:.0f})"
+            for decision in result.decisions
+        ) + tuple(
+            f"{task_id}: suggestions - {'; '.join(tips)}"
+            for task_id, tips in sorted(suggestions.items())
+        )
         self._discard_simulation()
         self.service.project.planning_settings["mission_mode"] = "point_tasks"
         self.coverage_results.clear()
@@ -1224,6 +1257,76 @@ class MainWindow(QMainWindow):
             f"{len(result.failures)} unresolved",
             8000,
         )
+
+    def _assignment_weights(self) -> AssignmentWeights:
+        settings = self.service.project.planning_settings
+        if not any(key.startswith("assignment_weight_") for key in settings):
+            return AssignmentWeights()
+        return AssignmentWeights(
+            energy=float(settings.get("assignment_weight_energy", 18.0)),
+            distance=float(settings.get("assignment_weight_distance", 0.25)),
+            battery_risk=float(settings.get("assignment_weight_battery_risk", 90.0)),
+            task_load=float(settings.get("assignment_weight_task_load", 120.0)),
+            deadline=float(settings.get("assignment_weight_deadline", 1.0)),
+        )
+
+    def edit_assignment_weights(self) -> None:
+        weights = self._assignment_weights()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Assignment weights")
+        form = QFormLayout(dialog)
+        editors: dict[str, QDoubleSpinBox] = {}
+        for name, value in (
+            ("energy", weights.energy),
+            ("distance", weights.distance),
+            ("battery_risk", weights.battery_risk),
+            ("task_load", weights.task_load),
+            ("deadline", weights.deadline),
+        ):
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 10000.0)
+            spin.setDecimals(2)
+            spin.setValue(value)
+            form.addRow(name.replace("_", " ").title(), spin)
+            editors[name] = spin
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        for name, spin in editors.items():
+            self.service.project.planning_settings[f"assignment_weight_{name}"] = spin.value()
+        self.service.dirty = True
+        LOGGER.info("Assignment weights updated: %s", self.service.project.planning_settings["assignment_weights"])
+        self.statusBar().showMessage(
+            "Assignment weights saved; re-run Auto assign to apply them", 7000
+        )
+
+    def _apply_assignment_tooltips(self, result: AssignmentResult) -> None:
+        explanations = self._assignment_explanations or ()
+        by_task = {item.task_id: item for item in explanations}
+        for row in range(self.assignment_table.rowCount()):
+            task_item = self.assignment_table.item(row, 1)
+            if task_item is None:
+                continue
+            explanation = by_task.get(task_item.text())
+            if explanation is None:
+                continue
+            lines = []
+            for candidate in explanation.candidates[:3]:
+                if candidate.feasible:
+                    lines.append(
+                        f"{candidate.drone_id}: score {candidate.score:.0f} "
+                        f"(energy {candidate.mission_energy:.1f}, distance "
+                        f"{candidate.distance:.0f} m, battery risk {candidate.battery_risk:.2f}, "
+                        f"load {candidate.task_load})"
+                    )
+                else:
+                    lines.append(f"{candidate.drone_id}: rejected - {'; '.join(candidate.reasons)}")
+            task_item.setToolTip("\n".join(lines))
 
     def _apply_assignment_result(self, result: AssignmentResult) -> None:
         for drone in self.service.project.map.drones:
@@ -1280,6 +1383,7 @@ class MainWindow(QMainWindow):
                 self.assignment_table.setItem(row, column, item)
             row += 1
         self.assignment_table.resizeColumnsToContents()
+        self._apply_assignment_tooltips(result)
 
     def play_simulation(self) -> None:
         if not self._ensure_simulation_engine():
@@ -1691,7 +1795,9 @@ class MainWindow(QMainWindow):
         self._render_altitude_table()
         self._render_event_table()
         self._render_safety_table(snapshot)
-        self.statistics_panel.set_report(build_simulation_report(self.simulation_engine))
+        self.statistics_panel.set_report(
+            build_simulation_report(self.simulation_engine, self._assignment_notes)
+        )
         self._populate_tree()
         if self._selected_id:
             selected = self.service.project.map.find(self._selected_id)

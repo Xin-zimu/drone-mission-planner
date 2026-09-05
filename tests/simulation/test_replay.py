@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def test_recorder_samples_at_fixed_interval() -> None:
     times = [frame.time for frame in frames]
     assert all(
         later - earlier == pytest.approx(engine.replay.interval, abs=engine.fixed_dt)
-        for earlier, later in zip(times, times[1:], strict=False)
+        for earlier, later in itertools.pairwise(times)
     )
 
 

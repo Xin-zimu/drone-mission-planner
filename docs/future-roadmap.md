@@ -147,7 +147,7 @@ M20 产品化基础
 | M16 | 设备库 | 机型、电池、载荷、任务模板 | 计划中 |
 | M17 | 高级覆盖 | 多区域、洞、优先级、方向优化 | 计划中 |
 | M18 | 协同优化 | 时空预约、等待点、通道管制、中继机 | 计划中 |
-| M19 | 可解释规划 | 分配解释、失败原因、优化建议 | 计划中 |
+| M19 | 可解释规划 | 分配解释、失败原因、优化建议 | 已完成核心实现 |
 | M20 | 产品化 | 撤销/重做、自动保存、最近项目、设置页 | 计划中 |
 
 ## 6. M9-lite：最小高程导入
@@ -705,6 +705,13 @@ class Waypoint:
 - 任务分配表能展开查看候选评分。
 - 失败任务建议能对应真实约束。
 - 修改权重后方案变化可解释。
+
+### 实施记录（M19，2026-09-05）
+
+- `AssignmentWeights`（energy/distance/battery_risk/task_load/deadline）默认值复现原排序；`GreedyAssignmentPlanner` 接受自定义权重，成本由权重合成。默认行为不变，全部既有测试通过。
+- `explain_assignments` 对每个待分配 (task, drone) 对按同一可行性规则评分（不落盘），输出能量/距离/电量风险/负载/截止分量与拒绝原因；`build_assignment_suggestions` 把拒绝原因转成可执行建议（减载/换电/缩短航线/检查禁飞/等待可用）。
+- UI：Assignments 表行 tooltip 展示前三候选评分与拒绝原因；Planning → Assignment weights… 对话框把权重写入 planning_settings（标 dirty），重新自动分配即生效。
+- 报告：`SimulationReport.assignment_notes` 附分配依据与失败建议，HTML/JSON 导出包含。
 
 ## 21. M20：产品化基础
 

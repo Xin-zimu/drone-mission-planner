@@ -96,9 +96,12 @@ class SimulationReport:
     drones: tuple[DroneReport, ...]
     coverage: tuple[CoverageReport, ...]
     risk_matrix: tuple[RiskMatrixRow, ...] = ()
+    assignment_notes: tuple[str, ...] = ()
 
 
-def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
+def build_simulation_report(
+    engine: SimulationEngine, assignment_notes: tuple[str, ...] = ()
+) -> SimulationReport:
     snapshot = engine.snapshot()
     statistics = {item.drone_id: item for item in engine.statistics()}
     communication = {item.drone_id: item for item in snapshot.communication}
@@ -193,6 +196,7 @@ def build_simulation_report(engine: SimulationEngine) -> SimulationReport:
         drones=tuple(drones),
         coverage=coverage,
         risk_matrix=build_risk_matrix(assess_mission_risk(engine.map_model)),
+        assignment_notes=assignment_notes,
     )
 
 
@@ -298,6 +302,10 @@ def _html_report(report: SimulationReport) -> str:
         f"<td>{row.airspace_factors}</td><td>{row.action_factors}</td></tr>"
         for row in report.risk_matrix
     )
+    assignment_notes = (
+        "".join(f"<li>{escape(note)}</li>" for note in report.assignment_notes)
+        or "<li>No assignment explanations recorded</li>"
+    )
     wind = (
         f"{report.environment.wind_speed:.1f} m/s @ "
         f"{report.environment.wind_direction_to_deg:.0f} deg, gust "
@@ -329,4 +337,4 @@ th,td{{padding:9px 10px;border:1px solid #d8dfeb;text-align:left}} th{{backgroun
 <h2>Aircraft</h2><table><thead><tr><th>Drone</th><th>Status</th><th>Distance</th><th>Flight</th>
 <th>Waiting</th><th>Energy</th><th>Battery</th><th>Altitude</th><th>Climb / Descent</th>
 <th>Tasks</th><th>Link</th><th>Hops</th><th>Altitude risks</th><th>Photos</th><th>Max altitude</th><th>Min clearance</th></tr></thead>
-<tbody>{rows}</tbody></table><h2>Risk matrix</h2><table><thead><tr><th>Drone</th><th>Score</th><th>Level</th><th>Battery</th><th>Communication</th><th>Terrain</th><th>Airspace</th><th>Action</th></tr></thead><tbody>{matrix_rows}</tbody></table><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""
+<tbody>{rows}</tbody></table><h2>Risk matrix</h2><table><thead><tr><th>Drone</th><th>Score</th><th>Level</th><th>Battery</th><th>Communication</th><th>Terrain</th><th>Airspace</th><th>Action</th></tr></thead><tbody>{matrix_rows}</tbody></table><h2>Assignment rationale</h2><ul>{assignment_notes}</ul><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""
