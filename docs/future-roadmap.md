@@ -141,7 +141,7 @@ M20 产品化基础
 | M12 | 真实航线导出 | 导出 JSON/CSV/QGC/ArduPilot | 已完成核心实现 |
 | M10 | 报告与示例 | 重新生成展示级报告、示例、文档 | 计划中 |
 | M11 | 地图底图 | 本地地图图片、比例尺、坐标校准 | 计划中 |
-| M9-full | 完整真实数据导入 | GeoJSON/KML/航点 CSV 完整导入 | 计划中 |
+| M9-full | 完整真实数据导入 | GeoJSON/KML/航点 CSV 完整导入 | 已完成核心实现 |
 | M14 | 风险评估 | 电量/通信/地形/空域风险评分 | 已完成核心实现 |
 | M15 | 回放系统 | 时间轴和历史状态复盘 | 计划中 |
 | M16 | 设备库 | 机型、电池、载荷、任务模板 | 计划中 |
@@ -547,6 +547,13 @@ class Waypoint:
 - 能导入 CSV 航点为三维航线。
 - 导入错误给出明确行号或对象 ID。
 - 保存后 `.dmproj` 能完整恢复导入数据。
+
+### 实施记录（M9-full，2026-09-05）
+
+- 新增纯 Python 模块 `persistence/mission_import.py`：GeoJSON FeatureCollection（Polygon→搜索区/禁飞区、Point→任务/基地、LineString→航点序列）、基础 KML（Point/Polygon Placemark）、航点 CSV（x,y,altitude + 可选 mode/speed/action/hold/task 列，错误带行号）。
+- 全部先产出 `MissionImportPreview`（对象计数、越界、重名、空多边形、缺几何警告），用户确认后 `apply_import` 经 ProjectService 写入（多边形回填 points、几何航线按巡航/净空回填高度），复用既有 ID 生成与 dirty 标记。
+- `ProjectService.replace_waypoints` 支持整表替换（校验失败回滚），与 M13C 编辑守卫并存。
+- UI 入口 File → Import mission data…；坐标仍为本地米制（与 .dmproj 一致，不做投影）。
 
 ## 15. M14：风险评估
 

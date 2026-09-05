@@ -4,7 +4,7 @@ Last updated: 2026-09-05
 
 ## Current checkpoint
 
-M14 (route risk assessment) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
+M9-full (GeoJSON/KML/waypoint-CSV import) is complete in the working tree and is intended to be captured by the next checkpoint commit. Earlier checkpoints:
 
 - Commit: `7ca7778 Initial project import`
 - Commit: `a7c0e40 Complete M8 altitude and incremental replanning`
@@ -15,11 +15,13 @@ M14 (route risk assessment) is complete in the working tree and is intended to b
 - Commit: `45c354c Implement M13C three-dimensional route editing`
 - Commit: `efa315a Implement M13D three-dimensional simulation with waypoint actions`
 - Commit: `b6ed844 Implement M12 real route export`
+- Commit: `7e4e2a3 Implement M14 route risk assessment`
 - Branch: `main`
 
 ## Completed in this pass
 
-- M14 (this pass): `planning/risk_assessment.py` scores every route from battery, communication, terrain, airspace, and action factors (warning 8 / critical 25 penalty points, 0-100 score; any critical factor forces the critical level). Terrain/airspace factors reuse the altitude validator with segment/object attribution; battery compares route energy (incl. hover holds) against remaining capacity with a 15% reserve warning; communication compares the farthest route point with the effective radio range (110% exceedance is critical); action factors flag long hovers and routes that never return.
+- M9-full (this pass): `persistence/mission_import.py` parses GeoJSON (Polygon/Point/LineString), basic KML placemarks, and waypoint CSVs into a preview with counts, out-of-bounds/duplicate/empty-geometry warnings, and line-numbered errors; `apply_import` creates the objects through ProjectService (polygons keep their points, geometry routes get cruise/clearance altitudes, waypoint routes require a target drone). `ProjectService.replace_waypoints` replaces a whole waypoint list with validation and rollback. UI entry: File → Import mission data…
+- M14 (previous pass): `planning/risk_assessment.py` scores every route from battery, communication, terrain, airspace, and action factors (warning 8 / critical 25 penalty points, 0-100 score; any critical factor forces the critical level). Terrain/airspace factors reuse the altitude validator with segment/object attribution; battery compares route energy (incl. hover holds) against remaining capacity with a 15% reserve warning; communication compares the farthest route point with the effective radio range (110% exceedance is critical); action factors flag long hovers and routes that never return.
 - `build_risk_matrix` produces a per-drone matrix; the simulation report (JSON/CSV/HTML) embeds it; the Altitude profile table gains a Route risk column with factor tooltips.
 - M12 export validation now reuses the same assessment: terrain/airspace criticals or a battery critical refuse the export, and payloads carry risk_score / risk_level / risk_factors.
 - Tests: 9 risk-assessment unit tests; export tests updated for the shared model.
@@ -27,7 +29,7 @@ M14 (route risk assessment) is complete in the working tree and is intended to b
 
 ## Validation
 
-- `.venv313\Scripts\python.exe -m pytest -q`: 165 passed.
+- `.venv313\Scripts\python.exe -m pytest -q`: 172 passed.
 - `.venv313\Scripts\python.exe -m mypy src tests`: success.
 - `.venv313\Scripts\python.exe -m ruff check src tests`: all checks passed.
 - `.venv313\Scripts\python.exe -m compileall -q src tests`: success.

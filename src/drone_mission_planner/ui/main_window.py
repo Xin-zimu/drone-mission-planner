@@ -48,6 +48,13 @@ from drone_mission_planner.domain.terrain import (
 )
 from drone_mission_planner.domain.waypoint import waypoint_msl_altitude
 from drone_mission_planner.domain.wind import WindModel
+from drone_mission_planner.persistence.mission_import import (
+    MissionImportError,
+    apply_import,
+    load_geojson,
+    load_kml,
+    load_waypoint_csv,
+)
 from drone_mission_planner.persistence.project_repository import ProjectFormatError
 from drone_mission_planner.persistence.route_export import (
     RouteExportError,
@@ -187,6 +194,7 @@ class MainWindow(QMainWindow):
         self.export_report_action.setShortcut("Ctrl+E")
         self.export_route_action = QAction("Export route…", self)
         self.export_route_action.setShortcut("Ctrl+Shift+E")
+        self.import_mission_action = QAction("Import mission data…", self)
         self.quick_start_action = QAction("Quick start guide", self)
         self.quick_start_action.setShortcut("F1")
         self.about_action = QAction("About Drone Mission Planner", self)
@@ -226,6 +234,7 @@ class MainWindow(QMainWindow):
         )
         file_menu.addAction(self.export_report_action)
         file_menu.addAction(self.export_route_action)
+        file_menu.addAction(self.import_mission_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
         edit_menu = self.menuBar().addMenu("Edit")
@@ -488,6 +497,7 @@ class MainWindow(QMainWindow):
         self.cancel_task_action.triggered.connect(self.cancel_selected_task)
         self.export_report_action.triggered.connect(self.export_simulation_report)
         self.export_route_action.triggered.connect(self.export_selected_route)
+        self.import_mission_action.triggered.connect(self.import_mission_data)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
@@ -980,6 +990,76 @@ class MainWindow(QMainWindow):
             return
         LOGGER.info("Simulation report exported to %s", saved)
         self.statusBar().showMessage(f"Report exported: {saved.name}", 6000)
+
+    def import_mission_data(self) -> None:
+        selected_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import mission data",
+            "",
+            "Mission data (*.geojson *.json *.kml *.csv);;All files (*)",
+        )
+        if not selected_file:
+            return
+        suffix = Path(selected_file).suffix.lower()
+        try:
+            if suffix in {".geojson", ".json"}:
+                preview = load_geojson(
+                    self.service.project.map, selected_file, default_kind="search_area"
+                )
+            elif suffix == ".kml":
+                preview = load_kml(self.service.project.map, selected_file)
+            elif suffix == ".csv":
+                preview = load_waypoint_csv(self.service.project.map, selected_file)
+            else:
+                QMessageBox.warning(
+                    self, "Unsupported import format", "Use .geojson, .json, .kml, or .csv files."
+                )
+                return
+        except MissionImportError as exc:
+            QMessageBox.warning(self, "Cannot import mission data", str(exc))
+            LOGGER.error("Mission import failed: %s", exc)
+            return
+
+        target_drone = None
+        if preview.waypoint_route:
+            selected = self.service.project.map.find(self._selected_id or "")
+            target_drone = (
+                selected
+                if isinstance(selected, Drone)
+                else (self.service.project.map.drones[0] if self.service.project.map.drones else None)
+            )
+            if target_drone is None:
+                QMessageBox.warning(
+                    self, "No target drone", "Add a drone before importing a waypoint route."
+                )
+                return
+
+        details = "\n".join(f"• {warning}" for warning in preview.warnings) or "No warnings"
+        message = (
+            f"{preview.summary()}"
+            + (f"\n\nTarget drone: {target_drone.id}" if target_drone else "")
+            + f"\n\n{details}\n\nImport into the project?"
+        )
+        answer = QMessageBox.question(
+            self,
+            "Import mission data",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            created = apply_import(
+                self.service, preview, drone_id=target_drone.id if target_drone else None
+            )
+        except (MissionImportError, ValueError) as exc:
+            QMessageBox.warning(self, "Import rejected", str(exc))
+            LOGGER.error("Mission import rejected: %s", exc)
+            return
+        LOGGER.info("Imported %d object(s) from %s", len(created), Path(selected_file).name)
+        self._refresh_all()
+        self.statusBar().showMessage(f"Imported: {preview.summary()}", 8000)
 
     def export_selected_route(self) -> None:
         map_model = self.service.project.map

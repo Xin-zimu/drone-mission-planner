@@ -177,6 +177,23 @@ class ProjectService:
         self.dirty = True
         return waypoint
 
+    def replace_waypoints(self, drone_id: str, waypoints: list[Waypoint]) -> Drone:
+        """Replace a drone's whole waypoint list (imports, presets, planning)."""
+
+        drone = self._drone(drone_id)
+        previous = list(drone.waypoints)
+        previous_path = list(drone.planned_path)
+        drone.waypoints = list(waypoints)
+        self._sync_waypoint_path(drone)
+        try:
+            validate_project(self.project)
+        except ValueError:
+            drone.waypoints = previous
+            drone.planned_path = previous_path
+            raise
+        self.dirty = True
+        return drone
+
     def remove_waypoint(self, drone_id: str, index: int) -> Waypoint:
         """Delete a waypoint when it is safe to remove, keeping the path in sync."""
 
