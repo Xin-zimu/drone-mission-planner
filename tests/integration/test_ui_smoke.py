@@ -398,3 +398,36 @@ def test_route_export_menu_writes_and_rejects(
     )
     empty_window.export_selected_route()
     assert shown and shown[0][0] == "Nothing to export"
+
+def test_replay_tab_updates_3d_view_and_jumps_to_events(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    drone = service.add_drone(Point(40.0, 20.0))
+    task = service.add_task(Point(300.0, 120.0))
+    drone.planned_path = [drone.position, task.position]
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    window._ensure_simulation_engine()
+    window.play_simulation()
+    qtbot.wait(300)  # type: ignore[attr-defined]
+    window.pause_simulation()
+
+    engine = window.simulation_engine
+    assert engine is not None
+    frames = engine.replay.frames
+    assert frames
+    window.replay_slider.setRange(0, len(frames) - 1)
+    target = len(frames) // 2
+    window.replay_slider.setValue(target)
+    window._replay_slider_changed(target)
+
+    markers = window.three_d_view._replay_markers
+    assert markers is not None
+    assert drone.id in markers
+    assert "D-01" in window.replay_info_label.text()
+    assert window.replay_time_label.text().startswith("T+")
+
+    window._exit_replay()
+    assert window.three_d_view._replay_markers is None

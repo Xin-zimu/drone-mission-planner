@@ -137,6 +137,7 @@ class ThreeDView(QWidget):
         self._hits: list[_HitTarget] = []
         self._current_painter: QPainter | None = None
         self._highlighted_waypoint: tuple[str, int] | None = None
+        self._replay_markers: dict[str, tuple[float, float, float, str]] | None = None
         self._badge = QLabel("3D MISSION VIEW  •  READ ONLY", self)
         self._badge.setStyleSheet(
             "background: rgba(12,19,30,210); color: #8ea0b8; border: 1px solid #2b3a50; "
@@ -160,6 +161,14 @@ class ThreeDView(QWidget):
 
     def set_selected_object(self, object_id: str | None) -> None:
         self._selected_id = object_id
+        self.update()
+
+    def show_replay_markers(
+        self, markers: Mapping[str, tuple[float, float, float, str]] | None
+    ) -> None:
+        """Display historical drone states; None returns to the live scene."""
+
+        self._replay_markers = dict(markers) if markers else None
         self.update()
 
     def set_highlighted_waypoint(self, drone_id: str | None, index: int | None = None) -> None:
@@ -211,6 +220,8 @@ class ThreeDView(QWidget):
     def update_live_positions(self, positions: Mapping[str, tuple[Point, float]]) -> None:
         """Move drone markers to live simulation positions."""
 
+        if self._scene is None or self._replay_markers is not None:
+            return
         if self._scene is None:
             return
         for marker in self._scene.markers:
@@ -491,6 +502,9 @@ class ThreeDView(QWidget):
         projection: _Projection,
         queue: list[tuple[float, int, Callable[[], None]]],
     ) -> None:
+        if self._replay_markers is not None:
+            self._queue_replay_markers(scene, projection, queue)
+            return
         for marker_index, marker in enumerate(scene.markers):
             projected = projection.project(marker.x, marker.y, marker.z)
             if projected is None:
@@ -529,6 +543,51 @@ class ThreeDView(QWidget):
                     screen,
                     depth,
                     45000 + marker_index,
+                    queue,
+                )
+
+    def _queue_replay_markers(
+        self,
+        scene: Scene3D,
+        projection: _Projection,
+        queue: list[tuple[float, int, Callable[[], None]]],
+    ) -> None:
+        colors = {marker.object_id: marker.color for marker in scene.markers}
+        replay_markers = self._replay_markers or {}
+        for index, drone_id in enumerate(sorted(replay_markers)):
+            x, y, z, status = replay_markers[drone_id]
+            projected = projection.project(x, y, z)
+            if projected is None:
+                continue
+            screen = QPointF(projected[0], projected[1])
+            color = QColor(colors.get(drone_id, "#55d6be"))
+            self._hits.append(_HitTarget(drone_id, "marker", ((projected[0], projected[1]),)))
+
+            def draw(
+                painter: QPainter | None,
+                screen: QPointF = screen,
+                color: QColor = color,
+                drone_id: str = drone_id,
+            ) -> None:
+                if painter is None:
+                    return
+                pen = QPen(color)
+                pen.setWidthF(2.0)
+                painter.setPen(pen)
+                painter.setBrush(color)
+                painter.drawEllipse(screen, 6.0, 6.0)
+                painter.setPen(QColor("#f9ca5b"))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(screen, 10.0, 10.0)
+                del drone_id
+
+            queue.append((projected[2], 40000 + index, self._bind_painter(draw)))
+            if self._layers["labels"]:
+                self._queue_label(
+                    f"{drone_id} {status} (replay)",
+                    screen,
+                    projected[2],
+                    45000 + index,
                     queue,
                 )
 

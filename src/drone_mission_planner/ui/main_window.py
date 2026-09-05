@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
+    QSlider,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -77,6 +79,7 @@ from drone_mission_planner.planning.route_planner import RoutePlanner
 from drone_mission_planner.simulation.coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from drone_mission_planner.simulation.engine import SimulationEngine, SimulationSnapshot
 from drone_mission_planner.simulation.events import EventType
+from drone_mission_planner.simulation.replay import export_replay
 from drone_mission_planner.simulation.reporting import build_simulation_report, export_report
 
 from .environment_panel import EnvironmentPanel
@@ -195,6 +198,7 @@ class MainWindow(QMainWindow):
         self.export_route_action = QAction("Export route…", self)
         self.export_route_action.setShortcut("Ctrl+Shift+E")
         self.import_mission_action = QAction("Import mission data…", self)
+        self.export_replay_action = QAction("Export replay…", self)
         self.quick_start_action = QAction("Quick start guide", self)
         self.quick_start_action.setShortcut("F1")
         self.about_action = QAction("About Drone Mission Planner", self)
@@ -235,6 +239,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.export_report_action)
         file_menu.addAction(self.export_route_action)
         file_menu.addAction(self.import_mission_action)
+        file_menu.addAction(self.export_replay_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
         edit_menu = self.menuBar().addMenu("Edit")
@@ -448,6 +453,23 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.altitude_table, "Altitude profile")
         self.waypoint_panel = WaypointPanel()
         tabs.addTab(self.waypoint_panel, "Waypoints")
+        replay_widget = QWidget()
+        replay_layout = QVBoxLayout(replay_widget)
+        replay_layout.setContentsMargins(10, 6, 10, 6)
+        self.replay_slider = QSlider(Qt.Orientation.Horizontal)
+        self.replay_slider.setRange(0, 0)
+        self.replay_time_label = QLabel("Run a simulation to record a replay")
+        self.replay_info_label = QLabel("Drag the timeline to inspect any moment in the 3D view")
+        replay_exit = QPushButton("Exit replay")
+        replay_exit.clicked.connect(self._exit_replay)
+        replay_layout.addWidget(self.replay_slider)
+        row = QHBoxLayout()
+        row.addWidget(self.replay_time_label)
+        row.addStretch()
+        row.addWidget(replay_exit)
+        replay_layout.addLayout(row)
+        replay_layout.addWidget(self.replay_info_label)
+        tabs.addTab(replay_widget, "Replay")
         self.event_table = QTableWidget(0, 4)
         self.event_table.setHorizontalHeaderLabels(["Time", "Event", "Target", "Outcome"])
         self.event_table.setAlternatingRowColors(True)
@@ -498,6 +520,7 @@ class MainWindow(QMainWindow):
         self.export_report_action.triggered.connect(self.export_simulation_report)
         self.export_route_action.triggered.connect(self.export_selected_route)
         self.import_mission_action.triggered.connect(self.import_mission_data)
+        self.export_replay_action.triggered.connect(self.export_replay_json)
         self.speed_combo.currentIndexChanged.connect(self._speed_changed)
         self.simulation_timer.timeout.connect(self._simulation_tick)
         self.about_action.triggered.connect(self.show_about)
@@ -515,6 +538,8 @@ class MainWindow(QMainWindow):
         self.waypoint_panel.waypoint_delete_requested.connect(
             self._on_waypoint_delete_requested
         )
+        self.replay_slider.valueChanged.connect(self._replay_slider_changed)
+        self.event_table.cellDoubleClicked.connect(self._jump_to_event_time)
         self.map_view.create_point_requested.connect(self.create_point_object)
         self.map_view.create_rect_requested.connect(self.create_rect_object)
         self.map_view.object_selected.connect(self.select_object)
@@ -1060,6 +1085,63 @@ class MainWindow(QMainWindow):
         LOGGER.info("Imported %d object(s) from %s", len(created), Path(selected_file).name)
         self._refresh_all()
         self.statusBar().showMessage(f"Imported: {preview.summary()}", 8000)
+
+    def _replay_slider_changed(self, value: int) -> None:
+        engine = self.simulation_engine
+        if engine is None:
+            return
+        frames = engine.replay.frames
+        if not frames:
+            return
+        index = max(0, min(value, len(frames) - 1))
+        frame = frames[index]
+        self.replay_time_label.setText(
+            f"T+ {frame.time:.2f} s  (frame {index + 1}/{len(frames)})"
+        )
+        self.three_d_view.show_replay_markers(
+            {state.drone_id: (state.x, state.y, state.z, state.status) for state in frame.drones}
+        )
+        coverage_text = ", ".join(f"{area}: {value_:.0%}" for area, value_ in frame.coverage)
+        self.replay_info_label.setText(
+            " | ".join(f"{state.drone_id}: {state.status}" for state in frame.drones)
+            + (f" | coverage {coverage_text}" if coverage_text else "")
+        )
+
+    def _exit_replay(self) -> None:
+        self.three_d_view.show_replay_markers(None)
+        self.replay_time_label.setText(
+            "Replay exited; run or step the simulation for live positions"
+        )
+
+    def _jump_to_event_time(self, row: int, _column: int) -> None:
+        engine = self.simulation_engine
+        time_item = self.event_table.item(row, 0)
+        if engine is None or time_item is None:
+            return
+        try:
+            seconds = float(time_item.text().removeprefix("T+"))
+        except ValueError:
+            return
+        index = engine.replay.frame_index_for_time(seconds)
+        replay_tab = self.replay_slider.parentWidget()
+        if replay_tab is not None:
+            self.workspace_tabs.setCurrentIndex(self.workspace_tabs.indexOf(replay_tab))
+        self.replay_slider.setValue(index)
+
+    def export_replay_json(self) -> None:
+        if self.simulation_engine is None or not self.simulation_engine.replay.frames:
+            QMessageBox.information(
+                self, "No replay data", "Run a simulation first; frames are recorded while it runs."
+            )
+            return
+        selected, _ = QFileDialog.getSaveFileName(
+            self, "Export replay", f"{self.service.project.name}-replay.json", "Replay JSON (*.json)"
+        )
+        if not selected:
+            return
+        saved = export_replay(self.simulation_engine, selected)
+        LOGGER.info("Replay exported to %s", saved)
+        self.statusBar().showMessage(f"Replay exported: {saved.name}", 6000)
 
     def export_selected_route(self) -> None:
         map_model = self.service.project.map

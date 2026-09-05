@@ -23,6 +23,7 @@ from .communication import CommunicationMonitor, CommunicationNode, Communicatio
 from .coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from .drone_runtime import DroneRuntime
 from .events import EventManager, EventRecord, EventType, SimulationEvent
+from .replay import ReplayRecorder
 from .statistics import DroneStatistics, collect_drone_statistics
 
 _PHOTO_HOLD_SECONDS = 2.0
@@ -97,6 +98,7 @@ class SimulationEngine:
         }
         self.coverage_monitor = CoverageMonitor(map_model)
         self.coverage_monitor.update(self._coverage_positions())
+        self.replay = ReplayRecorder()
         self.event_manager = EventManager()
         self._replan_requests: list[str] = []
         self.conflict_detector = ConflictDetector()
@@ -153,6 +155,7 @@ class SimulationEngine:
         }
         self.coverage_monitor.reset()
         self.coverage_monitor.update(self._coverage_positions())
+        self.replay.reset()
         self.event_manager.clear()
         self._replan_requests.clear()
         self.replan_count = 0
@@ -321,6 +324,7 @@ class SimulationEngine:
         )
 
     def _step(self, dt: float) -> None:
+        self.replay.record(self)
         for event in self.event_manager.pop_due(self.time):
             self._process_event(event)
         auto_returns = self._update_communication()
