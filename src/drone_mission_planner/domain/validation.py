@@ -109,6 +109,24 @@ def validate_project(project: ProjectModel) -> None:
             issues.append(f"{drone.id} communication range must be positive")
         if drone.safety_radius < 0:
             issues.append(f"{drone.id} safety radius cannot be negative")
+        for waypoint_index, waypoint in enumerate(drone.waypoints, start=1):
+            _position(
+                f"{drone.id} waypoint {waypoint_index}",
+                waypoint.point,
+                model.width,
+                model.height,
+                issues,
+            )
+            if not isfinite(waypoint.altitude) or waypoint.altitude < 0:
+                issues.append(f"{drone.id} waypoint {waypoint_index} altitude must be non-negative")
+            if waypoint.speed is not None and (
+                not isfinite(waypoint.speed) or waypoint.speed <= 0
+            ):
+                issues.append(f"{drone.id} waypoint {waypoint_index} speed must be positive")
+            if not isfinite(waypoint.hold_seconds) or waypoint.hold_seconds < 0:
+                issues.append(
+                    f"{drone.id} waypoint {waypoint_index} hold seconds must be non-negative"
+                )
     for task in model.tasks:
         _position(task.id, task.position, model.width, model.height, issues)
         if not 0 <= task.priority <= 10:

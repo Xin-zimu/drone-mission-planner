@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from drone_mission_planner.domain.geometry import Point
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.planning.altitude_validator import AltitudeRisk
 
 
@@ -10,6 +11,7 @@ from drone_mission_planner.planning.altitude_validator import AltitudeRisk
 class PathResult:
     success: bool
     waypoints: list[Point] = field(default_factory=list)
+    flight_waypoints: list[Waypoint] = field(default_factory=list)
     total_distance: float = 0.0
     estimated_time: float = 0.0
     estimated_energy: float = 0.0

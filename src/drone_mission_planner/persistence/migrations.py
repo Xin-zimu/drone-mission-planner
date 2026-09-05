@@ -10,15 +10,19 @@ class MigrationError(ValueError):
 
 def migrate_project(raw: dict[str, Any]) -> dict[str, Any]:
     version = str(raw.get("version", ""))
-    if version == "1.3":
+    if version == "1.4":
         return raw
     if version == "1.0":
-        return _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(_migrate_1_0_to_1_1(raw)))
+        return _migrate_1_3_to_1_4(
+            _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(_migrate_1_0_to_1_1(raw)))
+        )
     if version == "1.1":
-        return _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(raw))
+        return _migrate_1_3_to_1_4(_migrate_1_2_to_1_3(_migrate_1_1_to_1_2(raw)))
     if version == "1.2":
-        return _migrate_1_2_to_1_3(raw)
-    raise MigrationError(f"Unsupported project version {version or 'missing'}; expected 1.3")
+        return _migrate_1_3_to_1_4(_migrate_1_2_to_1_3(raw))
+    if version == "1.3":
+        return _migrate_1_3_to_1_4(raw)
+    raise MigrationError(f"Unsupported project version {version or 'missing'}; expected 1.4")
 
 
 def _migrate_1_0_to_1_1(raw: dict[str, Any]) -> dict[str, Any]:
@@ -81,4 +85,13 @@ def _migrate_1_2_to_1_3(raw: dict[str, Any]) -> dict[str, Any]:
     terrain.setdefault("grid_height", 0)
     terrain.setdefault("grid_altitudes", [])
     migrated["version"] = "1.3"
+    return migrated
+
+
+def _migrate_1_3_to_1_4(raw: dict[str, Any]) -> dict[str, Any]:
+    migrated = deepcopy(raw)
+    map_data = migrated.setdefault("map", {})
+    for drone in map_data.get("drones", []):
+        drone.setdefault("waypoints", [])
+    migrated["version"] = "1.4"
     return migrated

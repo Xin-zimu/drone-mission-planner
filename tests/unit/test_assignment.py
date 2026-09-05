@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from drone_mission_planner.domain.enums import DroneStatus
+from drone_mission_planner.domain.enums import DroneStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
     BaseStation,
@@ -36,6 +36,16 @@ def test_high_priority_tasks_are_considered_first_and_only_once() -> None:
     result = GreedyAssignmentPlanner().assign(model)
     assert [decision.task_id for decision in result.decisions] == ["T-HIGH", "T-MID", "T-LOW"]
     assert len({decision.task_id for decision in result.decisions}) == len(result.decisions)
+    assert any(
+        waypoint.task_id == "T-HIGH"
+        for waypoints in result.drone_waypoints.values()
+        for waypoint in waypoints
+    )
+    assert any(
+        waypoint.action == WaypointAction.RETURN_TO_LAUNCH
+        for waypoints in result.drone_waypoints.values()
+        for waypoint in waypoints
+    )
 
 
 def test_payload_constraint_selects_capable_drone() -> None:

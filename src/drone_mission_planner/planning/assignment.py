@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from math import inf
 
-from drone_mission_planner.domain.enums import DroneStatus, TaskStatus
+from drone_mission_planner.domain.enums import DroneStatus, TaskStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import Drone, MapModel
+from drone_mission_planner.domain.waypoint import Waypoint
 
 from .energy import EnergyEstimate, estimate_energy
 from .result import PathResult
@@ -38,6 +39,7 @@ class AssignmentResult:
     decisions: list[AssignmentDecision] = field(default_factory=list)
     failures: list[AssignmentFailure] = field(default_factory=list)
     drone_paths: dict[str, list[Point]] = field(default_factory=dict)
+    drone_waypoints: dict[str, list[Waypoint]] = field(default_factory=dict)
 
     @property
     def assigned_count(self) -> int:
@@ -51,7 +53,10 @@ class GreedyAssignmentPlanner:
         self.route_planner = route_planner or RoutePlanner()
 
     def assign(self, map_model: MapModel) -> AssignmentResult:
-        result = AssignmentResult(drone_paths={drone.id: [] for drone in map_model.drones})
+        result = AssignmentResult(
+            drone_paths={drone.id: [] for drone in map_model.drones},
+            drone_waypoints={drone.id: [] for drone in map_model.drones},
+        )
         positions = {drone.id: drone.position for drone in map_model.drones}
         used_energy = {drone.id: 0.0 for drone in map_model.drones}
         task_counts = {drone.id: 0 for drone in map_model.drones}
@@ -135,7 +140,11 @@ class GreedyAssignmentPlanner:
             cost, _, drone, route, energy = min(options, key=lambda option: (option[0], option[1]))
             result.decisions.append(AssignmentDecision(task.id, drone.id, cost, route, energy))
             path = result.drone_paths[drone.id]
+            waypoints = result.drone_waypoints[drone.id]
             path.extend(route.waypoints if not path else route.waypoints[1:])
+            waypoints.extend(
+                route.flight_waypoints if not waypoints else route.flight_waypoints[1:]
+            )
             positions[drone.id] = task.position
             used_energy[drone.id] += energy.mission_energy
             task_counts[drone.id] += 1
@@ -148,4 +157,8 @@ class GreedyAssignmentPlanner:
                 return_route = self.route_planner.plan(map_model, return_candidate, base.position)
                 if return_route.success:
                     path.extend(return_route.waypoints[1:])
+                    return_waypoints = return_route.flight_waypoints[1:]
+                    for waypoint in return_waypoints:
+                        waypoint.action = WaypointAction.RETURN_TO_LAUNCH
+                    result.drone_waypoints[drone.id].extend(return_waypoints)
         return result

@@ -6,7 +6,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from drone_mission_planner.domain.enums import DroneStatus, ObstacleShape, TaskStatus, TaskType
+from drone_mission_planner.domain.enums import (
+    AltitudeMode,
+    DroneStatus,
+    ObstacleShape,
+    TaskStatus,
+    TaskType,
+    WaypointAction,
+)
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
     BaseStation,
@@ -20,11 +27,12 @@ from drone_mission_planner.domain.models import (
 )
 from drone_mission_planner.domain.terrain import TerrainModel, TerrainPeak
 from drone_mission_planner.domain.validation import validate_project
+from drone_mission_planner.domain.waypoint import Waypoint, path_from_waypoints, waypoints_from_path
 from drone_mission_planner.domain.wind import WindModel
 
 from .migrations import MigrationError, migrate_project
 
-CURRENT_VERSION = "1.3"
+CURRENT_VERSION = "1.4"
 
 
 class ProjectFormatError(ValueError):
@@ -123,6 +131,67 @@ def _wind(data: Any) -> WindModel:
     )
 
 
+def _waypoint(data: Any) -> Waypoint:
+    if isinstance(data, dict):
+        speed_raw = data.get("speed")
+        task_id_raw = data.get("task_id")
+        return Waypoint(
+            x=float(data["x"]),
+            y=float(data["y"]),
+            altitude=float(data.get("altitude", 0.0)),
+            altitude_mode=AltitudeMode(data.get("altitude_mode", AltitudeMode.MSL)),
+            speed=float(speed_raw) if speed_raw is not None else None,
+            action=WaypointAction(data.get("action", WaypointAction.FLY_TO)),
+            hold_seconds=float(data.get("hold_seconds", 0.0)),
+            task_id=str(task_id_raw) if task_id_raw is not None else None,
+        )
+    if isinstance(data, (list, tuple)) and len(data) >= 3:
+        return Waypoint(float(data[0]), float(data[1]), float(data[2]))
+    raise ValueError("waypoint must be an object or [x, y, altitude]")
+
+
+def _drone(data: dict[str, Any], terrain: TerrainModel) -> Drone:
+    planned_path = [_point(point) for point in data.get("planned_path", [])]
+    waypoints_data = data.get("waypoints", [])
+    waypoints = [_waypoint(item) for item in waypoints_data]
+    drone = Drone(
+        id=data["id"],
+        name=data["name"],
+        position=_point(data["position"]),
+        home_base_id=data.get("home_base_id"),
+        status=DroneStatus(data.get("status", DroneStatus.IDLE)),
+        max_speed=float(data.get("max_speed", 15.0)),
+        battery_capacity=float(data.get("battery_capacity", 100.0)),
+        remaining_battery=float(data.get("remaining_battery", 100.0)),
+        energy_per_meter=float(data.get("energy_per_meter", 0.08)),
+        payload_capacity=float(data.get("payload_capacity", 3.0)),
+        current_payload=float(data.get("current_payload", 0.0)),
+        communication_range=float(data.get("communication_range", 180.0)),
+        safety_radius=float(data.get("safety_radius", 6.0)),
+        assigned_tasks=list(data.get("assigned_tasks", [])),
+        planned_path=planned_path or path_from_waypoints(waypoints),
+        waypoints=waypoints,
+        cruise_altitude=float(data.get("cruise_altitude", 100.0)),
+        min_clearance=float(data.get("min_clearance", 30.0)),
+        climb_rate=float(data.get("climb_rate", 3.0)),
+        descent_rate=float(data.get("descent_rate", 2.5)),
+        hover_power=float(data.get("hover_power", 90.0)),
+        climb_power=float(data.get("climb_power", 140.0)),
+        descent_power=float(data.get("descent_power", 35.0)),
+        horizontal_power=float(data.get("horizontal_power", 110.0)),
+        air_speed=float(data.get("air_speed", data.get("max_speed", 15.0))),
+    )
+    if not drone.waypoints and drone.planned_path:
+        drone.waypoints = waypoints_from_path(
+            drone.planned_path,
+            altitude_provider=lambda point, _index: max(
+                drone.cruise_altitude,
+                terrain.altitude_at(point.x, point.y) + drone.min_clearance,
+            ),
+        )
+    return drone
+
+
 class ProjectRepository:
     """Read and write deterministic, human-readable `.dmproj` JSON files."""
 
@@ -167,11 +236,12 @@ class ProjectRepository:
     def _decode(self, raw: dict[str, Any]) -> ProjectModel:
         map_data = raw.get("map", {})
         grid_size = float(map_data.get("grid_size", 25.0))
+        terrain = _terrain(map_data.get("terrain"), grid_size)
         map_model = MapModel(
             width=int(map_data.get("width", 1000)),
             height=int(map_data.get("height", 700)),
             grid_size=grid_size,
-            terrain=_terrain(map_data.get("terrain"), grid_size),
+            terrain=terrain,
             wind=_wind(map_data.get("wind")),
             bases=[
                 BaseStation(
@@ -182,35 +252,7 @@ class ProjectRepository:
                 )
                 for item in map_data.get("bases", [])
             ],
-            drones=[
-                Drone(
-                    id=item["id"],
-                    name=item["name"],
-                    position=_point(item["position"]),
-                    home_base_id=item.get("home_base_id"),
-                    status=DroneStatus(item.get("status", DroneStatus.IDLE)),
-                    max_speed=float(item.get("max_speed", 15.0)),
-                    battery_capacity=float(item.get("battery_capacity", 100.0)),
-                    remaining_battery=float(item.get("remaining_battery", 100.0)),
-                    energy_per_meter=float(item.get("energy_per_meter", 0.08)),
-                    payload_capacity=float(item.get("payload_capacity", 3.0)),
-                    current_payload=float(item.get("current_payload", 0.0)),
-                    communication_range=float(item.get("communication_range", 180.0)),
-                    safety_radius=float(item.get("safety_radius", 6.0)),
-                    assigned_tasks=list(item.get("assigned_tasks", [])),
-                    planned_path=[_point(point) for point in item.get("planned_path", [])],
-                    cruise_altitude=float(item.get("cruise_altitude", 100.0)),
-                    min_clearance=float(item.get("min_clearance", 30.0)),
-                    climb_rate=float(item.get("climb_rate", 3.0)),
-                    descent_rate=float(item.get("descent_rate", 2.5)),
-                    hover_power=float(item.get("hover_power", 90.0)),
-                    climb_power=float(item.get("climb_power", 140.0)),
-                    descent_power=float(item.get("descent_power", 35.0)),
-                    horizontal_power=float(item.get("horizontal_power", 110.0)),
-                    air_speed=float(item.get("air_speed", item.get("max_speed", 15.0))),
-                )
-                for item in map_data.get("drones", [])
-            ],
+            drones=[_drone(item, terrain) for item in map_data.get("drones", [])],
             obstacles=[
                 Obstacle(
                     id=item["id"],

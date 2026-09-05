@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from .enums import DroneStatus, ObstacleShape, TaskStatus, TaskType
 from .geometry import Point, Rect
 from .terrain import TerrainModel
+from .waypoint import Waypoint
 from .wind import WindModel
 
 
@@ -33,6 +34,7 @@ class Drone:
     safety_radius: float = 6.0
     assigned_tasks: list[str] = field(default_factory=list)
     planned_path: list[Point] = field(default_factory=list)
+    waypoints: list[Waypoint] = field(default_factory=list)
     cruise_altitude: float = 100.0
     min_clearance: float = 30.0
     climb_rate: float = 3.0
@@ -159,7 +161,7 @@ class MapModel:
 @dataclass(slots=True)
 class ProjectModel:
     name: str = "Untitled mission"
-    version: str = "1.3"
+    version: str = "1.4"
     map: MapModel = field(default_factory=MapModel)
     planning_settings: dict[str, float | int | bool | str] = field(default_factory=dict)
     simulation_settings: dict[str, float | int | bool | str] = field(

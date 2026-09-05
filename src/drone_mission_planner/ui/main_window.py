@@ -588,6 +588,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Planning failed", result.failure_reason or "Unknown error")
             return
         drone.planned_path = result.waypoints
+        drone.waypoints = result.flight_waypoints
         self.service.dirty = True
         self._render_altitude_table()
         self._render_map_if_visible()
@@ -634,6 +635,7 @@ class MainWindow(QMainWindow):
         self.coverage_results[area.id] = result
         for drone in self.service.project.map.drones:
             drone.planned_path = result.drone_paths.get(drone.id, [])
+            drone.waypoints = result.drone_waypoints.get(drone.id, [])
             drone.assigned_tasks.clear()
         self.service.dirty = True
         self._render_coverage_table()
@@ -895,6 +897,7 @@ class MainWindow(QMainWindow):
         for drone in self.service.project.map.drones:
             drone.assigned_tasks.clear()
             drone.planned_path = result.drone_paths.get(drone.id, [])
+            drone.waypoints = result.drone_waypoints.get(drone.id, [])
         for task in self.service.project.map.tasks:
             if task.status.value != "completed":
                 task.assigned_drone_id = None
@@ -1115,6 +1118,7 @@ class MainWindow(QMainWindow):
             paths = coverage_result.drone_paths
             for drone in self.service.project.map.drones:
                 drone.planned_path = paths.get(drone.id, [])
+                drone.waypoints = coverage_result.drone_waypoints.get(drone.id, [])
             failures = coverage_result.failures
             self._render_coverage_table(engine.snapshot().coverage)
         else:

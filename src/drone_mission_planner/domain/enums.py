@@ -38,3 +38,17 @@ class ObstacleShape(StrEnum):
     RECTANGLE = "rectangle"
     CIRCLE = "circle"
     POLYGON = "polygon"
+
+
+class AltitudeMode(StrEnum):
+    MSL = "msl"
+    AGL = "agl"
+
+
+class WaypointAction(StrEnum):
+    FLY_TO = "fly_to"
+    HOVER = "hover"
+    TAKE_PHOTO = "take_photo"
+    SCAN = "scan"
+    LAND = "land"
+    RETURN_TO_LAUNCH = "return_to_launch"

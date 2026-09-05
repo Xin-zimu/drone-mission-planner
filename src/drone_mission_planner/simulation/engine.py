@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import isclose
 from random import Random
 
-from drone_mission_planner.domain.enums import DroneStatus, TaskStatus
+from drone_mission_planner.domain.enums import DroneStatus, TaskStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import Drone, MapModel, MissionTask
 from drone_mission_planner.planning.collision import (
@@ -416,6 +416,8 @@ class SimulationEngine:
                 f"Auto-return failed: {runtime.failure_reason}",
             )
             return
+        for waypoint in route.flight_waypoints:
+            waypoint.action = WaypointAction.RETURN_TO_LAUNCH
         for task_id in list(runtime.assigned_task_ids):
             if self.task_statuses.get(task_id) in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}:
                 continue
@@ -430,6 +432,7 @@ class SimulationEngine:
         runtime.status = DroneStatus.RETURNING
         drone.assigned_tasks.clear()
         drone.planned_path = route.waypoints
+        drone.waypoints = route.flight_waypoints
         self.replan_count += 1
         self.record_external_event(
             EventType.AUTO_RETURN,
@@ -605,6 +608,7 @@ class SimulationEngine:
         return bool(
             (wind.enabled and wind.speed > 0)
             or terrain.peaks
+            or terrain.grid_altitudes
             or abs(terrain.base_altitude) > 1e-9
             or abs(terrain.min_altitude) > 1e-9
             or abs(terrain.max_altitude) > 1e-9

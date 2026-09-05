@@ -26,6 +26,14 @@ Route geometry is still planned by the 2D inflated-grid A* planner. After a path
 
 Terrain sampling is source-agnostic. Flat terrain returns a constant altitude, procedural terrain evaluates Gaussian peaks, and imported CSV terrain samples a regular elevation grid with bilinear interpolation. Queries outside the imported grid are clamped to the nearest grid edge so planning, 2.5D rendering, and reports remain deterministic even when the mission map is larger than the imported elevation extent.
 
+## Three-dimensional waypoints
+
+Every route result carries `flight_waypoints` next to the two-dimensional point path. Waypoint altitude reuses the energy-model flight altitude: the greater of cruise altitude and terrain clearance, with a task's `target_altitude` applied at the final leg. Each waypoint stores an altitude mode (MSL or AGL), optional speed, hold time, and an action.
+
+Task endpoints receive the owning task ID and an action mapped from the task type: area search maps to scan, inspection to take photo, return-home to return-to-launch, tasks with execution time to hover, and everything else to fly-to. Assignment and coverage planning accumulate per-drone waypoint lists alongside point paths; safety-return legs are marked return-to-launch and coverage pass endpoints are marked scan, so a mission file describes what the aircraft should do at each vertex, not only where it flies.
+
+Project schema 1.4 persists the waypoint lists. Legacy files without waypoints are backfilled from their planned paths, and waypoints without a point path derive one, keeping both representations interchangeable.
+
 ## Altitude safety validation
 
 Every planned route is sampled along each segment and checked against terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. The validator reports structured warning or critical risks with the affected drone, segment index, sampled position, required altitude, actual flight altitude, optional object ID, and a concise reason.

@@ -6,6 +6,7 @@ from drone_mission_planner.domain.enums import DroneStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import Drone
 from drone_mission_planner.domain.terrain import TerrainModel
+from drone_mission_planner.domain.waypoint import path_from_waypoints
 from drone_mission_planner.planning.energy import flight_altitude_at
 
 
@@ -37,7 +38,7 @@ class DroneRuntime:
 
     @classmethod
     def from_drone(cls, drone: Drone, terrain: TerrainModel | None = None) -> DroneRuntime:
-        path = list(drone.planned_path)
+        path = list(drone.planned_path) or path_from_waypoints(drone.waypoints)
         if path and path[0].distance_to(drone.position) > 1e-6:
             path.insert(0, drone.position)
         return cls(

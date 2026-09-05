@@ -13,6 +13,8 @@ The application follows a strict layered design.
 
 The UI owns rendering. Domain coordinates are always metres in a top-left-origin 2D world. The editable graphics scene uses the same unit scale, so conversions are explicit but lossless. The 2.5D terrain view projects the same 2D mission coordinates with sampled terrain altitude; editing remains in the 2D view.
 
+Planned routes exist in two interchangeable domain representations: the legacy `planned_path` point list and a list of three-dimensional `Waypoint` objects that add altitude, altitude mode (MSL/AGL), optional speed, an action, hold time, and an optional task link. Planning, simulation, and persistence keep both representations synchronized; project schema 1.4 persists waypoints and migrates older files in memory.
+
 ## Environment model
 
 Terrain and wind live in the domain model as serializable Python dataclasses. Terrain supports flat, procedural Gaussian-peak, and imported regular-grid elevation sources. Planning and simulation sample `altitude_at(x, y)` when estimating climb/descent energy and drawing terrain; grid terrain uses bilinear interpolation and clamps out-of-range samples to the imported bounds. Wind is a global vector expressed as the direction the wind blows toward, so path energy can apply deterministic tailwind, headwind, and crosswind corrections without adding weather services.

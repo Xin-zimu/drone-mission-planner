@@ -353,6 +353,7 @@ def _environment_active(terrain: TerrainModel | None, wind: WindModel | None) ->
         terrain is not None
         and (
             terrain.peaks
+            or terrain.grid_altitudes
             or abs(terrain.base_altitude) > 1e-9
             or abs(terrain.min_altitude) > 1e-9
             or abs(terrain.max_altitude) > 1e-9

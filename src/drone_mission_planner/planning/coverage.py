@@ -5,9 +5,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from math import ceil, floor
 
-from drone_mission_planner.domain.enums import DroneStatus, ObstacleShape
+from drone_mission_planner.domain.enums import DroneStatus, ObstacleShape, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import Drone, MapModel, SearchArea
+from drone_mission_planner.domain.waypoint import Waypoint
 
 from .energy import estimate_path_energy
 from .grid import GridMap
@@ -36,6 +37,7 @@ class CoveragePlanResult:
     area_id: str
     strips: tuple[CoverageStrip, ...]
     drone_paths: dict[str, list[Point]] = field(default_factory=dict)
+    drone_waypoints: dict[str, list[Waypoint]] = field(default_factory=dict)
     drone_distances: dict[str, float] = field(default_factory=dict)
     drone_energies: dict[str, float] = field(default_factory=dict)
     failures: dict[str, str] = field(default_factory=dict)
@@ -314,19 +316,35 @@ class CoveragePlanner:
             )
             targets.append(home)
             path = [drone.position]
+            waypoints: list[Waypoint] = []
             distance = 0.0
             cursor = drone.position
-            for target in targets:
+            scan_points = {
+                (point.x, point.y)
+                for coverage_pass in passes
+                for point in (coverage_pass.start, coverage_pass.end)
+            }
+            for target_index, target in enumerate(targets):
                 leg = self.route_planner.plan_between(map_model, drone, cursor, target)
                 if not leg.success:
                     result.failures[drone.id] = leg.failure_reason or "No safe connecting route"
                     break
                 distance += leg.total_distance
                 path.extend(leg.waypoints[1:])
+                leg_waypoints = leg.flight_waypoints if not waypoints else leg.flight_waypoints[1:]
+                if target_index == len(targets) - 1:
+                    for waypoint in leg_waypoints:
+                        waypoint.action = WaypointAction.RETURN_TO_LAUNCH
+                waypoints.extend(leg_waypoints)
                 cursor = target
             else:
                 route = _deduplicate(path)
+                route_waypoints = _deduplicate_waypoints(waypoints)
+                for waypoint in route_waypoints:
+                    if (waypoint.x, waypoint.y) in scan_points:
+                        waypoint.action = WaypointAction.SCAN
                 result.drone_paths[drone.id] = route
+                result.drone_waypoints[drone.id] = route_waypoints
                 result.drone_distances[drone.id] = distance
                 result.drone_energies[drone.id] = estimate_path_energy(
                     drone,
@@ -529,4 +547,12 @@ def _deduplicate(points: list[Point]) -> list[Point]:
     for point in points:
         if not result or point.distance_to(result[-1]) > 1e-6:
             result.append(point)
+    return result
+
+
+def _deduplicate_waypoints(waypoints: list[Waypoint]) -> list[Waypoint]:
+    result: list[Waypoint] = []
+    for waypoint in waypoints:
+        if not result or waypoint.point.distance_to(result[-1].point) > 1e-6:
+            result.append(waypoint)
     return result
