@@ -21,13 +21,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Create validated virtual environment
+        run: python -m venv .venv
       - name: Install application and build tools
-        run: python -m pip install -e ".[dev]"
+        run: .venv/Scripts/python.exe -m pip install -e ".[dev]"
       - name: Quality checks
         run: |
-          ruff check .
-          mypy src
-          pytest --junitxml=reports/windows-junit.xml
+          .venv/Scripts/python.exe -m ruff check .
+          .venv/Scripts/python.exe -m mypy src
+          .venv/Scripts/python.exe -m pytest --junitxml=reports/windows-junit.xml
       - name: Build standalone EXE
         shell: pwsh
         run: ./packaging/build-windows.ps1
