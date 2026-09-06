@@ -9,6 +9,7 @@
 - Pinned Windows release builds to the validated Python 3.12 environment after Python 3.13 exhibited intermittent native access violations during long mixed Qt/simulation test runs.
 - Fixed packaged Windows startup failure (`DLL load failed while importing QtCore`) by isolating PyInstaller from ambient DLL paths and using PySide6's VC++ 14.44 runtime consistently at the application root.
 - Added an end-to-end release GUI regression covering project load, all view modes, assignment, simulation, replay, exports, recent files, undo/redo, recovery, and final validation.
+- Fixed the simulation tick starving the UI thread on large projects: every 16 ms tick rebuilt the object tree, all workspace tables, the statistics report, and the full 2D/3D scene, piling up timer events at ~100% CPU until the process died with a native access violation. Ticks now step the engine at 16 ms but rebuild the UI at most every 100 ms, and the object tree is only rebuilt when its displayed content actually changes.
 
 ## 1.0.0
 

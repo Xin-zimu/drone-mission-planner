@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QDialog, QDoubleSpinBox, QMessageBox
 
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.app.workspace_state import WorkspaceState
-from drone_mission_planner.domain.enums import WaypointAction
+from drone_mission_planner.domain.enums import DroneStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
 from drone_mission_planner.domain.waypoint import Waypoint
@@ -551,3 +551,65 @@ def test_window_unregisters_qt_log_handler_on_close(qtbot: object) -> None:
 
     assert handler is not None
     assert handler not in logging.getLogger().handlers
+
+
+def test_simulation_tick_throttles_full_ui_sync(
+    qtbot: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 200.0))
+    drone = service.add_drone(Point(40.0, 200.0))
+    drone.planned_path = [drone.position, Point(400.0, 200.0)]
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    sync_calls: list[int] = []
+    original_sync = window._sync_simulation_state
+
+    def counted_sync() -> None:
+        sync_calls.append(1)
+        original_sync()
+
+    monkeypatch.setattr(window, "_sync_simulation_state", counted_sync)
+
+    window.play_simulation()
+    qtbot.wait(500)  # type: ignore[attr-defined]
+    window.pause_simulation()
+
+    assert window.simulation_engine is not None
+    assert window.simulation_engine.time > 0.0
+    # Ticks run every 16 ms (~30 in 500 ms); the full panel rebuild is capped
+    # near 10 Hz, which keeps large projects responsive.
+    assert 1 <= len(sync_calls) <= 12
+    window.service.dirty = False
+
+
+def test_populate_tree_rebuilds_only_when_displayed_content_changes(
+    qtbot: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    drone = service.add_drone(Point(40.0, 20.0))
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    rebuilds: list[int] = []
+    monkeypatch.setattr(window, "_rebuild_tree", lambda: rebuilds.append(1))
+
+    window._populate_tree()
+    assert rebuilds == []
+
+    drone.name = "Renamed scout"
+    window._populate_tree()
+    assert len(rebuilds) == 1
+
+    window._populate_tree()
+    window._populate_tree()
+    assert len(rebuilds) == 1
+
+    drone.status = DroneStatus.RETURNING
+    window._populate_tree()
+    assert len(rebuilds) == 2
+    window.service.dirty = False

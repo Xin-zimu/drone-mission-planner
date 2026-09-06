@@ -120,6 +120,12 @@ def _pair_row(first: QDoubleSpinBox, second: QDoubleSpinBox) -> QWidget:
 
 LOGGER = logging.getLogger(__name__)
 
+# Simulation ticks step the engine every 16 ms, but rebuilding every panel,
+# the object tree, and the whole 2D/3D scene is far more expensive than that
+# on large projects.  Cap the full UI rebuild at ~10 Hz; the extra ticks only
+# advance the engine.
+UI_SYNC_INTERVAL_MS = 100
+
 TYPE_COLORS = {
     "base": "#55d6be",
     "drone": "#4d8df7",
@@ -190,6 +196,9 @@ class MainWindow(QMainWindow):
         self.simulation_timer.setInterval(16)
         self.autosave_timer = QTimer(self)
         self.simulation_clock = QElapsedTimer()
+        self._ui_sync_clock = QElapsedTimer()
+        self._ui_sync_clock.start()
+        self._tree_state: tuple[tuple[str, str, str, str], ...] | None = None
         self._selected_id: str | None = None
         self._tool_actions: dict[ToolMode, QAction] = {}
         self._log_handler: QtLogHandler | None = None
@@ -2102,9 +2111,12 @@ class MainWindow(QMainWindow):
         elapsed = min(0.25, self.simulation_clock.restart() / 1000.0)
         if self.simulation_engine.advance(elapsed):
             self._handle_replan_requests()
-            self._sync_simulation_state()
+            if self._ui_sync_clock.elapsed() >= UI_SYNC_INTERVAL_MS:
+                self._ui_sync_clock.restart()
+                self._sync_simulation_state()
         if self.simulation_engine.is_complete:
             self.pause_simulation()
+            self._sync_simulation_state()
             self.health_badge.setText("●  MISSION COMPLETE")
             self.health_badge.setStyleSheet("color: #55d6be; font-weight: 700;")
             LOGGER.info("Simulation complete at T+%.2f s", self.simulation_engine.time)
@@ -2295,6 +2307,29 @@ class MainWindow(QMainWindow):
             self.property_panel.show_empty()
 
     def _populate_tree(self) -> None:
+        signature = self._tree_signature()
+        if signature == self._tree_state:
+            return
+        self._tree_state = signature
+        self._rebuild_tree()
+
+    def _tree_signature(self) -> tuple[tuple[str, str, str, str], ...]:
+        """Cheap identity of everything the object tree displays."""
+        model = self.service.project.map
+        return tuple(
+            (kind, item.id, item.name, item.status.value if isinstance(item, Drone | MissionTask) else "")
+            for kind, objects in (
+                ("base", model.bases),
+                ("drone", model.drones),
+                ("obstacle", model.obstacles),
+                ("no_fly", model.no_fly_zones),
+                ("task", model.tasks),
+                ("search_area", model.search_areas),
+            )
+            for item in objects
+        )
+
+    def _rebuild_tree(self) -> None:
         self.object_tree.blockSignals(True)
         self.object_tree.clear()
         groups: list[tuple[str, list[MapObject], str]] = [
