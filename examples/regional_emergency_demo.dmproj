@@ -1,0 +1,988 @@
+{
+  "equipment": {
+    "batteries": [
+      {
+        "aging_factor": 0.9,
+        "capacity": 100.0,
+        "name": "LiIon 4S 10Ah",
+        "safety_margin": 0.15,
+        "usable_ratio": 0.85,
+        "voltage": 14.8
+      },
+      {
+        "aging_factor": 0.9,
+        "capacity": 220.0,
+        "name": "LiPo 6S 22Ah",
+        "safety_margin": 0.15,
+        "usable_ratio": 0.85,
+        "voltage": 22.2
+      },
+      {
+        "aging_factor": 0.9,
+        "capacity": 440.0,
+        "name": "LiPo 6S 44Ah",
+        "safety_margin": 0.15,
+        "usable_ratio": 0.85,
+        "voltage": 22.2
+      }
+    ],
+    "drone_models": [
+      {
+        "air_speed": 15.0,
+        "climb_power": 140.0,
+        "climb_rate": 3.0,
+        "communication_range": 180.0,
+        "cruise_altitude": 100.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.08,
+        "horizontal_power": 110.0,
+        "hover_power": 90.0,
+        "max_speed": 15.0,
+        "min_clearance": 30.0,
+        "name": "Quad Scout",
+        "payload_capacity": 2.0
+      },
+      {
+        "air_speed": 12.0,
+        "climb_power": 220.0,
+        "climb_rate": 3.0,
+        "communication_range": 260.0,
+        "cruise_altitude": 120.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.12,
+        "horizontal_power": 180.0,
+        "hover_power": 150.0,
+        "max_speed": 12.0,
+        "min_clearance": 30.0,
+        "name": "Heavy Lifter",
+        "payload_capacity": 8.0
+      },
+      {
+        "air_speed": 25.0,
+        "climb_power": 120.0,
+        "climb_rate": 3.0,
+        "communication_range": 400.0,
+        "cruise_altitude": 150.0,
+        "descent_power": 25.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.04,
+        "horizontal_power": 60.0,
+        "hover_power": 40.0,
+        "max_speed": 25.0,
+        "min_clearance": 30.0,
+        "name": "Long Range Fixed Wing",
+        "payload_capacity": 1.5
+      }
+    ],
+    "mission_templates": [
+      {
+        "description": "Perimeter and structure inspection",
+        "name": "inspection",
+        "settings": {
+          "default_target_altitude": 120.0,
+          "mission_mode": "point_tasks"
+        }
+      },
+      {
+        "description": "Coverage sweep with high target coverage",
+        "name": "search_and_rescue",
+        "settings": {
+          "mission_mode": "coverage",
+          "scan_spacing": 30.0,
+          "target_coverage": 0.98
+        }
+      },
+      {
+        "description": "Payload delivery with energy reserve",
+        "name": "delivery",
+        "settings": {
+          "default_target_altitude": 80.0,
+          "mission_mode": "point_tasks"
+        }
+      },
+      {
+        "description": "Photogrammetry coverage",
+        "name": "mapping",
+        "settings": {
+          "mission_mode": "coverage",
+          "scan_spacing": 20.0,
+          "target_coverage": 0.95
+        }
+      }
+    ],
+    "payloads": [
+      {
+        "name": "EO camera",
+        "power_draw": 6.0,
+        "weight": 0.4
+      },
+      {
+        "name": "Cargo box",
+        "power_draw": 0.0,
+        "weight": 2.5
+      },
+      {
+        "name": "Air quality sensor",
+        "power_draw": 8.0,
+        "weight": 0.3
+      }
+    ]
+  },
+  "map": {
+    "basemap": null,
+    "bases": [
+      {
+        "communication_range": 480.0,
+        "id": "B-01",
+        "name": "West emergency command",
+        "position": {
+          "x": 70.0,
+          "y": 90.0
+        }
+      },
+      {
+        "communication_range": 460.0,
+        "id": "B-02",
+        "name": "East logistics hub",
+        "position": {
+          "x": 1320.0,
+          "y": 790.0
+        }
+      },
+      {
+        "communication_range": 420.0,
+        "id": "B-03",
+        "name": "North field station",
+        "position": {
+          "x": 700.0,
+          "y": 60.0
+        }
+      }
+    ],
+    "drones": [
+      {
+        "air_speed": 21.0,
+        "assigned_tasks": [],
+        "battery_capacity": 430.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 330.0,
+        "cruise_altitude": 220.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.022,
+        "home_base_id": "B-01",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-01",
+        "max_speed": 21.0,
+        "min_clearance": 40.0,
+        "name": "Rapid medical scout",
+        "payload_capacity": 3.0,
+        "planned_path": [],
+        "position": {
+          "x": 95.0,
+          "y": 105.0
+        },
+        "remaining_battery": 430.0,
+        "role": "mission",
+        "safety_radius": 7.0,
+        "status": "idle",
+        "waypoints": []
+      },
+      {
+        "air_speed": 13.0,
+        "assigned_tasks": [],
+        "battery_capacity": 760.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 360.0,
+        "cruise_altitude": 235.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.032,
+        "home_base_id": "B-01",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-02",
+        "max_speed": 13.0,
+        "min_clearance": 40.0,
+        "name": "Heavy relief lifter",
+        "payload_capacity": 15.0,
+        "planned_path": [],
+        "position": {
+          "x": 120.0,
+          "y": 145.0
+        },
+        "remaining_battery": 760.0,
+        "role": "mission",
+        "safety_radius": 7.0,
+        "status": "idle",
+        "waypoints": []
+      },
+      {
+        "air_speed": 17.0,
+        "assigned_tasks": [],
+        "battery_capacity": 520.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 340.0,
+        "cruise_altitude": 245.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.024,
+        "home_base_id": "B-01",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-03",
+        "max_speed": 17.0,
+        "min_clearance": 40.0,
+        "name": "Multispectral mapper",
+        "payload_capacity": 5.0,
+        "planned_path": [],
+        "position": {
+          "x": 105.0,
+          "y": 185.0
+        },
+        "remaining_battery": 520.0,
+        "role": "mission",
+        "safety_radius": 7.0,
+        "status": "idle",
+        "waypoints": []
+      },
+      {
+        "air_speed": 18.0,
+        "assigned_tasks": [],
+        "battery_capacity": 500.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 330.0,
+        "cruise_altitude": 225.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.024,
+        "home_base_id": "B-02",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-04",
+        "max_speed": 18.0,
+        "min_clearance": 40.0,
+        "name": "East response quad",
+        "payload_capacity": 4.0,
+        "planned_path": [],
+        "position": {
+          "x": 1290.0,
+          "y": 760.0
+        },
+        "remaining_battery": 500.0,
+        "role": "mission",
+        "safety_radius": 7.0,
+        "status": "idle",
+        "waypoints": []
+      },
+      {
+        "air_speed": 25.0,
+        "assigned_tasks": [],
+        "battery_capacity": 650.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 440.0,
+        "cruise_altitude": 270.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.019,
+        "home_base_id": "B-03",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-05",
+        "max_speed": 25.0,
+        "min_clearance": 40.0,
+        "name": "Long-range inspector",
+        "payload_capacity": 2.0,
+        "planned_path": [],
+        "position": {
+          "x": 675.0,
+          "y": 85.0
+        },
+        "remaining_battery": 650.0,
+        "role": "mission",
+        "safety_radius": 7.0,
+        "status": "idle",
+        "waypoints": []
+      },
+      {
+        "air_speed": 16.0,
+        "assigned_tasks": [],
+        "battery_capacity": 610.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 390.0,
+        "cruise_altitude": 240.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.026,
+        "home_base_id": "B-03",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-06",
+        "max_speed": 16.0,
+        "min_clearance": 40.0,
+        "name": "All-weather workhorse",
+        "payload_capacity": 8.0,
+        "planned_path": [],
+        "position": {
+          "x": 725.0,
+          "y": 90.0
+        },
+        "remaining_battery": 610.0,
+        "role": "mission",
+        "safety_radius": 7.0,
+        "status": "idle",
+        "waypoints": []
+      },
+      {
+        "air_speed": 14.0,
+        "assigned_tasks": [],
+        "battery_capacity": 850.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 560.0,
+        "cruise_altitude": 280.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.018,
+        "home_base_id": "B-01",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-07",
+        "max_speed": 14.0,
+        "min_clearance": 40.0,
+        "name": "West relay",
+        "payload_capacity": 1.0,
+        "planned_path": [],
+        "position": {
+          "x": 500.0,
+          "y": 455.0
+        },
+        "remaining_battery": 850.0,
+        "role": "relay",
+        "safety_radius": 9.0,
+        "status": "idle",
+        "waypoints": []
+      },
+      {
+        "air_speed": 14.0,
+        "assigned_tasks": [],
+        "battery_capacity": 850.0,
+        "climb_power": 155.0,
+        "climb_rate": 4.0,
+        "communication_range": 560.0,
+        "cruise_altitude": 280.0,
+        "current_payload": 0.0,
+        "descent_power": 45.0,
+        "descent_rate": 3.0,
+        "energy_per_meter": 0.018,
+        "home_base_id": "B-02",
+        "horizontal_power": 120.0,
+        "hover_power": 100.0,
+        "id": "D-08",
+        "max_speed": 14.0,
+        "min_clearance": 40.0,
+        "name": "East relay",
+        "payload_capacity": 1.0,
+        "planned_path": [],
+        "position": {
+          "x": 955.0,
+          "y": 475.0
+        },
+        "remaining_battery": 850.0,
+        "role": "relay",
+        "safety_radius": 9.0,
+        "status": "idle",
+        "waypoints": []
+      }
+    ],
+    "grid_size": 20.0,
+    "height": 900,
+    "no_fly_zones": [
+      {
+        "bounds": {
+          "height": 115.0,
+          "width": 290.0,
+          "x": 585.0,
+          "y": 120.0
+        },
+        "ceiling_altitude": 320.0,
+        "id": "N-01",
+        "name": "Airport emergency corridor",
+        "points": [],
+        "shape": "rectangle",
+        "temporary": false
+      },
+      {
+        "bounds": {
+          "height": 165.0,
+          "width": 190.0,
+          "x": 825.0,
+          "y": 420.0
+        },
+        "ceiling_altitude": 400.0,
+        "id": "N-02",
+        "name": "Chemical plume exclusion",
+        "points": [
+          {
+            "x": 825.0,
+            "y": 455.0
+          },
+          {
+            "x": 900.0,
+            "y": 420.0
+          },
+          {
+            "x": 1005.0,
+            "y": 465.0
+          },
+          {
+            "x": 980.0,
+            "y": 575.0
+          },
+          {
+            "x": 860.0,
+            "y": 585.0
+          }
+        ],
+        "shape": "polygon",
+        "temporary": false
+      },
+      {
+        "bounds": {
+          "height": 105.0,
+          "width": 130.0,
+          "x": 625.0,
+          "y": 535.0
+        },
+        "ceiling_altitude": 260.0,
+        "id": "N-03",
+        "name": "Dam control airspace",
+        "points": [],
+        "shape": "rectangle",
+        "temporary": false
+      }
+    ],
+    "obstacles": [
+      {
+        "bounds": {
+          "height": 140.0,
+          "width": 110.0,
+          "x": 330.0,
+          "y": 210.0
+        },
+        "height": 115.0,
+        "id": "O-01",
+        "name": "Hospital tower",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 90.0,
+          "width": 190.0,
+          "x": 545.0,
+          "y": 405.0
+        },
+        "height": 48.0,
+        "id": "O-02",
+        "name": "Railway yard",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 110.0,
+          "width": 110.0,
+          "x": 930.0,
+          "y": 215.0
+        },
+        "height": 72.0,
+        "id": "O-03",
+        "name": "Water storage tank",
+        "points": [],
+        "radius": 55.0,
+        "shape": "circle"
+      },
+      {
+        "bounds": {
+          "height": 140.0,
+          "width": 180.0,
+          "x": 990.0,
+          "y": 555.0
+        },
+        "height": 64.0,
+        "id": "O-04",
+        "name": "Collapsed industrial blocks",
+        "points": [
+          {
+            "x": 990.0,
+            "y": 590.0
+          },
+          {
+            "x": 1050.0,
+            "y": 555.0
+          },
+          {
+            "x": 1165.0,
+            "y": 585.0
+          },
+          {
+            "x": 1140.0,
+            "y": 690.0
+          },
+          {
+            "x": 1020.0,
+            "y": 675.0
+          }
+        ],
+        "radius": 0.0,
+        "shape": "polygon"
+      },
+      {
+        "bounds": {
+          "height": 120.0,
+          "width": 175.0,
+          "x": 220.0,
+          "y": 620.0
+        },
+        "height": 38.0,
+        "id": "O-05",
+        "name": "Evacuation stadium",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 105.0,
+          "width": 135.0,
+          "x": 755.0,
+          "y": 675.0
+        },
+        "height": 58.0,
+        "id": "O-06",
+        "name": "Power substation",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      }
+    ],
+    "search_areas": [
+      {
+        "boundary_margin": 12.0,
+        "bounds": {
+          "height": 340.0,
+          "width": 500.0,
+          "x": 145.0,
+          "y": 515.0
+        },
+        "holes": [
+          [
+            {
+              "x": 205.0,
+              "y": 605.0
+            },
+            {
+              "x": 410.0,
+              "y": 605.0
+            },
+            {
+              "x": 410.0,
+              "y": 755.0
+            },
+            {
+              "x": 205.0,
+              "y": 755.0
+            }
+          ]
+        ],
+        "id": "S-01",
+        "name": "Priority flood-rescue sector",
+        "points": [
+          {
+            "x": 145.0,
+            "y": 545.0
+          },
+          {
+            "x": 595.0,
+            "y": 515.0
+          },
+          {
+            "x": 645.0,
+            "y": 815.0
+          },
+          {
+            "x": 365.0,
+            "y": 855.0
+          },
+          {
+            "x": 170.0,
+            "y": 770.0
+          }
+        ],
+        "priority": 10,
+        "scan_direction": "horizontal",
+        "scan_spacing": 32.0,
+        "target_coverage": 0.98
+      },
+      {
+        "boundary_margin": 10.0,
+        "bounds": {
+          "height": 330.0,
+          "width": 390.0,
+          "x": 915.0,
+          "y": 130.0
+        },
+        "holes": [
+          [
+            {
+              "x": 920.0,
+              "y": 205.0
+            },
+            {
+              "x": 1050.0,
+              "y": 205.0
+            },
+            {
+              "x": 1050.0,
+              "y": 335.0
+            },
+            {
+              "x": 920.0,
+              "y": 335.0
+            }
+          ]
+        ],
+        "id": "S-02",
+        "name": "Secondary infrastructure mapping",
+        "points": [
+          {
+            "x": 925.0,
+            "y": 150.0
+          },
+          {
+            "x": 1275.0,
+            "y": 130.0
+          },
+          {
+            "x": 1305.0,
+            "y": 420.0
+          },
+          {
+            "x": 1120.0,
+            "y": 460.0
+          },
+          {
+            "x": 930.0,
+            "y": 405.0
+          }
+        ],
+        "priority": 6,
+        "scan_direction": "vertical",
+        "scan_spacing": 38.0,
+        "target_coverage": 0.95
+      }
+    ],
+    "tasks": [
+      {
+        "assigned_drone_id": null,
+        "deadline": 220.0,
+        "earliest_start": null,
+        "execution_duration": 8.0,
+        "id": "T-01",
+        "name": "Trauma medicine drop",
+        "position": {
+          "x": 255.0,
+          "y": 175.0
+        },
+        "priority": 10,
+        "required_payload": 2.0,
+        "status": "pending",
+        "target_altitude": 205.0,
+        "task_type": "delivery"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": 300.0,
+        "earliest_start": null,
+        "execution_duration": 12.0,
+        "id": "T-02",
+        "name": "Bridge structural inspection",
+        "position": {
+          "x": 490.0,
+          "y": 305.0
+        },
+        "priority": 9,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 230.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": 520.0,
+        "earliest_start": null,
+        "execution_duration": 15.0,
+        "id": "T-03",
+        "name": "Shelter bulk supplies",
+        "position": {
+          "x": 515.0,
+          "y": 795.0
+        },
+        "priority": 9,
+        "required_payload": 9.0,
+        "status": "pending",
+        "target_altitude": 220.0,
+        "task_type": "delivery"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": 420.0,
+        "earliest_start": null,
+        "execution_duration": 10.0,
+        "id": "T-04",
+        "name": "North ridge thermal sweep",
+        "position": {
+          "x": 1115.0,
+          "y": 165.0
+        },
+        "priority": 8,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 285.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 8.0,
+        "id": "T-05",
+        "name": "Eastern levee survey",
+        "position": {
+          "x": 1245.0,
+          "y": 455.0
+        },
+        "priority": 8,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 240.0,
+        "task_type": "waypoint"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": 500.0,
+        "earliest_start": null,
+        "execution_duration": 14.0,
+        "id": "T-06",
+        "name": "Fire-retardant payload",
+        "position": {
+          "x": 1080.0,
+          "y": 765.0
+        },
+        "priority": 8,
+        "required_payload": 6.0,
+        "status": "pending",
+        "target_altitude": 225.0,
+        "task_type": "delivery"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 10.0,
+        "id": "T-07",
+        "name": "Rail junction assessment",
+        "position": {
+          "x": 765.0,
+          "y": 345.0
+        },
+        "priority": 7,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 245.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 18.0,
+        "id": "T-08",
+        "name": "Communications mast photo",
+        "position": {
+          "x": 900.0,
+          "y": 300.0
+        },
+        "priority": 7,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 290.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 7.0,
+        "id": "T-09",
+        "name": "West road clearance",
+        "position": {
+          "x": 165.0,
+          "y": 465.0
+        },
+        "priority": 6,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 205.0,
+        "task_type": "waypoint"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 10.0,
+        "id": "T-10",
+        "name": "Southern shelter inspection",
+        "position": {
+          "x": 430.0,
+          "y": 845.0
+        },
+        "priority": 6,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 215.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 9.0,
+        "id": "T-11",
+        "name": "Dam downstream sample",
+        "position": {
+          "x": 900.0,
+          "y": 825.0
+        },
+        "priority": 6,
+        "required_payload": 3.5,
+        "status": "pending",
+        "target_altitude": 225.0,
+        "task_type": "delivery"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 6.0,
+        "id": "T-12",
+        "name": "East access-road mapping",
+        "position": {
+          "x": 1270.0,
+          "y": 835.0
+        },
+        "priority": 5,
+        "required_payload": 0.0,
+        "status": "pending",
+        "target_altitude": 210.0,
+        "task_type": "waypoint"
+      },
+      {
+        "assigned_drone_id": null,
+        "deadline": null,
+        "earliest_start": null,
+        "execution_duration": 12.0,
+        "id": "T-13",
+        "name": "Central weather sensor",
+        "position": {
+          "x": 590.0,
+          "y": 655.0
+        },
+        "priority": 5,
+        "required_payload": 1.5,
+        "status": "pending",
+        "target_altitude": 235.0,
+        "task_type": "delivery"
+      }
+    ],
+    "terrain": {
+      "base_altitude": 18.0,
+      "grid_altitudes": [],
+      "grid_height": 0,
+      "grid_origin": null,
+      "grid_width": 0,
+      "max_altitude": 163.00600519427059,
+      "min_altitude": 18.067122672060137,
+      "peaks": [
+        {
+          "center": {
+            "x": 390.0,
+            "y": 330.0
+          },
+          "height": 105.0,
+          "radius": 180.0
+        },
+        {
+          "center": {
+            "x": 1040.0,
+            "y": 310.0
+          },
+          "height": 145.0,
+          "radius": 220.0
+        },
+        {
+          "center": {
+            "x": 760.0,
+            "y": 760.0
+          },
+          "height": 85.0,
+          "radius": 155.0
+        }
+      ],
+      "resolution": 25.0,
+      "terrain_type": "procedural"
+    },
+    "width": 1400,
+    "wind": {
+      "direction_to_deg": 65.0,
+      "enabled": true,
+      "gust_factor": 0.3,
+      "speed": 8.0
+    }
+  },
+  "name": "Regional disaster-response joint operation",
+  "planning_settings": {
+    "assignment_weight_battery_risk": 110.0,
+    "assignment_weight_deadline": 1.4,
+    "assignment_weight_distance": 0.2,
+    "assignment_weight_energy": 20.0,
+    "assignment_weight_task_load": 100.0,
+    "mission_mode": "point_tasks"
+  },
+  "simulation_settings": {
+    "communication_grace": 12.0,
+    "communication_policy": "auto_return",
+    "fixed_dt": 0.05,
+    "random_seed": 20260905
+  },
+  "version": "1.6"
+}

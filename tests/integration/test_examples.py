@@ -6,6 +6,7 @@ import pytest
 
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.models import Drone, MapModel, MissionTask
+from drone_mission_planner.domain.validation import validate_project
 from drone_mission_planner.persistence.project_repository import ProjectRepository
 from drone_mission_planner.planning.assignment import GreedyAssignmentPlanner
 from drone_mission_planner.planning.coverage import CoveragePlanner
@@ -62,6 +63,33 @@ def test_mountain_wind_example_uses_environment_energy() -> None:
     assert not result.failures
     assert any(decision.energy.climb_meters > 0 for decision in result.decisions)
     assert any(abs(decision.energy.wind_adjustment) > 0 for decision in result.decisions)
+
+
+def test_regional_emergency_example_exercises_advanced_features() -> None:
+    project = ProjectRepository().load(EXAMPLES / "regional_emergency_demo.dmproj")
+    validate_project(project)
+    model = project.map
+
+    assert len(model.bases) == 3
+    assert len(model.drones) == 8
+    assert sum(drone.role == "relay" for drone in model.drones) == 2
+    assert len(model.tasks) == 13
+    assert len(model.obstacles) == 6
+    assert len(model.no_fly_zones) == 3
+    assert len(model.search_areas) == 2
+    assert model.terrain.terrain_type == "procedural"
+    assert model.wind.enabled and model.wind.gust_factor > 0
+    assert all(area.holes for area in model.search_areas)
+    assert {area.scan_direction for area in model.search_areas} == {"horizontal", "vertical"}
+
+    assignment = GreedyAssignmentPlanner().assign(model)
+    assert assignment.assigned_count >= 10
+    assert all(decision.drone_id not in {"D-07", "D-08"} for decision in assignment.decisions)
+
+    primary = max(model.search_areas, key=lambda area: area.priority)
+    coverage = CoveragePlanner().plan(model, primary)
+    assert coverage.drone_paths
+    assert any(coverage.drone_paths.values())
 
 
 def _apply_incremental_coverage_replan(

@@ -75,6 +75,7 @@ Press `F1` inside the application for the quick-start guide.
 | `examples/3d_inspection_demo.dmproj` | Two-drone mountain inspection with target altitudes, hover/photo task actions, and 3D simulation |
 | `examples/altitude_risk_demo.dmproj` | A low cruise route into a tall obstacle, showing critical altitude risks in reports and export validation |
 | `examples/waypoint_edit_demo.dmproj` | Waypoints-tab showcase: AGL/MSL modes, per-waypoint speed, hover/photo/land actions |
+| `examples/regional_emergency_demo.dmproj` | Full-scale regional disaster response: three bases, eight heterogeneous aircraft, relays, 13 mixed missions, terrain/wind, layered hazards, and priority coverage sectors with holes |
 
 ## Controls
 
