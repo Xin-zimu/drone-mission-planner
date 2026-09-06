@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-09-06
 
 - Completed the M20 productization baseline: transactional undo/redo, configurable recovery autosaves, recent projects, local settings, validation center, and atomic project saves.
 - Added sparse-ID-safe object creation and referential cleanup when bases, drones, or missions are deleted.

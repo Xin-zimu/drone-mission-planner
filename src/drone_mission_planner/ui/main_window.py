@@ -2576,9 +2576,9 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About Drone Mission Planner",
-            "<b>Drone Mission Planner 1.0.0</b><br><br>"
+            "<b>Drone Mission Planner 1.1.0</b><br><br>"
             "A fully local multi-UAV mission planning and simulation workspace.<br>"
-            "Release 1.0: eight-stage planning, simulation, recovery, and reporting platform.",
+            "Release 1.1: eight-stage planning, simulation, recovery, and reporting platform.",
         )
 
     def show_quick_start(self) -> None:
