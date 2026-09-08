@@ -2,7 +2,39 @@
 
 Last updated: 2026-09-06
 
-## v1.2 F2-a checkpoint — scheduling core (this pass)
+## v1.2 F2-b checkpoint — scheduling closed loop (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §10, items SCH-05…SCH-08. With this pass the F2 stage is complete.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Simulation | `simulation/task_timeline.py` records each mission's actual arrival, waiting, service start/finish and deadline breach. Service starts only when the aircraft is present, `earliest_start` has passed and every predecessor finished; otherwise the aircraft hovers in place. A cancelled/failed predecessor blocks the successor. Seven new events: `task_arrived`, `task_wait_started`, `task_wait_ended`, `task_service_started`, `task_service_finished`, `task_deadline_violated`, `task_blocked`. Replanning keeps the history of finished missions. |
+| Energy | `planning/energy_ledger.py` accounts cruise, climb, descent, airborne wait, service, ground idle, return and reserve separately; airborne wait/service use `hover_power`, ground wait uses the new `ground_idle_power` (format 1.9), and the reserve is charged once. |
+| Reporting | `SimulationReport.task_timelines` joins the planned schedule with the recorded timelines: planned and actual start/finish, deviation in seconds, wait/service durations, deadline policy, lateness and blocking reason. Unknown plans are `None`, not zero. JSON/CSV/HTML all carry the table. |
+| UI | New read-only `Schedule` tab (`ui/schedule_view.py`): one row per aircraft, planned lane and actual lane, waiting/travel/service in different colours; clicking a bar selects the mission through the existing `select_object` path. No drag or edit affordance. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Timeline events and ordering (arrived ≤ wait_start ≤ wait_end ≤ service_start ≤ service_finish, wait and service disjoint) | `tests/simulation/test_task_timeline.py`, probe `f2b-order` |
+| Energy ledger phases, ground-idle vs hover, reserve charged once | `tests/unit/test_energy_ledger.py` (7 tests), probe `f2b-ledger` — ground idle 0.022 vs 0.500 if hover power had been used |
+| Plan versus actual: planned 5.0 s, actual 10.3 s → +5.3 s start deviation; no plan → unknown, not zero | `tests/simulation/test_plan_vs_actual.py`, probe `f2b-report` |
+| Gantt rows/lanes, click selection, empty view, read-only | `tests/integration/test_schedule_view.py` (5 tests) |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `.venv\Scripts\python.exe -m pytest --basetemp=.pytest-tmp-run` | **332 passed** |
+| `-m ruff check src tests` | All checks passed |
+| `-m mypy src tests` | Success, 114 source files |
+
+Still open from the plan and not part of F2: cross-drone runtime synchronisation (§14.5) and Gantt drag-rescheduling (§10.8 explicitly defers it). Next stage: F3 global multi-UAV optimisation.
+
+## v1.2 F2-a checkpoint — scheduling core (previous pass)
 
 Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §10, items SCH-01…SCH-04. SCH-05 (energy ledger), SCH-06 (simulation events), SCH-07 (Gantt view) and SCH-08 (plan/actual report) remain for the next pass.
 

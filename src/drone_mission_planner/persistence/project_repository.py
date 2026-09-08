@@ -124,6 +124,7 @@ def _drone(data: dict[str, Any]) -> Drone:
         climb_rate=float(data.get("climb_rate", 3.0)),
         descent_rate=float(data.get("descent_rate", 2.5)),
         hover_power=float(data.get("hover_power", 90.0)),
+        ground_idle_power=float(data.get("ground_idle_power", 5.0)),
         climb_power=float(data.get("climb_power", 140.0)),
         descent_power=float(data.get("descent_power", 35.0)),
         horizontal_power=float(data.get("horizontal_power", 110.0)),

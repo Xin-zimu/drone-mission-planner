@@ -24,8 +24,9 @@
 | Environment | Editable procedural terrain peaks, CSV elevation-grid import, base elevation, global wind vectors, climb/descent/hover power parameters, and a read-only 2.5D terrain view |
 | Live adaptation | Manual or seeded automatic failures, exact-position stop, unfinished-work redistribution from live state, coverage recovery without resetting history, temporary zones, task insertion/cancellation |
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
-| Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, event history, and HTML/JSON/CSV export |
-| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.8, a single authoritative `waypoints` route (the 2D path is derived), scheduling fields with migration reports for rebuilt/conflicting routes and legacy deadlines, and clear corrupt/incompatible-file errors |
+| Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, plan-versus-actual mission times with deviations, event history, and HTML/JSON/CSV export |
+| Schedule | Read-only Gantt tab: one row per aircraft with a planned lane and an actual lane (waiting/travel/service in different colours); clicking a mission bar selects it on the map and in the inspector |
+| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.9, a single authoritative `waypoints` route (the 2D path is derived), scheduling fields with migration reports for rebuilt/conflicting routes and legacy deadlines, and clear corrupt/incompatible-file errors |
 | Local basemap | Map → Import basemap… overlays a local PNG/JPG under the mission grid with opacity/lock and two-point metre calibration persisted in the project |
 | Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation and explicit not-flyable local-coordinate marking |
 | Project safety | Undo/redo for common edits and planning operations; atomic saves; timed crash-recovery snapshots; recent projects; local settings; and a project validation center |

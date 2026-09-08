@@ -104,7 +104,7 @@ def test_migration_marks_existing_deadlines_legacy_soft() -> None:
     migrated = migrate_project(_project_v17(), report)
 
     task = migrated["map"]["tasks"][0]
-    assert migrated["version"] == "1.8"
+    assert migrated["version"] == CURRENT_PROJECT_VERSION
     assert task["deadline_policy"] == "legacy_soft"
     assert task["deadline"] == 110.0  # value untouched
     assert task["predecessor_ids"] == []
@@ -118,6 +118,26 @@ def test_migration_keeps_deadline_free_tasks_hard() -> None:
     migrated = migrate_project(raw)
 
     assert migrated["map"]["tasks"][0]["deadline_policy"] == "hard"
+
+
+def test_format_1_9_migration_adds_ground_idle_power() -> None:
+    raw = _project_v17()
+    raw["version"] = "1.8"
+    raw["map"]["drones"] = [
+        {
+            "id": "D-01",
+            "name": "Alpha",
+            "position": {"x": 10.0, "y": 10.0},
+            "home_base_id": "B-01",
+        }
+    ]
+    report = MigrationReport()
+
+    migrated = migrate_project(raw, report)
+
+    assert migrated["version"] == CURRENT_PROJECT_VERSION
+    assert migrated["map"]["drones"][0]["ground_idle_power"] == 5.0
+    assert any("ground_idle_power" in note for note in report.notes)
 
 
 def test_migration_does_not_override_an_explicit_policy() -> None:

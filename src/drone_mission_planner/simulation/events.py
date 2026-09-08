@@ -15,6 +15,13 @@ class EventType(StrEnum):
     AUTO_RETURN = "auto_return"
     WAYPOINT_PHOTO = "waypoint_photo"
     WAYPOINT_LANDING = "waypoint_landing"
+    TASK_ARRIVED = "task_arrived"
+    TASK_WAIT_STARTED = "task_wait_started"
+    TASK_WAIT_ENDED = "task_wait_ended"
+    TASK_SERVICE_STARTED = "task_service_started"
+    TASK_SERVICE_FINISHED = "task_service_finished"
+    TASK_DEADLINE_VIOLATED = "task_deadline_violated"
+    TASK_BLOCKED = "task_blocked"
 
 
 @dataclass(frozen=True, slots=True)

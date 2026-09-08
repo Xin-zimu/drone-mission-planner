@@ -18,6 +18,7 @@ from drone_mission_planner.planning.energy import (
     segment_ground_speed,
 )
 from drone_mission_planner.planning.route_planner import RoutePlanner
+from drone_mission_planner.planning.scheduling import ScheduleResult
 
 from .communication import CommunicationMonitor, CommunicationNode, CommunicationStatus
 from .coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
@@ -25,6 +26,7 @@ from .drone_runtime import DroneRuntime
 from .events import EventManager, EventRecord, EventType, SimulationEvent
 from .replay import ReplayRecorder
 from .statistics import DroneStatistics, collect_drone_statistics
+from .task_timeline import TaskTimeline
 
 _PHOTO_HOLD_SECONDS = 2.0
 _MOVING_STATUSES = {
@@ -76,6 +78,7 @@ class SimulationEngine:
         random_seed: int = 42,
         communication_policy: str = "log_only",
         communication_grace: float = 5.0,
+        planned_schedule: ScheduleResult | None = None,
     ) -> None:
         if fixed_dt <= 0:
             raise ValueError("fixed_dt must be positive")
@@ -96,6 +99,9 @@ class SimulationEngine:
             task.id: TaskStatus.ASSIGNED if task.assigned_drone_id else task.status
             for task in map_model.tasks
         }
+        self.task_timelines: dict[str, TaskTimeline] = {}
+        self._reset_task_timelines()
+        self.planned_schedule = planned_schedule
         self.coverage_monitor = CoverageMonitor(map_model)
         self.coverage_monitor.update(self._coverage_positions())
         self.replay = ReplayRecorder()
@@ -157,6 +163,7 @@ class SimulationEngine:
         self.coverage_monitor.update(self._coverage_positions())
         self.replay.reset()
         self.event_manager.clear()
+        self._reset_task_timelines()
         self._replan_requests.clear()
         self.replan_count = 0
         self.active_conflicts = ()
@@ -208,6 +215,131 @@ class SimulationEngine:
         self.event_manager.record(event, self.time, message)
         return self.event_manager.history[-1]
 
+    def timelines(self) -> tuple[TaskTimeline, ...]:
+        """Actual per-mission timelines, ordered by mission id (plan §10.7)."""
+
+        return tuple(self.task_timelines[task_id] for task_id in sorted(self.task_timelines))
+
+    def task_timeline(self, task_id: str) -> TaskTimeline | None:
+        return self.task_timelines.get(task_id)
+
+    def set_planned_schedule(self, schedule: ScheduleResult | None) -> None:
+        """Attach the plan this run is compared against (plan §10.8)."""
+
+        self.planned_schedule = schedule
+
+    def _reset_task_timelines(self) -> None:
+        self.task_timelines = {
+            task.id: TaskTimeline(
+                task_id=task.id,
+                drone_id=task.assigned_drone_id,
+                deadline=task.deadline,
+                deadline_policy=task.deadline_policy,
+                status=task.status,
+            )
+            for task in self.tasks.values()
+        }
+
+    def _begin_service_or_wait(self, runtime: DroneRuntime, task: MissionTask) -> None:
+        """Reached a mission: start service, or hover until the window opens."""
+
+        timeline = self.task_timelines.get(task.id)
+        if timeline is None:
+            timeline = TaskTimeline(
+                task_id=task.id,
+                deadline=task.deadline,
+                deadline_policy=task.deadline_policy,
+            )
+            self.task_timelines[task.id] = timeline
+        timeline.drone_id = runtime.id
+        if timeline.arrived_at is None:
+            timeline.arrived_at = self.time
+            self.record_external_event(
+                EventType.TASK_ARRIVED, task.id, f"{runtime.id} reached {task.name}"
+            )
+        ready_time, blocked_reason = self._service_readiness(task)
+        if blocked_reason is not None:
+            timeline.blocked_reason = blocked_reason
+            timeline.status = TaskStatus.FAILED
+            self.task_statuses[task.id] = TaskStatus.FAILED
+            self.record_external_event(EventType.TASK_BLOCKED, task.id, blocked_reason)
+            return
+        if self.time + 1e-9 < ready_time:
+            if timeline.wait_started_at is None:
+                timeline.wait_started_at = self.time
+                self.record_external_event(
+                    EventType.TASK_WAIT_STARTED,
+                    task.id,
+                    f"waiting until {ready_time:.1f} s",
+                )
+            runtime.pending_task_id = task.id
+            runtime.wait_until = ready_time
+            runtime.status = DroneStatus.HOVERING
+            return
+        if timeline.wait_started_at is not None and timeline.wait_ended_at is None:
+            timeline.wait_ended_at = self.time
+            self.record_external_event(EventType.TASK_WAIT_ENDED, task.id, "wait finished")
+        self._start_service(runtime, task, timeline)
+
+    def _service_readiness(self, task: MissionTask) -> tuple[float, str | None]:
+        """Earliest time the mission may start, or the reason it is blocked.
+
+        Returns ``inf`` while a predecessor is still open: the aircraft waits in
+        place and the engine re-checks on the next step.
+        """
+
+        ready = self.time
+        if task.earliest_start is not None:
+            ready = max(ready, task.earliest_start)
+        for predecessor_id in task.predecessor_ids:
+            status = self.task_statuses.get(predecessor_id)
+            if status in {TaskStatus.FAILED, TaskStatus.CANCELLED}:
+                return ready, f"predecessor {predecessor_id} is {status.value}"
+            if status != TaskStatus.COMPLETED:
+                return float("inf"), None
+            predecessor = self.task_timelines.get(predecessor_id)
+            finish = predecessor.service_finished_at if predecessor is not None else None
+            ready = max(
+                ready, (finish if finish is not None else self.time) + task.min_lag_seconds
+            )
+        return ready, None
+
+    def _start_service(
+        self, runtime: DroneRuntime, task: MissionTask, timeline: TaskTimeline
+    ) -> None:
+        timeline.service_started_at = self.time
+        timeline.status = TaskStatus.IN_PROGRESS
+        self.task_statuses[task.id] = TaskStatus.IN_PROGRESS
+        runtime.pending_task_id = None
+        runtime.wait_until = 0.0
+        runtime.servicing_task_id = task.id
+        self.record_external_event(
+            EventType.TASK_SERVICE_STARTED, task.id, f"{runtime.id} started {task.name}"
+        )
+        if task.execution_duration <= 0:
+            self._finish_service(runtime, task.id)
+            return
+        runtime.execution_remaining = task.execution_duration
+        runtime.status = DroneStatus.EXECUTING
+
+    def _finish_service(self, runtime: DroneRuntime, task_id: str) -> None:
+        timeline = self.task_timelines.get(task_id)
+        runtime.servicing_task_id = None
+        runtime.execution_remaining = 0.0
+        if timeline is None or timeline.service_finished_at is not None:
+            return
+        timeline.service_finished_at = self.time
+        timeline.status = TaskStatus.COMPLETED
+        self.task_statuses[task_id] = TaskStatus.COMPLETED
+        self.record_external_event(EventType.TASK_SERVICE_FINISHED, task_id, "service finished")
+        if timeline.deadline is not None and not timeline.deadline_ok:
+            self.record_external_event(
+                EventType.TASK_DEADLINE_VIOLATED,
+                task_id,
+                f"finished {timeline.lateness_seconds:.1f} s after the "
+                f"{timeline.deadline_policy.value} deadline",
+            )
+
     def drain_replan_requests(self) -> tuple[str, ...]:
         requests = tuple(self._replan_requests)
         self._replan_requests.clear()
@@ -240,6 +372,14 @@ class SimulationEngine:
                 TaskStatus.CANCELLED,
             }:
                 self.task_statuses[task.id] = task.status
+            if task.id not in self.task_timelines:
+                self.task_timelines[task.id] = TaskTimeline(
+                    task_id=task.id,
+                    drone_id=task.assigned_drone_id,
+                    deadline=task.deadline,
+                    deadline_policy=task.deadline_policy,
+                    status=task.status,
+                )
         self.replan_count += 1
 
     def add_task(self, task: MissionTask) -> None:
@@ -516,6 +656,19 @@ class SimulationEngine:
             if runtime.takeoff_remaining > 0:
                 return
             runtime.status = DroneStatus.FLYING
+        if runtime.pending_task_id is not None:
+            if runtime.wait_until > self.time + 1e-9:
+                runtime.status = DroneStatus.HOVERING
+                if self._apply_hover_energy(runtime, dt):
+                    return
+                runtime.waiting_time += dt
+                self._track_altitude_extremes(runtime)
+                return
+            pending = self.tasks.get(runtime.pending_task_id)
+            if pending is not None:
+                self._begin_service_or_wait(runtime, pending)
+            if runtime.execution_remaining <= 0:
+                return
         if runtime.execution_remaining > 0:
             runtime.status = DroneStatus.EXECUTING
             consumed = min(dt, runtime.execution_remaining)
@@ -525,6 +678,8 @@ class SimulationEngine:
             runtime.waiting_time += dt
             if runtime.execution_remaining > 0:
                 return
+            if runtime.servicing_task_id is not None:
+                self._finish_service(runtime, runtime.servicing_task_id)
             runtime.status = (
                 DroneStatus.RETURNING
                 if set(runtime.completed_task_ids) >= set(runtime.assigned_task_ids)
@@ -660,8 +815,7 @@ class SimulationEngine:
                 return
             reached_task = self._complete_reached_task(runtime, old_position)
             if reached_task is not None:
-                runtime.execution_remaining = reached_task.execution_duration
-                runtime.status = DroneStatus.EXECUTING
+                self._begin_service_or_wait(runtime, reached_task)
                 break
             if arriving and self._apply_arrival_action(runtime, target_index):
                 break
@@ -847,7 +1001,6 @@ class SimulationEngine:
                 )
             if reached:
                 runtime.completed_task_ids.append(task_id)
-                self.task_statuses[task_id] = TaskStatus.COMPLETED
                 return task
         return None
 

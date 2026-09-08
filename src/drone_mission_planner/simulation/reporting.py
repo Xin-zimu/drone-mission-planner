@@ -79,6 +79,33 @@ class AltitudeRiskReport:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskTimelineReport:
+    """Plan versus actual times of one mission (plan §10.8).
+
+    ``planned_*`` and the deviations are ``None`` when the run had no planned
+    schedule: an unknown plan is reported as unknown, never as zero.
+    """
+
+    task_id: str
+    drone_id: str | None
+    business_status: str
+    planned_start: float | None
+    planned_finish: float | None
+    actual_arrival: float | None
+    actual_start: float | None
+    actual_finish: float | None
+    start_deviation: float | None
+    finish_deviation: float | None
+    wait_seconds: float
+    service_seconds: float
+    deadline: float | None
+    deadline_policy: str
+    lateness_seconds: float
+    deadline_ok: bool
+    blocked_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class SimulationReport:
     mission_time: float
     total_tasks: int
@@ -97,6 +124,7 @@ class SimulationReport:
     coverage: tuple[CoverageReport, ...]
     risk_matrix: tuple[RiskMatrixRow, ...] = ()
     assignment_notes: tuple[str, ...] = ()
+    task_timelines: tuple[TaskTimelineReport, ...] = ()
 
 
 def build_simulation_report(
@@ -197,7 +225,55 @@ def build_simulation_report(
         coverage=coverage,
         risk_matrix=build_risk_matrix(assess_mission_risk(engine.map_model)),
         assignment_notes=assignment_notes,
+        task_timelines=_task_timeline_reports(engine),
     )
+
+
+def _task_timeline_reports(engine: SimulationEngine) -> tuple[TaskTimelineReport, ...]:
+    """Join the engine's actual timelines with the planned schedule, if any."""
+
+    schedule = engine.planned_schedule
+    reports: list[TaskTimelineReport] = []
+    for timeline in engine.timelines():
+        planned = schedule.entry(timeline.task_id) if schedule is not None else None
+        planned_start = (
+            planned.start_time if planned is not None and planned.scheduled else None
+        )
+        planned_finish = (
+            planned.finish_time if planned is not None and planned.scheduled else None
+        )
+        actual_start = timeline.service_started_at
+        actual_finish = timeline.service_finished_at
+        reports.append(
+            TaskTimelineReport(
+                task_id=timeline.task_id,
+                drone_id=timeline.drone_id,
+                business_status=timeline.business_status,
+                planned_start=planned_start,
+                planned_finish=planned_finish,
+                actual_arrival=timeline.arrived_at,
+                actual_start=actual_start,
+                actual_finish=actual_finish,
+                start_deviation=(
+                    actual_start - planned_start
+                    if actual_start is not None and planned_start is not None
+                    else None
+                ),
+                finish_deviation=(
+                    actual_finish - planned_finish
+                    if actual_finish is not None and planned_finish is not None
+                    else None
+                ),
+                wait_seconds=timeline.wait_seconds,
+                service_seconds=timeline.service_seconds,
+                deadline=timeline.deadline,
+                deadline_policy=timeline.deadline_policy.value,
+                lateness_seconds=timeline.lateness_seconds,
+                deadline_ok=timeline.deadline_ok,
+                blocked_reason=timeline.blocked_reason,
+            )
+        )
+    return tuple(reports)
 
 
 def export_report(report: SimulationReport, path: str | Path) -> Path:
@@ -250,6 +326,31 @@ def export_report(report: SimulationReport, path: str | Path) -> Path:
             )
             for row in report.risk_matrix:
                 writer.writerow(asdict(row).values())
+            if report.task_timelines:
+                writer.writerow([])
+                writer.writerow(
+                    [
+                        "task_id",
+                        "drone_id",
+                        "business_status",
+                        "planned_start",
+                        "planned_finish",
+                        "actual_arrival",
+                        "actual_start",
+                        "actual_finish",
+                        "start_deviation",
+                        "finish_deviation",
+                        "wait_seconds",
+                        "service_seconds",
+                        "deadline",
+                        "deadline_policy",
+                        "lateness_seconds",
+                        "deadline_ok",
+                        "blocked_reason",
+                    ]
+                )
+                for timeline in report.task_timelines:
+                    writer.writerow(asdict(timeline).values())
     elif suffix in {".html", ".htm"}:
         target.write_text(_html_report(report), encoding="utf-8")
     else:
@@ -313,6 +414,32 @@ def _html_report(report: SimulationReport) -> str:
         if report.environment.wind_enabled
         else "disabled"
     )
+    timeline_rows = "\n".join(
+        "<tr>"
+        f"<td>{escape(item.task_id)}</td><td>{escape(item.drone_id or '—')}</td>"
+        f"<td>{escape(item.business_status)}</td>"
+        f"<td>{_seconds(item.planned_start)}</td><td>{_seconds(item.planned_finish)}</td>"
+        f"<td>{_seconds(item.actual_arrival)}</td><td>{_seconds(item.actual_start)}</td>"
+        f"<td>{_seconds(item.actual_finish)}</td>"
+        f"<td>{_deviation(item.start_deviation)}</td>"
+        f"<td>{_deviation(item.finish_deviation)}</td>"
+        f"<td>{item.wait_seconds:.1f} s</td><td>{item.service_seconds:.1f} s</td>"
+        f"<td>{'—' if item.deadline is None else f'{item.deadline:.1f} s'}</td>"
+        f"<td>{escape(item.deadline_policy)}</td>"
+        f"<td>{item.lateness_seconds:.1f} s</td>"
+        f"<td>{'ok' if item.deadline_ok else 'late'}</td>"
+        f"<td>{escape(item.blocked_reason or '—')}</td></tr>"
+        for item in report.task_timelines
+    )
+    timeline_section = (
+        "<h2>Plan versus actual</h2><table><thead><tr><th>Task</th><th>Drone</th><th>State</th>"
+        "<th>Planned start</th><th>Planned finish</th><th>Arrived</th><th>Started</th>"
+        "<th>Finished</th><th>Start Δ</th><th>Finish Δ</th><th>Wait</th><th>Service</th>"
+        "<th>Deadline</th><th>Policy</th><th>Late</th><th>Deadline</th><th>Blocked</th>"
+        f"</tr></thead><tbody>{timeline_rows}</tbody></table>"
+        if report.task_timelines
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>Drone Mission Planner report</title>
 <style>
@@ -337,4 +464,12 @@ th,td{{padding:9px 10px;border:1px solid #d8dfeb;text-align:left}} th{{backgroun
 <h2>Aircraft</h2><table><thead><tr><th>Drone</th><th>Status</th><th>Distance</th><th>Flight</th>
 <th>Waiting</th><th>Energy</th><th>Battery</th><th>Altitude</th><th>Climb / Descent</th>
 <th>Tasks</th><th>Link</th><th>Hops</th><th>Altitude risks</th><th>Photos</th><th>Max altitude</th><th>Min clearance</th></tr></thead>
-<tbody>{rows}</tbody></table><h2>Risk matrix</h2><table><thead><tr><th>Drone</th><th>Score</th><th>Level</th><th>Battery</th><th>Communication</th><th>Terrain</th><th>Airspace</th><th>Action</th></tr></thead><tbody>{matrix_rows}</tbody></table><h2>Assignment rationale</h2><ul>{assignment_notes}</ul><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul></body></html>\n"""
+<tbody>{rows}</tbody></table><h2>Risk matrix</h2><table><thead><tr><th>Drone</th><th>Score</th><th>Level</th><th>Battery</th><th>Communication</th><th>Terrain</th><th>Airspace</th><th>Action</th></tr></thead><tbody>{matrix_rows}</tbody></table><h2>Assignment rationale</h2><ul>{assignment_notes}</ul><h2>Altitude Risks</h2><ul>{risks}</ul><h2>Coverage</h2><ul>{coverage}</ul>{timeline_section}</body></html>\n"""
+
+
+def _seconds(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1f} s"
+
+
+def _deviation(value: float | None) -> str:
+    return "—" if value is None else f"{value:+.1f} s"

@@ -94,11 +94,13 @@ from drone_mission_planner.planning.deconfliction import apply_deconfliction
 from drone_mission_planner.planning.energy import estimate_segment_energy
 from drone_mission_planner.planning.risk_assessment import assess_route_risk
 from drone_mission_planner.planning.route_planner import RoutePlanner
+from drone_mission_planner.planning.scheduling import ScheduleResult
 from drone_mission_planner.simulation.coverage_monitor import AreaCoverageSnapshot, CoverageMonitor
 from drone_mission_planner.simulation.engine import SimulationEngine, SimulationSnapshot
 from drone_mission_planner.simulation.events import EventType
 from drone_mission_planner.simulation.replay import export_replay
 from drone_mission_planner.simulation.reporting import build_simulation_report, export_report
+from drone_mission_planner.ui.schedule_view import ScheduleView
 
 from .environment_panel import EnvironmentPanel
 from .map_view import MapView, RenderMode, ToolMode
@@ -191,6 +193,7 @@ class MainWindow(QMainWindow):
         self.coverage_results: dict[str, CoveragePlanResult] = {}
         self._assignment_notes: tuple[str, ...] = ()
         self._assignment_explanations: tuple[TaskExplanation, ...] | None = None
+        self._planned_schedule: ScheduleResult | None = None
         self.simulation_engine: SimulationEngine | None = None
         self.simulation_timer = QTimer(self)
         self.simulation_timer.setInterval(16)
@@ -512,6 +515,9 @@ class MainWindow(QMainWindow):
         self.coverage_table.verticalHeader().setVisible(False)
         self.coverage_table.horizontalHeader().setStretchLastSection(True)
         tabs.addTab(self.coverage_table, "Coverage")
+        self.schedule_view = ScheduleView()
+        self.schedule_view.task_selected.connect(self.select_object)
+        tabs.addTab(self.schedule_view, "Schedule")
         self.environment_panel = EnvironmentPanel()
         tabs.addTab(self.environment_panel, "Environment")
         self.altitude_table = QTableWidget(0, 10)
@@ -834,7 +840,7 @@ class MainWindow(QMainWindow):
             LOGGER.error("Route assignment rejected: %s", exc)
             QMessageBox.warning(self, "Planning failed", str(exc))
             return
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._render_map_if_visible()
         self._update_title()
         risk_message = (
@@ -876,13 +882,14 @@ class MainWindow(QMainWindow):
         result = self.coverage_planner.plan(self.service.project.map, area)
         self._discard_simulation()
         with self.service.change("Plan area coverage"):
+            self._planned_schedule = None
             self.service.project.planning_settings["mission_mode"] = "coverage"
             self.coverage_results[area.id] = result
             for drone in self.service.project.map.drones:
                 drone.waypoints = result.drone_waypoints.get(drone.id, [])
                 drone.assigned_tasks.clear()
         self._render_coverage_table()
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._populate_tree()
         self._render_map_if_visible()
         self._update_title()
@@ -926,6 +933,7 @@ class MainWindow(QMainWindow):
         summaries: list[str] = []
         assigned: set[str] = set()
         with self.service.change("Plan all coverage areas"):
+            self._planned_schedule = None
             self.service.project.planning_settings["mission_mode"] = "coverage"
             for drone in self.service.project.map.drones:
                 drone.waypoints = []
@@ -945,7 +953,7 @@ class MainWindow(QMainWindow):
                 else:
                     summaries.append(f"{area.id}: {result.total_distance:.0f} m planned")
         self._render_coverage_table()
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._populate_tree()
         self._render_map_if_visible()
         self._update_title()
@@ -983,6 +991,30 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.coverage_table.setItem(row, column, QTableWidgetItem(value))
         self.coverage_table.resizeColumnsToContents()
+
+    def _refresh_derived_views(self) -> None:
+        """Refresh the tables and the read-only Gantt together."""
+
+        self._render_altitude_table()
+        self._render_schedule()
+
+    def _render_schedule(self) -> None:
+        """Feed the Gantt with the planned schedule and the live timelines."""
+
+        engine = self.simulation_engine
+        timelines = engine.timelines() if engine is not None else ()
+        schedule = self._planned_schedule
+        if engine is not None and engine.planned_schedule is not None:
+            schedule = engine.planned_schedule
+        if schedule is None and not timelines:
+            self.schedule_view.clear("Plan or run a simulation to see the schedule")
+            return
+        self.schedule_view.set_schedule(
+            schedule,
+            timelines,
+            {task.id: task for task in self.service.project.map.tasks},
+            [drone.id for drone in self.service.project.map.drones],
+        )
 
     def _render_altitude_table(self) -> None:
         rows: list[tuple[list[str], tuple[AltitudeRisk, ...], bool, str]] = []
@@ -1078,7 +1110,7 @@ class MainWindow(QMainWindow):
             self._render_waypoint_table()
             return
         LOGGER.info("Waypoint %d of %s: %s updated", index + 1, drone_id, field)
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._render_map_if_visible()
         self._update_title()
 
@@ -1090,7 +1122,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Waypoint delete rejected: {exc}", 7000)
             return
         LOGGER.info("Waypoint %d deleted from %s", index + 1, drone_id)
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._render_map_if_visible()
         self._update_title()
 
@@ -1547,7 +1579,7 @@ class MainWindow(QMainWindow):
             self.coverage_results.clear()
             self._apply_assignment_result(result)
         self._render_assignment_table(result)
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._populate_tree()
         self._render_map_if_visible()
         self._update_title()
@@ -1700,6 +1732,7 @@ class MainWindow(QMainWindow):
             task_item.setToolTip("\n".join(lines))
 
     def _apply_assignment_result(self, result: AssignmentResult) -> None:
+        self._planned_schedule = result.schedule
         with self.service.change("Apply assignment"):
             for drone in self.service.project.map.drones:
                 drone.assigned_tasks.clear()
@@ -1937,7 +1970,7 @@ class MainWindow(QMainWindow):
         self._render_map_if_visible()
         self._populate_tree()
         self._render_event_table()
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._update_title()
         if failures:
             details = "; ".join(f"{key}: {value}" for key, value in failures.items())
@@ -2040,7 +2073,7 @@ class MainWindow(QMainWindow):
         self._render_map_if_visible()
         self._update_summary()
         self._render_coverage_table()
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._populate_tree()
         self._update_title()
         self.statusBar().showMessage(message, 7000)
@@ -2100,6 +2133,7 @@ class MainWindow(QMainWindow):
                 random_seed=random_seed,
                 communication_policy=communication_policy,
                 communication_grace=communication_grace,
+                planned_schedule=self._planned_schedule,
             )
             self.simulation_engine.set_speed(float(self.speed_combo.currentData()))
             self._sync_simulation_state()
@@ -2163,7 +2197,7 @@ class MainWindow(QMainWindow):
         )
         self._render_map_if_visible()
         self._render_coverage_table(snapshot.coverage)
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._render_event_table()
         self._render_safety_table(snapshot)
         self.statistics_panel.set_report(
@@ -2178,6 +2212,8 @@ class MainWindow(QMainWindow):
     def _discard_simulation(self) -> None:
         self.simulation_timer.stop()
         self.simulation_engine = None
+        self._planned_schedule = None
+        self.schedule_view.clear("Plan or run a simulation to see the schedule")
         self.simulation_time_label.setText("T+ 00:00.00")
         self.map_view.clear_coverage_overlay()
         self.map_view.clear_communication_links()
@@ -2258,7 +2294,7 @@ class MainWindow(QMainWindow):
         self.three_d_view.set_selected_object(object_id)
         if isinstance(item, Drone) and item.waypoints:
             self.waypoint_panel.set_selected_waypoint(item.id, 0)
-        self._render_altitude_table()
+        self._refresh_derived_views()
         matches = self.object_tree.findItems(object_id, Qt.MatchFlag.MatchRecursive, 1)
         if matches:
             self.object_tree.blockSignals(True)
@@ -2275,7 +2311,7 @@ class MainWindow(QMainWindow):
         if isinstance(item, SearchArea):
             self.coverage_results.pop(item.id, None)
             self._discard_simulation()
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._render_map_if_visible()
         self._populate_tree()
         self.property_panel.set_object(item)
@@ -2293,7 +2329,7 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._update_summary()
         self._render_coverage_table()
-        self._render_altitude_table()
+        self._refresh_derived_views()
         self._render_event_table()
         self._render_safety_table()
         self._refresh_scene3d()

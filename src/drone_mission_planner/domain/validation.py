@@ -83,6 +83,7 @@ def validate_project(project: ProjectModel) -> None:
                 drone.climb_rate,
                 drone.descent_rate,
                 drone.hover_power,
+                drone.ground_idle_power,
                 drone.climb_power,
                 drone.descent_power,
                 drone.horizontal_power,
@@ -92,6 +93,7 @@ def validate_project(project: ProjectModel) -> None:
             issues.append(f"{drone.id} flight energy parameters must be finite")
         if (
             drone.hover_power < 0
+            or drone.ground_idle_power < 0
             or drone.climb_power < 0
             or drone.descent_power < 0
             or drone.horizontal_power < 0

@@ -60,6 +60,18 @@ Dependencies are validated before evaluation: missing missions, self references,
 
 Greedy assignment now scores candidates with the cumulative timeline: the aircraft's own clock, the mission's time window and its predecessors' departures feed `finish`, and `deadline_risk = max(0, finish - deadline) × 12`. A `hard` deadline that cannot be met rejects the candidate with the offending finish time, instead of comparing only the single leg's travel time against the deadline. The fixed case in plan §10.4 (A arrives 30 s, waits 30 s, starts 60 s, finishes 100 s; B on the same aircraft arrives 120 s and finishes 150 s, ten seconds past its deadline) is covered by `tests/unit/test_scheduling.py`.
 
+## Energy ledger
+
+`planning/energy_ledger.py` accounts one mission's energy by the phase that consumes it (plan §10.6): cruise, climb, descent, airborne waiting, service, ground idle, the return leg, and the safety reserve. Airborne waiting and service use `hover_power`; ground waiting uses `ground_idle_power`, so waiting on the apron is roughly twenty times cheaper than hovering. Every entry follows `power × seconds / 3600` in the project's abstract energy unit (these are not calibrated watt-hours). The reserve is a feasibility constraint and is added exactly once in `total_required`; it is never re-charged per leg.
+
+## Simulation timeline
+
+The engine records a `TaskTimeline` per mission (plan §10.7): when the aircraft arrived, how long it waited, when service started and finished, and whether the finish broke the deadline. Service starts only when the aircraft is there **and** the mission's `earliest_start` has passed **and** every predecessor has finished; otherwise the aircraft hovers in place and the engine re-checks each step. A predecessor that was cancelled or failed blocks the successor instead of letting it run early. Each transition emits an event (`task_arrived`, `task_wait_started`, `task_wait_ended`, `task_service_started`, `task_service_finished`, `task_deadline_violated`, `task_blocked`), and a deadline breach is recorded as a fact — the report shows the lateness rather than rewriting the planned time.
+
+## Plan versus actual
+
+`simulation/reporting.py` joins the planned schedule with the recorded timelines into `SimulationReport.task_timelines`: planned start/finish, actual arrival/start/finish, the deviation in seconds, waiting and service durations, deadline policy, lateness and any blocking reason. When a run has no planned schedule the planned columns and the deviations are `None` (rendered as an em dash), never `0`. JSON, CSV and HTML exports all carry the same table.
+
 ## Altitude safety validation
 
 Every planned route is sampled along each segment and checked against terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. The validator reports structured warning or critical risks with the affected drone, segment index, sampled position, required altitude, actual flight altitude, optional object ID, and a concise reason.

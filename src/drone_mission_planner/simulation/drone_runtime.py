@@ -52,6 +52,9 @@ class DroneRuntime:
     waypoint_actions: list[WaypointAction] = field(default_factory=list)
     waypoint_holds: list[float] = field(default_factory=list)
     hold_remaining: float = 0.0
+    wait_until: float = 0.0
+    pending_task_id: str | None = None
+    servicing_task_id: str | None = None
     photos_taken: int = 0
     max_altitude: float = 0.0
     min_clearance_seen: float | None = None
@@ -102,6 +105,9 @@ class DroneRuntime:
         self.altitude_loss = 0.0
         self.energy_used = 0.0
         self.hold_remaining = 0.0
+        self.wait_until = 0.0
+        self.pending_task_id = None
+        self.servicing_task_id = None
         self.photos_taken = 0
         self.max_altitude = self.current_altitude
         self.min_clearance_seen = None

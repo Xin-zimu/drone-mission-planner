@@ -42,6 +42,7 @@ class Drone:
     climb_rate: float = 3.0
     descent_rate: float = 2.5
     hover_power: float = 90.0
+    ground_idle_power: float = 5.0
     climb_power: float = 140.0
     descent_power: float = 35.0
     horizontal_power: float = 110.0

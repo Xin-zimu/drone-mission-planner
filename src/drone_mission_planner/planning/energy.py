@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from math import hypot
@@ -125,9 +126,80 @@ def estimate_energy(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PhaseEnergy:
+    """A path's energy split into the phases the ledger accounts for."""
+
+    cruise: float = 0.0
+    climb: float = 0.0
+    descent: float = 0.0
+    time: float = 0.0
+    distance: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.cruise + self.climb + self.descent
+
+
+def estimate_path_phases(
+    drone: Drone,
+    path: Sequence[Point],
+    *,
+    terrain: TerrainModel | None = None,
+    wind: WindModel | None = None,
+    end_altitude: float | None = None,
+    payload: float = 0.0,
+    payload_coefficient: float = 0.012,
+) -> PhaseEnergy:
+    """Split a path's energy into cruise, climb and descent (plan §10.6).
+
+    Uses the same per-segment model as :func:`estimate_segment_energy`: the
+    climb/descent parts are recomputed from the segment's altitude change and the
+    aircraft's rates, and cruise is the remainder, so the three parts always add
+    up to the segment energy the rest of the codebase reports.
+    """
+
+    points = list(path)
+    if not points:
+        return PhaseEnergy()
+    cruise = 0.0
+    climb_energy = 0.0
+    descent_energy = 0.0
+    time = 0.0
+    distance = 0.0
+    pair_count = max(0, len(points) - 1)
+    for index, (start, end) in enumerate(pairwise(points)):
+        segment = estimate_segment_energy(
+            drone,
+            start,
+            end,
+            terrain=terrain,
+            wind=wind,
+            end_altitude=end_altitude if index == pair_count - 1 else None,
+            payload=payload,
+            payload_coefficient=payload_coefficient,
+        )
+        climb_seconds = segment.climb_meters / max(drone.climb_rate, 1e-9)
+        descent_seconds = segment.descent_meters / max(drone.descent_rate, 1e-9)
+        segment_climb = drone.climb_power * climb_seconds / 3600.0
+        segment_descent = drone.descent_power * descent_seconds / 3600.0
+        climb_energy += segment_climb
+        descent_energy += segment_descent
+        cruise += segment.energy - segment_climb - segment_descent
+        time += segment.time
+        distance += segment.distance
+    return PhaseEnergy(
+        cruise=cruise,
+        climb=climb_energy,
+        descent=descent_energy,
+        time=time,
+        distance=distance,
+    )
+
+
 def estimate_path_energy(
     drone: Drone,
-    path: list[Point] | tuple[Point, ...],
+    path: Sequence[Point],
     *,
     terrain: TerrainModel | None = None,
     wind: WindModel | None = None,

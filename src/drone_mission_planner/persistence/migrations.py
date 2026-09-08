@@ -15,7 +15,7 @@ from typing import Any
 
 from drone_mission_planner.persistence.terrain_codec import terrain_from_data
 
-CURRENT_PROJECT_VERSION = "1.8"
+CURRENT_PROJECT_VERSION = "1.9"
 
 _COORDINATE_TOLERANCE = 1e-6
 
@@ -282,6 +282,30 @@ def _migrate_1_7_to_1_8(
     return migrated
 
 
+def _migrate_1_8_to_1_9(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
+    """Add ``ground_idle_power`` so ground waiting is not billed as hovering (plan §10.6)."""
+
+    migrated = deepcopy(raw)
+    map_data = migrated.setdefault("map", {})
+    if not isinstance(map_data, dict):
+        map_data = {}
+        migrated["map"] = map_data
+    for drone in map_data.get("drones", []):
+        if not isinstance(drone, dict):
+            continue
+        if "ground_idle_power" in drone:
+            continue
+        drone["ground_idle_power"] = 5.0
+        if report is not None:
+            report.notes.append(
+                f"{drone.get('id', '?')}: ground_idle_power defaulted to 5.0"
+            )
+    migrated["version"] = "1.9"
+    return migrated
+
+
 def _points(data: Any) -> list[tuple[float, float]]:
     """Normalise a persisted point list to ``(x, y)`` float pairs.
 
@@ -323,4 +347,5 @@ _MIGRATION_STEPS: dict[str, Callable[[dict[str, Any], MigrationReport | None], d
     "1.5": _migrate_1_5_to_1_6,
     "1.6": _migrate_1_6_to_1_7,
     "1.7": _migrate_1_7_to_1_8,
+    "1.8": _migrate_1_8_to_1_9,
 }
