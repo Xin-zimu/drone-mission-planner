@@ -126,6 +126,7 @@ The final suite covers geometry, rasterization, A*, smoothing, energy, assignmen
 - [Future roadmap](docs/future-roadmap.md)
 - [v1.2 真实任务规划基础：详细实施计划](docs/v1.2-real-mission-planning-plan.md)
 - [后续功能开发计划（详细实施版）](docs/follow-up-development-plan.md)
+- [计划对齐与差距](docs/plan-alignment.md) · [流程优化总结](docs/workflow-optimization.md) · [新对话交接单](docs/handoff.md)
 
 ## Architecture
 
