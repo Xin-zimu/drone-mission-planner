@@ -4,6 +4,7 @@ from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import BaseStation, Drone, MissionTask
+from drone_mission_planner.domain.waypoint import waypoints_from_path
 from drone_mission_planner.ui.main_window import MainWindow
 
 
@@ -23,7 +24,7 @@ def test_failure_replan_preserves_live_state_and_completed_tasks(qtbot: object) 
                 "B-01",
                 max_speed=10,
                 assigned_tasks=["T-01", "T-02"],
-                planned_path=[Point(10, 10), Point(30, 10), Point(90, 10), Point(10, 10)],
+                waypoints = waypoints_from_path([Point(10, 10), Point(30, 10), Point(90, 10), Point(10, 10)], default_altitude=100.0),
             ),
             Drone("D-02", "Reserve", Point(10, 25), "B-01", max_speed=12),
         ]

@@ -14,9 +14,10 @@ from drone_mission_planner.domain.terrain import (
     generate_mountain_terrain,
     grid_terrain,
 )
-from drone_mission_planner.domain.waypoint import Waypoint
+from drone_mission_planner.domain.waypoint import Waypoint, waypoints_from_path
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.persistence.project_repository import (
+    CURRENT_VERSION,
     ProjectFormatError,
     ProjectRepository,
 )
@@ -64,7 +65,7 @@ def test_project_round_trip(tmp_path: Path) -> None:
     assert loaded.map.terrain.terrain_type == "procedural"
     assert loaded.map.terrain.altitude_at(250.0, 200.0) == pytest.approx(80.0)
     assert loaded.map.wind.wind_vector() == pytest.approx((6.0, 0.0))
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == "1.6"
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == CURRENT_VERSION
 
 
 def test_grid_terrain_round_trip(tmp_path: Path) -> None:
@@ -82,7 +83,7 @@ def test_grid_terrain_round_trip(tmp_path: Path) -> None:
     service.save(path)
     loaded = ProjectRepository().load(path)
 
-    assert loaded.version == "1.6"
+    assert loaded.version == CURRENT_VERSION
     assert loaded.map.terrain.terrain_type == "grid"
     assert loaded.map.terrain.grid_origin == Point(100.0, 200.0)
     assert loaded.map.terrain.grid_width == 2
@@ -119,7 +120,7 @@ def test_version_1_project_is_migrated_in_memory(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     loaded = ProjectRepository().load(path)
-    assert loaded.version == "1.6"
+    assert loaded.version == CURRENT_VERSION
     assert loaded.simulation_settings["communication_policy"] == "log_only"
     assert loaded.map.terrain.terrain_type == "flat"
     assert not loaded.map.wind.enabled
@@ -161,7 +162,7 @@ def test_version_11_project_is_migrated_to_current(tmp_path: Path) -> None:
 
     loaded = ProjectRepository().load(path)
 
-    assert loaded.version == "1.6"
+    assert loaded.version == CURRENT_VERSION
     assert loaded.map.terrain.resolution == 10.0
     assert loaded.map.wind.speed == 0.0
     assert loaded.map.drones[0].min_clearance == 30.0
@@ -199,7 +200,7 @@ def test_version_12_project_is_migrated_to_current(tmp_path: Path) -> None:
 
     loaded = ProjectRepository().load(path)
 
-    assert loaded.version == "1.6"
+    assert loaded.version == CURRENT_VERSION
     assert loaded.map.terrain.grid_origin is None
     assert loaded.map.terrain.grid_altitudes == []
 
@@ -227,7 +228,7 @@ def test_basemap_round_trip(tmp_path: Path) -> None:
     assert basemap.meters_per_pixel == 0.5
     assert basemap.flip_y is True
     assert basemap.rotation_deg == 7.5
-    assert loaded.version == "1.6"
+    assert loaded.version == CURRENT_VERSION
     assert [model.name for model in loaded.equipment.drone_models] == [
         "Quad Scout",
         "Heavy Lifter",
@@ -238,7 +239,7 @@ def test_basemap_round_trip(tmp_path: Path) -> None:
 def test_waypoint_round_trip(tmp_path: Path) -> None:
     service = ProjectService()
     drone = service.add_drone(Point(50.0, 60.0))
-    drone.planned_path = []
+    drone.waypoints = waypoints_from_path([], default_altitude=100.0)
     drone.waypoints = [
         Waypoint(
             40.0,

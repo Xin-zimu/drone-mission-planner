@@ -3,6 +3,7 @@ from __future__ import annotations
 from drone_mission_planner.domain.enums import DroneStatus, TaskStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import BaseStation, Drone, MapModel, MissionTask
+from drone_mission_planner.domain.waypoint import waypoints_from_path
 from drone_mission_planner.simulation.engine import SimulationEngine
 
 
@@ -26,7 +27,7 @@ def simulation_map() -> MapModel:
             "B-01",
             max_speed=10,
             assigned_tasks=["T-01"],
-            planned_path=[Point(10, 10), Point(30, 10), Point(10, 10)],
+            waypoints = waypoints_from_path([Point(10, 10), Point(30, 10), Point(10, 10)], default_altitude=100.0),
         )
     )
     return model

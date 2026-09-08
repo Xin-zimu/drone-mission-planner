@@ -36,7 +36,6 @@ class Drone:
     safety_radius: float = 6.0
     role: str = "mission"
     assigned_tasks: list[str] = field(default_factory=list)
-    planned_path: list[Point] = field(default_factory=list)
     waypoints: list[Waypoint] = field(default_factory=list)
     cruise_altitude: float = 100.0
     min_clearance: float = 30.0
@@ -47,6 +46,18 @@ class Drone:
     descent_power: float = 35.0
     horizontal_power: float = 110.0
     air_speed: float = 0.0
+
+    @property
+    def planned_path(self) -> list[Point]:
+        """Read-only two-dimensional projection of the authoritative waypoints.
+
+        ``waypoints`` is the single source of truth for a route (v1.2 F1);
+        this derived view exists for map rendering, validation and simulation
+        consumers that only need x/y. It is never persisted and cannot be
+        assigned to.
+        """
+
+        return [waypoint.point for waypoint in self.waypoints]
 
 
 @dataclass(slots=True)

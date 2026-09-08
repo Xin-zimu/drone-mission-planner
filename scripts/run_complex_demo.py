@@ -69,7 +69,7 @@ def apply_assignment(model: object, result: object) -> None:
     """Mirror MainWindow._apply_assignment_result on the domain model."""
     for drone in model.drones:  # type: ignore[attr-defined]
         drone.assigned_tasks.clear()
-        drone.planned_path = result.drone_paths.get(drone.id, [])
+        drone.waypoints = result.drone_waypoints.get(drone.id, [])
     for task in model.tasks:  # type: ignore[attr-defined]
         if task.status.value != "completed":
             task.assigned_drone_id = None
@@ -152,7 +152,7 @@ def run_coverage_mode() -> SimulationEngine:
     print("== Coverage mode: cooperative area sweep ==")
     result = CoveragePlanner().plan(model, area)
     for drone in model.drones:
-        drone.planned_path = result.drone_paths.get(drone.id, [])
+        drone.waypoints = result.drone_waypoints.get(drone.id, [])
         drone.assigned_tasks.clear()
     passes = sum(len(strip.passes) for strip in result.strips)
     print(f"Strips: {len(result.strips)}, passes: {passes}, total route {result.total_distance:.1f} m")

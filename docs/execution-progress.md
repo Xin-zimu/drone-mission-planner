@@ -2,7 +2,43 @@
 
 Last updated: 2026-09-06
 
-## v1.2 F0 checkpoint — reproducible green baseline (this pass)
+## v1.2 F1 checkpoint — one authoritative route representation (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md), stage F1 (unified waypoint model, recommended iteration order item 1).
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Domain | `Drone.planned_path` is no longer a field; it is a read-only property projecting `waypoints`. Assigning it raises `AttributeError`. |
+| Application | Route writes converge on `ProjectService.replace_route`, `edit_waypoint`, `remove_waypoint` and `clear_route`; each is atomic (rollback on rejection) and one undo step. `remove_waypoint(..., unassign_task=True)` is the only way to delete a mission-linked service point, and it clears the task assignment instead of leaving a dangling link. |
+| Persistence | Project format `1.7`. `planned_path` is never written. `migrate_project` rebuilds waypoints from a legacy 2D path (pre-F1 altitude rule), keeps waypoints and reports a conflict when the two representations disagreed, and never touches the source file. `ProjectRepository.load_with_report` / `last_migration_report` and `ProjectService.last_migration_report` expose the report. |
+| Consumers | Planning validators, risk assessment, the simulation runtime, the 2D/3D views, scene export, imports, scripts and tests all read the derived path; the scene-export fallback that synthesised altitudes from `cruise_altitude`/`min_clearance` was removed because it could disagree with the route. |
+
+### Acceptance evidence (plan 9.7)
+
+| Case | Test |
+|---|---|
+| 1 — same position, three different actions survive save/load | `tests/unit/test_waypoint_semantics.py::test_same_position_waypoints_keep_their_actions` |
+| 2 — deleting a service point cannot leave the task scheduled | `tests/unit/test_route_service.py::test_remove_waypoint_can_explicitly_unassign_the_mission` |
+| 3 — altitude edit keeps the 2D position and updates risk | `tests/unit/test_waypoint_semantics.py::test_altitude_edit_keeps_the_two_dimensional_position`, `test_altitude_edit_updates_the_altitude_risk` |
+| 6 — no business code writes `planned_path` | `tests/unit/test_route_single_source.py::test_business_code_never_writes_planned_path` |
+
+Additional coverage: `tests/unit/test_route_single_source.py` (6 tests, incl. save/round-trip), `tests/unit/test_route_service.py` (10), `tests/unit/test_waypoint_migration.py` (8, incl. report visibility and source-file immutability), `tests/unit/test_waypoint_semantics.py` (4) — 28 new tests.
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `.venv\Scripts\python.exe -m pytest --basetemp=.pytest-tmp-run` | **262 passed** |
+| `-m ruff check src tests scripts` | All checks passed |
+| `-m mypy src` | Success, 60 source files |
+| `-m mypy src tests` | Success, 102 source files (the previously known `test_project_service.py:124` comparison-overlap is fixed) |
+| `planned_path` write sites in `src/` | 0 (migration code excepted) |
+
+Deferred to later stages: F2 scheduling (time windows, cumulative ETA, dependencies, Gantt), F3 global assignment, F4 georeferencing, and the P1/P2 items. The migration report is exposed by the repository/service; surfacing it in a load dialog remains open.
+
+## v1.2 F0 checkpoint — reproducible green baseline (previous pass)
 
 Plan: [follow-up-development-plan.md](follow-up-development-plan.md), stage F0 (baseline, units, versions, fixtures) of v1.2.
 
@@ -48,7 +84,7 @@ The working tree carried an uncommitted, half-finished pass whose three regressi
 | `.venv\Scripts\python.exe -m pytest --basetemp=.pytest-tmp-run` | **234 passed** in 6.38 s |
 | `-m ruff check .` | All checks passed |
 | `-m mypy src` | Success, 59 source files |
-| `-m mypy src tests` | **1 pre-existing error** (known item, not a pass): `tests/unit/test_project_service.py:124` comparison-overlap |
+| `-m mypy src tests` | 1 pre-existing error at this checkpoint (known item, not a pass): `tests/unit/test_project_service.py:124` comparison-overlap; fixed in the F1 pass below |
 
 ## Previous checkpoint — M20 productization baseline
 

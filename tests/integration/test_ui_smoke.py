@@ -12,7 +12,7 @@ from drone_mission_planner.app.workspace_state import WorkspaceState
 from drone_mission_planner.domain.enums import DroneStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
-from drone_mission_planner.domain.waypoint import Waypoint
+from drone_mission_planner.domain.waypoint import Waypoint, waypoints_from_path
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.ui.main_window import MainWindow
 from drone_mission_planner.ui.map_view import RenderMode, ToolMode
@@ -26,7 +26,7 @@ def test_main_window_renders_project(qtbot: object) -> None:
     task = service.add_task(Point(420.0, 260.0))
     task.assigned_drone_id = drone.id
     drone.assigned_tasks.append(task.id)
-    drone.planned_path = [drone.position, task.position]
+    drone.waypoints = waypoints_from_path([drone.position, task.position], default_altitude=100.0)
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
@@ -54,7 +54,7 @@ def test_terrain_view_renders_without_enabling_edit_tools(qtbot: object) -> None
     task = service.add_task(Point(420.0, 260.0))
     task.assigned_drone_id = drone.id
     drone.assigned_tasks.append(task.id)
-    drone.planned_path = [drone.position, task.position]
+    drone.waypoints = waypoints_from_path([drone.position, task.position], default_altitude=100.0)
     service.project.map.terrain = generate_mountain_terrain(
         width=float(service.project.map.width),
         height=float(service.project.map.height),
@@ -81,7 +81,9 @@ def test_environment_panel_updates_model_and_altitude_estimates(qtbot: object) -
     task = service.add_task(Point(60.0, 10.0))
     drone.cruise_altitude = 40.0
     drone.min_clearance = 10.0
-    drone.planned_path = [drone.position, task.position]
+    drone.waypoints = waypoints_from_path(
+        [drone.position, task.position], default_altitude=40.0
+    )
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
@@ -96,7 +98,12 @@ def test_environment_panel_updates_model_and_altitude_estimates(qtbot: object) -
     assert service.dirty
     altitude_cell = window.altitude_table.item(0, 3)
     assert altitude_cell is not None
-    assert altitude_cell.text() == "45.0 m"
+    # Route altitude is explicit waypoint MSL (v1.2 F1), so raising the terrain
+    # no longer moves the route; it must surface as a clearance risk instead.
+    assert altitude_cell.text() == "40.0 m"
+    risk_cell = window.altitude_table.item(0, 8)
+    assert risk_cell is not None
+    assert "terrain clearance" in risk_cell.text()
 
     window.environment_panel.peak_count_spin.setValue(1)
     height_spin = window.environment_panel.peak_table.cellWidget(0, 3)
@@ -178,7 +185,9 @@ def test_altitude_table_reports_clearance_and_obstacle_risks(qtbot: object) -> N
     service.add_obstacle(Rect(150.0, 10.0, 60.0, 30.0))
     drone.cruise_altitude = 30.0
     drone.min_clearance = 30.0
-    drone.planned_path = [drone.position, Point(300.0, 20.0)]
+    drone.waypoints = waypoints_from_path(
+        [drone.position, Point(300.0, 20.0)], default_altitude=30.0
+    )
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
@@ -196,7 +205,7 @@ def test_coverage_sync_pushes_uncovered_cells_and_resolution(qtbot: object) -> N
     drone = service.add_drone(Point(40.0, 200.0))
     area = service.add_search_area(Rect(100.0, 100.0, 200.0, 160.0))
     area.scan_spacing = 30
-    drone.planned_path = [drone.position, Point(400.0, 200.0)]
+    drone.waypoints = waypoints_from_path([drone.position, Point(400.0, 200.0)], default_altitude=100.0)
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
@@ -222,7 +231,7 @@ def test_3d_view_switch_syncs_scene_and_selection(qtbot: object) -> None:
     drone = service.add_drone(Point(40.0, 20.0))
     obstacle = service.add_obstacle(Rect(150.0, 100.0, 60.0, 40.0))
     task = service.add_task(Point(300.0, 120.0))
-    drone.planned_path = [drone.position, task.position]
+    drone.waypoints = waypoints_from_path([drone.position, task.position], default_altitude=100.0)
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
@@ -246,7 +255,7 @@ def test_3d_view_receives_live_simulation_positions(qtbot: object) -> None:
     service = ProjectService()
     service.add_base(Point(20.0, 200.0))
     drone = service.add_drone(Point(40.0, 200.0))
-    drone.planned_path = [drone.position, Point(400.0, 200.0)]
+    drone.waypoints = waypoints_from_path([drone.position, Point(400.0, 200.0)], default_altitude=100.0)
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
@@ -278,7 +287,7 @@ def test_waypoints_tab_renders_edits_and_highlights(
     service.add_base(Point(20.0, 20.0))
     drone = service.add_drone(Point(40.0, 20.0))
     task = service.add_task(Point(300.0, 120.0))
-    drone.planned_path = [drone.position, task.position]
+    drone.waypoints = waypoints_from_path([drone.position, task.position], default_altitude=100.0)
     drone.waypoints = [
         Waypoint(40.0, 20.0, altitude=100.0),
         Waypoint(
@@ -342,7 +351,7 @@ def test_waypoint_delete_guards_reject_structural_vertices(
     service.add_base(Point(20.0, 20.0))
     drone = service.add_drone(Point(40.0, 20.0))
     task = service.add_task(Point(300.0, 120.0))
-    drone.planned_path = [drone.position, task.position]
+    drone.waypoints = waypoints_from_path([drone.position, task.position], default_altitude=100.0)
     drone.waypoints = [
         Waypoint(40.0, 20.0, altitude=100.0),
         Waypoint(300.0, 120.0, altitude=120.0, task_id=task.id),
@@ -364,7 +373,7 @@ def test_route_export_menu_writes_and_rejects(
     service = ProjectService()
     service.add_base(Point(20.0, 20.0))
     drone = service.add_drone(Point(40.0, 20.0))
-    drone.planned_path = [drone.position, Point(300.0, 120.0)]
+    drone.waypoints = waypoints_from_path([drone.position, Point(300.0, 120.0)], default_altitude=100.0)
     drone.waypoints = [
         Waypoint(40.0, 20.0, altitude=100.0),
         Waypoint(300.0, 120.0, altitude=120.0),
@@ -406,7 +415,7 @@ def test_replay_tab_updates_3d_view_and_jumps_to_events(qtbot: object) -> None:
     service.add_base(Point(20.0, 20.0))
     drone = service.add_drone(Point(40.0, 20.0))
     task = service.add_task(Point(300.0, 120.0))
-    drone.planned_path = [drone.position, task.position]
+    drone.waypoints = waypoints_from_path([drone.position, task.position], default_altitude=100.0)
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]
@@ -559,7 +568,7 @@ def test_simulation_tick_throttles_full_ui_sync(
     service = ProjectService()
     service.add_base(Point(20.0, 200.0))
     drone = service.add_drone(Point(40.0, 200.0))
-    drone.planned_path = [drone.position, Point(400.0, 200.0)]
+    drone.waypoints = waypoints_from_path([drone.position, Point(400.0, 200.0)], default_altitude=100.0)
     service.dirty = False
     window = MainWindow(service)
     qtbot.addWidget(window)  # type: ignore[attr-defined]

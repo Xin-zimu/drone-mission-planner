@@ -13,11 +13,11 @@ The application follows a strict layered design.
 
 The UI owns rendering. Domain coordinates are always metres in a top-left-origin 2D world. The editable graphics scene uses the same unit scale, so conversions are explicit but lossless. The 2.5D terrain view projects the same 2D mission coordinates with sampled terrain altitude; editing remains in the 2D view.
 
-Planned routes exist in two interchangeable domain representations: the legacy `planned_path` point list and a list of three-dimensional `Waypoint` objects that add altitude, altitude mode (MSL/AGL), optional speed, an action, hold time, and an optional task link. Planning, simulation, and persistence keep both representations synchronized; project schema 1.4 persists waypoints and migrates older files in memory.
+A drone route has exactly one authoritative representation: the list of three-dimensional `Waypoint` objects that carry altitude, altitude mode (MSL/AGL), optional speed, an action, hold time, and an optional task link. `Drone.planned_path` is a read-only derived projection of that list for 2D consumers; it is never persisted and cannot be assigned to, so planning, simulation, editing and export can no longer drift apart. Project schema 1.7 stores only waypoints and migrates older files in memory with a report of rebuilt routes and conflicts (see [data-format.md](data-format.md)).
 
 The 3D mission view is a pure-PySide6 software renderer with no external web or 3D dependency. `ui/scene3d_export.py` builds a deterministic, toolkit-free scene description (terrain mesh, routes, volumes, markers, coverage cells, wind) from the domain and planning models, and `ui/view3d.py` projects it with an orbit camera and QPainter painter's-algorithm rendering. The scene builder imports no Qt, so scene content is unit-tested headlessly; the widget layer stays read-only and selection changes flow through the same `object_selected` path as the 2D map.
 
-Waypoint editing is owned by the application layer: `ProjectService.update_waypoint` and `remove_waypoint` validate and roll back edits, keep `planned_path` and `waypoints` synchronized, and mark the project dirty. The Waypoints tab only renders rows and forwards edits; the altitude validator prefers per-waypoint MSL altitudes (interpolated along each leg) over the commanded cruise/target model when the waypoint list matches the path, so edited heights immediately change reported risks and energy.
+Waypoint editing is owned by the application layer: `ProjectService.replace_route`, `edit_waypoint`, `remove_waypoint` and `clear_route` validate and roll back edits, keep task links consistent, and each becomes one undo step. Deleting a waypoint that carries a mission link requires `unassign_task=True`, so a service point can never disappear while its task still claims to be scheduled. The Waypoints tab only renders rows and forwards edits; the altitude validator prefers per-waypoint MSL altitudes (interpolated along each leg) over the commanded cruise/target model, so edited heights immediately change reported risks and energy.
 
 ## Environment model
 
@@ -31,7 +31,7 @@ Terrain and wind live in the domain model as serializable Python dataclasses. Te
 
 Each drone runtime also tracks current flight altitude, accumulated climb/descent, and energy used. Flat terrain with disabled wind preserves the legacy distance-based energy model; terrain or wind activates segment-level corrections.
 
-When a drone's waypoints align with its path, the runtime executes the route in three dimensions: waypoint altitudes form the commanded MSL profile (AGL resolves against terrain), climb/descent rates limit vertical motion, waypoint speeds cap the horizontal legs, and waypoint actions drive the state machine — hover holds, photo events, scan-leg coverage contributions, and terrain landings. Drones whose waypoints diverge from their path fall back to the legacy 2D model.
+A drone with a waypoint route is executed in three dimensions: waypoint altitudes form the commanded MSL profile (AGL resolves against terrain), climb/descent rates limit vertical motion, waypoint speeds cap the horizontal legs, and waypoint actions drive the state machine — hover holds, photo events, scan-leg coverage contributions, and terrain landings. A drone with no waypoints has no route and is not flown.
 
 ## Dynamic events
 

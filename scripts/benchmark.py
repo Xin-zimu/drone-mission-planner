@@ -20,6 +20,7 @@ from drone_mission_planner.domain.models import (  # noqa: E402
     MissionTask,
     Obstacle,
 )
+from drone_mission_planner.domain.waypoint import waypoints_from_path  # noqa: E402
 from drone_mission_planner.persistence.project_repository import ProjectRepository  # noqa: E402
 from drone_mission_planner.planning.assignment import GreedyAssignmentPlanner  # noqa: E402
 from drone_mission_planner.planning.grid import GridMap  # noqa: E402
@@ -67,7 +68,7 @@ def run_benchmarks() -> dict[str, float | int]:
                 "B-01",
                 communication_range=2000,
                 safety_radius=3,
-                planned_path=[Point(30, y), Point(950, y)],
+                waypoints = waypoints_from_path([Point(30, y), Point(950, y)], default_altitude=100.0),
             )
         )
     engine = SimulationEngine(simulation_map)

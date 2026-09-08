@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from drone_mission_planner.domain.enums import WaypointAction
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import Drone, MapModel
-from drone_mission_planner.domain.waypoint import path_from_waypoints
 from drone_mission_planner.planning.altitude_validator import (
     AltitudeRiskKind,
     validate_altitude_path,
@@ -76,7 +75,7 @@ def assess_route_risk(map_model: MapModel, drone: Drone) -> RouteRiskAssessment:
     """Score one drone's planned route deterministically."""
 
     factors: list[RiskFactor] = []
-    path = drone.planned_path or path_from_waypoints(drone.waypoints)
+    path = drone.planned_path
     for risk in validate_altitude_path(map_model, drone, path):
         kind = "terrain" if risk.kind == AltitudeRiskKind.TERRAIN_CLEARANCE else "airspace"
         factors.append(

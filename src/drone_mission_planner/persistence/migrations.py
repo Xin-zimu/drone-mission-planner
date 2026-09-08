@@ -1,45 +1,88 @@
+"""Project-format migrations.
+
+Every schema change is expressed as one step that only adds or normalises
+fields, records what it could not decide in a :class:`MigrationReport`, and
+never writes to the source file. Loading a project always runs the full chain
+from its stored version up to :data:`CURRENT_PROJECT_VERSION`.
+"""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
+
+from drone_mission_planner.persistence.terrain_codec import terrain_from_data
+
+CURRENT_PROJECT_VERSION = "1.7"
+
+_COORDINATE_TOLERANCE = 1e-6
 
 
 class MigrationError(ValueError):
     pass
 
 
-def migrate_project(raw: dict[str, Any]) -> dict[str, Any]:
-    version = str(raw.get("version", ""))
-    if version == "1.6":
-        return raw
-    if version == "1.0":
-        return _migrate_1_5_to_1_6(
-            _migrate_1_4_to_1_5(
-                _migrate_1_3_to_1_4(
-                    _migrate_1_2_to_1_3(_migrate_1_1_to_1_2(_migrate_1_0_to_1_1(raw)))
-                )
-            )
-        )
-    if version == "1.1":
-        return _migrate_1_5_to_1_6(
-            _migrate_1_4_to_1_5(
-                _migrate_1_3_to_1_4(_migrate_1_2_to_1_3(_migrate_1_1_to_1_2(raw)))
-            )
-        )
-    if version == "1.2":
-        return _migrate_1_5_to_1_6(
-            _migrate_1_4_to_1_5(_migrate_1_3_to_1_4(_migrate_1_2_to_1_3(raw)))
-        )
-    if version == "1.3":
-        return _migrate_1_5_to_1_6(_migrate_1_4_to_1_5(_migrate_1_3_to_1_4(raw)))
-    if version == "1.4":
-        return _migrate_1_5_to_1_6(_migrate_1_4_to_1_5(raw))
-    if version == "1.5":
-        return _migrate_1_5_to_1_6(raw)
-    raise MigrationError(f"Unsupported project version {version or 'missing'}; expected 1.6")
+@dataclass(slots=True)
+class MigrationReport:
+    """What a load-time migration changed, generated or could not decide.
+
+    The report is produced while loading and surfaced by
+    ``ProjectRepository.load_with_report`` / ``ProjectService.load`` so the user
+    can review generated altitudes and route conflicts instead of losing them
+    silently.
+    """
+
+    from_version: str = ""
+    to_version: str = ""
+    notes: list[str] = field(default_factory=list)
+    generated_waypoints: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
+
+    def has_findings(self) -> bool:
+        return bool(self.notes or self.generated_waypoints or self.conflicts)
+
+    def summary(self) -> str:
+        """One-line description used by status messages and logs."""
+
+        if not self.has_findings():
+            return f"project format {self.from_version or '?'} → {self.to_version}"
+        parts = [
+            f"project format {self.from_version or '?'} → {self.to_version}",
+            f"{len(self.generated_waypoints)} route(s) rebuilt from 2D paths",
+            f"{len(self.conflicts)} route conflict(s)",
+        ]
+        return "; ".join(parts)
 
 
-def _migrate_1_0_to_1_1(raw: dict[str, Any]) -> dict[str, Any]:
+def migrate_project(
+    raw: dict[str, Any],
+    report: MigrationReport | None = None,
+) -> dict[str, Any]:
+    """Return a deep-copied project upgraded to the current format version."""
+
+    source_version = str(raw.get("version", ""))
+    migrated = deepcopy(raw)
+    version = source_version
+    while version != CURRENT_PROJECT_VERSION:
+        step = _MIGRATION_STEPS.get(version)
+        if step is None:
+            raise MigrationError(
+                f"Unsupported project version {version or 'missing'}; "
+                f"expected {CURRENT_PROJECT_VERSION}"
+            )
+        migrated = step(migrated, report)
+        version = str(migrated.get("version", ""))
+    if report is not None:
+        report.from_version = source_version
+        report.to_version = version
+    return migrated
+
+
+def _migrate_1_0_to_1_1(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
     migrated = deepcopy(raw)
     map_data = migrated.setdefault("map", {})
     map_data.setdefault("search_areas", [])
@@ -53,7 +96,9 @@ def _migrate_1_0_to_1_1(raw: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-def _migrate_1_1_to_1_2(raw: dict[str, Any]) -> dict[str, Any]:
+def _migrate_1_1_to_1_2(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
     migrated = deepcopy(raw)
     map_data = migrated.setdefault("map", {})
     terrain = map_data.setdefault("terrain", {})
@@ -90,7 +135,9 @@ def _migrate_1_1_to_1_2(raw: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-def _migrate_1_2_to_1_3(raw: dict[str, Any]) -> dict[str, Any]:
+def _migrate_1_2_to_1_3(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
     migrated = deepcopy(raw)
     map_data = migrated.setdefault("map", {})
     terrain = map_data.setdefault("terrain", {})
@@ -102,7 +149,9 @@ def _migrate_1_2_to_1_3(raw: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-def _migrate_1_3_to_1_4(raw: dict[str, Any]) -> dict[str, Any]:
+def _migrate_1_3_to_1_4(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
     migrated = deepcopy(raw)
     map_data = migrated.setdefault("map", {})
     for drone in map_data.get("drones", []):
@@ -111,7 +160,9 @@ def _migrate_1_3_to_1_4(raw: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-def _migrate_1_4_to_1_5(raw: dict[str, Any]) -> dict[str, Any]:
+def _migrate_1_4_to_1_5(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
     migrated = deepcopy(raw)
     map_data = migrated.setdefault("map", {})
     map_data.setdefault("basemap", None)
@@ -119,8 +170,113 @@ def _migrate_1_4_to_1_5(raw: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-def _migrate_1_5_to_1_6(raw: dict[str, Any]) -> dict[str, Any]:
+def _migrate_1_5_to_1_6(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
     migrated = deepcopy(raw)
     migrated.setdefault("equipment", None)
     migrated["version"] = "1.6"
     return migrated
+
+
+def _migrate_1_6_to_1_7(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
+    """Make ``waypoints`` the single route representation.
+
+    The legacy ``planned_path`` list is dropped. When a drone has no waypoints
+    they are rebuilt from the 2D path with the pre-F1 altitude rule (cruise
+    altitude, or terrain plus minimum clearance) and recorded in the report so
+    the user can re-verify them. When both representations exist and disagree,
+    the waypoints are kept and the conflict is reported instead of silently
+    overwriting either side.
+    """
+
+    migrated = deepcopy(raw)
+    map_data = migrated.setdefault("map", {})
+    if not isinstance(map_data, dict):
+        map_data = {}
+        migrated["map"] = map_data
+    grid_size = float(map_data.get("grid_size", 25.0))
+    terrain = terrain_from_data(map_data.get("terrain"), grid_size)
+
+    for drone in map_data.get("drones", []):
+        if not isinstance(drone, dict):
+            continue
+        drone_id = str(drone.get("id", "?"))
+        legacy_path = _points(drone.pop("planned_path", None))
+        waypoints = drone.get("waypoints")
+        if not isinstance(waypoints, list):
+            waypoints = []
+        if not waypoints and legacy_path:
+            cruise = float(drone.get("cruise_altitude", 100.0))
+            clearance = float(drone.get("min_clearance", 30.0))
+            drone["waypoints"] = [
+                {
+                    "x": x,
+                    "y": y,
+                    "altitude": max(cruise, terrain.altitude_at(x, y) + clearance),
+                    "altitude_mode": "msl",
+                    "speed": None,
+                    "action": "fly_to",
+                    "hold_seconds": 0.0,
+                    "task_id": None,
+                }
+                for x, y in legacy_path
+            ]
+            if report is not None:
+                report.generated_waypoints.append(
+                    f"{drone_id}: {len(legacy_path)} waypoints rebuilt from the 2D path "
+                    f"(altitude = max(cruise {cruise:.1f}, terrain + clearance {clearance:.1f})); "
+                    "re-verify altitude, speed and actions before export"
+                )
+        else:
+            drone["waypoints"] = waypoints
+            if not legacy_path:
+                continue
+            if _matches(_points(waypoints), legacy_path):
+                if report is not None:
+                    report.notes.append(
+                        f"{drone_id}: legacy 2D path matched the waypoints and was dropped"
+                    )
+            elif report is not None:
+                report.conflicts.append(
+                    f"{drone_id}: waypoints ({len(waypoints)} points) disagree with the legacy 2D "
+                    f"path ({len(legacy_path)} points); waypoints kept, legacy path dropped"
+                )
+    migrated["version"] = "1.7"
+    return migrated
+
+
+def _points(data: Any) -> list[tuple[float, float]]:
+    """Normalise a persisted point list to ``(x, y)`` float pairs."""
+
+    points: list[tuple[float, float]] = []
+    if not isinstance(data, list):
+        return points
+    for item in data:
+        if isinstance(item, dict):
+            points.append((float(item["x"]), float(item["y"])))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            points.append((float(item[0]), float(item[1])))
+    return points
+
+
+def _matches(left: list[tuple[float, float]], right: list[tuple[float, float]]) -> bool:
+    if len(left) != len(right):
+        return False
+    return all(
+        abs(ax - bx) <= _COORDINATE_TOLERANCE and abs(ay - by) <= _COORDINATE_TOLERANCE
+        for (ax, ay), (bx, by) in zip(left, right, strict=True)
+    )
+
+
+_MIGRATION_STEPS: dict[str, Callable[[dict[str, Any], MigrationReport | None], dict[str, Any]]] = {
+    "1.0": _migrate_1_0_to_1_1,
+    "1.1": _migrate_1_1_to_1_2,
+    "1.2": _migrate_1_2_to_1_3,
+    "1.3": _migrate_1_3_to_1_4,
+    "1.4": _migrate_1_4_to_1_5,
+    "1.5": _migrate_1_5_to_1_6,
+    "1.6": _migrate_1_6_to_1_7,
+}

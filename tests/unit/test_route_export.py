@@ -44,7 +44,6 @@ def _export_model() -> tuple[MapModel, Drone]:
         battery_capacity=500.0,
         remaining_battery=500.0,
         communication_range=1000.0,
-        planned_path=[Point(40.0, 40.0), Point(250.0, 200.0), Point(400.0, 300.0)],
         waypoints=[
             Waypoint(40.0, 40.0, altitude=60.0, speed=8.0),
             Waypoint(

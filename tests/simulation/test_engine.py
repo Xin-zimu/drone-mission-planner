@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from drone_mission_planner.app.project_service import ProjectService
-from drone_mission_planner.domain.enums import DroneStatus, TaskStatus, WaypointAction
+from drone_mission_planner.domain.enums import (
+    AltitudeMode,
+    DroneStatus,
+    TaskStatus,
+    WaypointAction,
+)
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
     BaseStation,
@@ -13,7 +18,7 @@ from drone_mission_planner.domain.models import (
     SearchArea,
 )
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
-from drone_mission_planner.domain.waypoint import Waypoint
+from drone_mission_planner.domain.waypoint import Waypoint, waypoints_from_path
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.simulation.engine import SimulationEngine
 
@@ -41,7 +46,7 @@ def simulation_map() -> MapModel:
             remaining_battery=100,
             energy_per_meter=0.1,
             assigned_tasks=["T-01"],
-            planned_path=[Point(10, 10), Point(30, 10), Point(10, 10)],
+            waypoints = waypoints_from_path([Point(10, 10), Point(30, 10), Point(10, 10)], default_altitude=100.0),
         )
     )
     return model
@@ -91,7 +96,7 @@ def test_service_planned_route_assigns_and_completes_its_task() -> None:
         for index, point in enumerate(path)
     ]
 
-    service.assign_task_route(drone.id, task.id, path, waypoints)
+    service.assign_task_route(drone.id, task.id, waypoints)
     engine = SimulationEngine(service.project.map, fixed_dt=0.05)
     engine.run_until_complete()
 
@@ -111,7 +116,7 @@ def test_battery_depletion_stops_flight_and_requests_replan() -> None:
             battery_capacity=1.0,
             remaining_battery=1.0,
             energy_per_meter=10.0,
-            planned_path=[Point(10.0, 10.0), Point(110.0, 10.0)],
+            waypoints = waypoints_from_path([Point(10.0, 10.0), Point(110.0, 10.0)], default_altitude=100.0),
         )
     )
 
@@ -130,7 +135,7 @@ def test_battery_depletion_stops_flight_and_requests_replan() -> None:
 def test_task_completes_when_route_segment_passes_checkpoint() -> None:
     model = simulation_map()
     model.tasks[0].position = Point(20, 10)
-    model.drones[0].planned_path = [Point(10, 10), Point(30, 10), Point(10, 10)]
+    model.drones[0].waypoints = waypoints_from_path([Point(10, 10), Point(30, 10), Point(10, 10)], default_altitude=100.0)
 
     engine = SimulationEngine(model, fixed_dt=0.05)
     engine.run_until_complete()
@@ -173,6 +178,16 @@ def test_simulation_tracks_environment_energy_and_altitude() -> None:
     model.drones[0].cruise_altitude = 40.0
     model.drones[0].min_clearance = 30.0
     model.drones[0].climb_power = 360.0
+    # AGL waypoints make the route follow the ridge, so the leg climbs and descends.
+    model.drones[0].waypoints = [
+        Waypoint(
+            waypoint.x,
+            waypoint.y,
+            altitude=40.0,
+            altitude_mode=AltitudeMode.AGL,
+        )
+        for waypoint in model.drones[0].waypoints
+    ]
 
     engine = SimulationEngine(model, fixed_dt=0.05)
     engine.run_until_complete()
@@ -211,7 +226,6 @@ def test_failed_drone_stops_contributing_coverage() -> None:
             Point(10, 10),
             "B-01",
             max_speed=10,
-            planned_path=[Point(10, 10), Point(250, 10), Point(10, 10)],
             waypoints=[
                 Waypoint(10.0, 10.0, altitude=50.0, action=WaypointAction.SCAN),
                 Waypoint(250.0, 10.0, altitude=50.0, action=WaypointAction.SCAN),

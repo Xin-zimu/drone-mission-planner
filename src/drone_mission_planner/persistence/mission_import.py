@@ -283,7 +283,7 @@ def apply_import(
         waypoints = list(preview.waypoint_route)
         if preview.route_from_geometry:
             waypoints = _with_route_altitudes(service, drone_id, waypoints)
-        service.replace_waypoints(drone_id, waypoints)
+        service.replace_route(drone_id, waypoints)
         created.append(drone_id)
     return created
 

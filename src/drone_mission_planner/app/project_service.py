@@ -23,8 +23,9 @@ from drone_mission_planner.domain.models import (
 )
 from drone_mission_planner.domain.terrain import TerrainModel
 from drone_mission_planner.domain.validation import validate_project
-from drone_mission_planner.domain.waypoint import Waypoint, path_from_waypoints
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.domain.wind import WindModel
+from drone_mission_planner.persistence.migrations import MigrationReport
 from drone_mission_planner.persistence.project_repository import ProjectRepository
 
 EDITABLE_WAYPOINT_FIELDS = ("altitude", "altitude_mode", "speed", "action", "hold_seconds")
@@ -47,6 +48,7 @@ class ProjectService:
         self.project = ProjectModel()
         self.path: Path | None = None
         self.dirty = False
+        self.last_migration_report = MigrationReport()
         self._saved_project: ProjectModel | None = deepcopy(self.project)
         self._undo_stack: list[HistoryEntry] = []
         self._redo_stack: list[HistoryEntry] = []
@@ -77,7 +79,8 @@ class ProjectService:
         return self.project
 
     def load(self, path: str | Path) -> ProjectModel:
-        self.project = self.repository.load(path)
+        self.project, report = self.repository.load_with_report(path)
+        self.last_migration_report = report
         self.path = Path(path)
         self.dirty = False
         self._saved_project = deepcopy(self.project)
@@ -291,7 +294,6 @@ class ProjectService:
         self,
         drone_id: str,
         task_id: str,
-        path: list[Point],
         waypoints: list[Waypoint],
     ) -> Drone:
         """Replace one drone's route and keep its task assignment synchronized."""
@@ -314,8 +316,34 @@ class ProjectService:
                     self._set_task_assignment(assigned, None)
             self._set_task_assignment(task, drone.id)
             drone.assigned_tasks = [task.id]
-            drone.planned_path = list(path)
             drone.waypoints = list(waypoints)
+            validate_project(self.project)
+        return drone
+
+    def replace_route(self, drone_id: str, waypoints: list[Waypoint]) -> Drone:
+        """Replace a drone's whole route atomically (planning, coverage, imports)."""
+
+        drone = self._drone(drone_id)
+        with self.change("Replace route"):
+            previous = list(drone.waypoints)
+            drone.waypoints = list(waypoints)
+            try:
+                validate_project(self.project)
+            except ValueError:
+                drone.waypoints = previous
+                raise
+        return drone
+
+    def clear_route(self, drone_id: str) -> Drone:
+        """Remove a drone's route, its task links and any dangling assignment."""
+
+        drone = self._drone(drone_id)
+        with self.change("Clear route"):
+            for task in self.project.map.tasks:
+                if task.assigned_drone_id == drone.id:
+                    self._set_task_assignment(task, None)
+            drone.assigned_tasks = []
+            drone.waypoints = []
             validate_project(self.project)
         return drone
 
@@ -402,8 +430,8 @@ class ProjectService:
             self.project.planning_settings.update(template.settings)
         return dict(template.settings)
 
-    def update_waypoint(self, drone_id: str, index: int, name: str, value: Any) -> Waypoint:
-        """Edit one editable field of a drone waypoint and keep the path in sync."""
+    def edit_waypoint(self, drone_id: str, index: int, name: str, value: Any) -> Waypoint:
+        """Edit one editable field of a drone waypoint; the 2D path follows."""
 
         drone = self._drone(drone_id)
         if name not in EDITABLE_WAYPOINT_FIELDS:
@@ -414,34 +442,26 @@ class ProjectService:
             waypoint = drone.waypoints[index]
             previous = getattr(waypoint, name)
             _apply_waypoint_field(waypoint, name, value)
-            self._sync_waypoint_path(drone)
             try:
                 validate_project(self.project)
             except ValueError:
                 setattr(waypoint, name, previous)
-                self._sync_waypoint_path(drone)
                 raise
         return waypoint
 
-    def replace_waypoints(self, drone_id: str, waypoints: list[Waypoint]) -> Drone:
-        """Replace a drone's whole waypoint list (imports, presets, planning)."""
+    def remove_waypoint(
+        self,
+        drone_id: str,
+        index: int,
+        *,
+        unassign_task: bool = False,
+    ) -> Waypoint:
+        """Delete a waypoint, keeping the route and task links consistent.
 
-        drone = self._drone(drone_id)
-        with self.change("Replace route waypoints"):
-            previous = list(drone.waypoints)
-            previous_path = list(drone.planned_path)
-            drone.waypoints = list(waypoints)
-            self._sync_waypoint_path(drone)
-            try:
-                validate_project(self.project)
-            except ValueError:
-                drone.waypoints = previous
-                drone.planned_path = previous_path
-                raise
-        return drone
-
-    def remove_waypoint(self, drone_id: str, index: int) -> Waypoint:
-        """Delete a waypoint when it is safe to remove, keeping the path in sync."""
+        A waypoint that carries a mission link is only removed when the caller
+        explicitly accepts unassigning that mission, so a service point can
+        never disappear while the task still claims to be scheduled.
+        """
 
         drone = self._drone(drone_id)
         if not 0 <= index < len(drone.waypoints):
@@ -449,7 +469,7 @@ class ProjectService:
         waypoint = drone.waypoints[index]
         if index == 0:
             raise ValueError("The departure waypoint cannot be deleted")
-        if waypoint.task_id is not None:
+        if waypoint.task_id is not None and not unassign_task:
             raise ValueError(
                 f"Waypoint {index + 1} is linked to {waypoint.task_id}; cancel or reassign "
                 "the mission instead of deleting it"
@@ -462,7 +482,11 @@ class ProjectService:
             )
         with self.change("Delete waypoint"):
             removed = drone.waypoints.pop(index)
-            self._sync_waypoint_path(drone)
+            if removed.task_id is not None:
+                task = self.project.map.find(removed.task_id)
+                if isinstance(task, MissionTask):
+                    self._set_task_assignment(task, None)
+            validate_project(self.project)
         return removed
 
     def _drone(self, drone_id: str) -> Drone:
@@ -484,10 +508,6 @@ class ProjectService:
         task.assigned_drone_id = normalized
         if task.status not in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}:
             task.status = TaskStatus.ASSIGNED if normalized is not None else TaskStatus.PENDING
-
-    @staticmethod
-    def _sync_waypoint_path(drone: Drone) -> None:
-        drone.planned_path = path_from_waypoints(drone.waypoints)
 
     def _next(self, kind: str) -> int:
         self._counters[kind] += 1

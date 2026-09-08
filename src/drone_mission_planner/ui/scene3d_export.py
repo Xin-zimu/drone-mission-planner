@@ -263,19 +263,12 @@ def _drone_route_points(
     map_model: MapModel,
     drone: Drone,
 ) -> list[tuple[float, float, float]]:
-    if drone.waypoints:
-        return [
-            (waypoint.x, waypoint.y, waypoint_msl_altitude(waypoint, map_model.terrain))
-            for waypoint in drone.waypoints
-        ]
-    points: list[tuple[float, float, float]] = []
-    for point in drone.planned_path:
-        altitude = max(
-            drone.cruise_altitude,
-            map_model.terrain.altitude_at(point.x, point.y) + drone.min_clearance,
-        )
-        points.append((point.x, point.y, altitude))
-    return points
+    """Route vertices with MSL altitudes taken from the authoritative waypoints."""
+
+    return [
+        (waypoint.x, waypoint.y, waypoint_msl_altitude(waypoint, map_model.terrain))
+        for waypoint in drone.waypoints
+    ]
 
 
 def _build_route(

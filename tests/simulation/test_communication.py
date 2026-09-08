@@ -3,6 +3,7 @@ from __future__ import annotations
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import BaseStation, Drone, MapModel, MissionTask
+from drone_mission_planner.domain.waypoint import waypoints_from_path
 from drone_mission_planner.simulation.communication import CommunicationMonitor, CommunicationNode
 from drone_mission_planner.simulation.engine import SimulationEngine
 from drone_mission_planner.simulation.events import EventType
@@ -47,7 +48,7 @@ def test_auto_return_policy_releases_task_and_reaches_base() -> None:
             max_speed=10,
             communication_range=25,
             assigned_tasks=["T-01"],
-            planned_path=[Point(10, 40), Point(100, 40), Point(5, 40)],
+            waypoints = waypoints_from_path([Point(10, 40), Point(100, 40), Point(5, 40)], default_altitude=100.0),
         )
     )
     engine = SimulationEngine(model, communication_policy="auto_return", communication_grace=0.2)

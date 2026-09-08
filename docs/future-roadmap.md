@@ -828,14 +828,14 @@ M6-M20 的核心实现均已完成，不再把这些阶段列为待开发任务�
 
 ### 主要风险
 
-- `planned_path` 与 `waypoints` 仍是兼容期双表示，所有编辑入口必须保持同步。
+- ~~`planned_path` 与 `waypoints` 仍是兼容期双表示，所有编辑入口必须保持同步。~~ 已在 v1.2 F1 解决：`waypoints` 是唯一权威，`planned_path` 为只读派生属性，项目格式 1.7 不再持久化它（见 [execution-progress.md](execution-progress.md)）。
 - Windows 单文件包会受 Python、PySide6、VC++ 运行库和宿主 DLL 搜索路径影响。
 - 本地米制坐标不能在缺少真实地理校准时被误认为可直接执行的飞行计划。
 - 自动恢复快照必须与用户主动保存、丢弃和关闭行为保持一致。
 
 ### 控制策略
 
-- 双表示更新统一经过 `ProjectService`，保存、迁移和校验均有自动化测试。
+- 路线更新统一经过 `ProjectService` 的 `replace_route`/`edit_waypoint`/`remove_waypoint`/`clear_route`，保存、迁移（含冲突报告）和校验均有自动化测试。
 - Windows 发布固定使用 Python 3.12；构建时隔离 DLL 搜索路径、统一 VC++ 运行库并运行成品启动自检。
 - 未完成真实地理校准时，QGC/ArduPilot 导出保持 not-flyable 标记。
 - 产品化修改使用事务式撤销/重做、原子保存和带来源元数据的恢复快照。

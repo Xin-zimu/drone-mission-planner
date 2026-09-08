@@ -83,7 +83,6 @@ def test_planned_sweep_reaches_target_coverage_in_simulation() -> None:
         # and the engine now stops an aircraft exactly when its energy runs out.
         drone.battery_capacity = 400.0
         drone.remaining_battery = 400.0
-        drone.planned_path = result.drone_paths[drone.id]
         drone.waypoints = result.drone_waypoints[drone.id]
 
     engine = SimulationEngine(model)

@@ -7,7 +7,7 @@ import pytest
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.enums import AltitudeMode, WaypointAction
 from drone_mission_planner.domain.geometry import Point
-from drone_mission_planner.domain.waypoint import Waypoint, path_from_waypoints
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.persistence.mission_import import (
     MissionImportError,
     apply_import,
@@ -70,9 +70,9 @@ def test_geojson_imports_areas_zone_task_and_route(tmp_path: Path) -> None:
     assert len(area.points) == 5
     assert service.project.map.no_fly_zones[0].points[0] == Point(320.0, 120.0)
     assert service.project.map.drones[0].waypoints[2].point == Point(260.0, 120.0)
-    assert service.project.map.drones[0].planned_path == path_from_waypoints(
-        service.project.map.drones[0].waypoints
-    )
+    assert service.project.map.drones[0].planned_path == [
+        waypoint.point for waypoint in service.project.map.drones[0].waypoints
+    ]
     assert service.dirty
 
 
@@ -167,14 +167,14 @@ def test_waypoint_route_requires_target_drone(tmp_path: Path) -> None:
         apply_import(service, preview)
 
 
-def test_replace_waypoints_rejects_out_of_bounds_and_reverts(tmp_path: Path) -> None:
+def test_replace_route_rejects_out_of_bounds_and_reverts(tmp_path: Path) -> None:
     service = _service()
     drone = service.add_drone(Point(40.0, 40.0))
     service.dirty = False
 
     outside = [Waypoint(60.0, 60.0, altitude=80.0), Waypoint(2000.0, 2000.0, altitude=80.0)]
     with pytest.raises(ValueError):  # second waypoint is outside the map
-        service.replace_waypoints(drone.id, outside)
+        service.replace_route(drone.id, outside)
 
     assert drone.waypoints == []
     assert not service.dirty

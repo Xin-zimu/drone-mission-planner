@@ -8,7 +8,10 @@ import pytest
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.equipment import EquipmentLibrary
 from drone_mission_planner.domain.geometry import Point
-from drone_mission_planner.persistence.project_repository import ProjectRepository
+from drone_mission_planner.persistence.project_repository import (
+    CURRENT_VERSION,
+    ProjectRepository,
+)
 
 
 def test_default_library_ships_builtin_equipment() -> None:
@@ -131,5 +134,5 @@ def test_customized_library_persists(tmp_path: Path) -> None:
     loaded = ProjectRepository().load(path)
     raw = json.loads(path.read_text(encoding="utf-8"))
 
-    assert raw["version"] == "1.6"
+    assert raw["version"] == CURRENT_VERSION
     assert "Custom Wing" in [model.name for model in loaded.equipment.drone_models]

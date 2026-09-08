@@ -58,7 +58,7 @@ class DroneRuntime:
 
     @classmethod
     def from_drone(cls, drone: Drone, terrain: TerrainModel | None = None) -> DroneRuntime:
-        path = list(drone.planned_path) or path_from_waypoints(drone.waypoints)
+        path = path_from_waypoints(drone.waypoints)
         if path and path[0].distance_to(drone.position) > 1e-6:
             path.insert(0, drone.position)
         profiles = cls._waypoint_profiles(drone, path, terrain)

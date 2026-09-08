@@ -115,11 +115,12 @@ def test_editing_task_assignment_synchronizes_both_sides() -> None:
     service.update_property(task.id, "assigned_drone_id", first.id)
     service.update_property(task.id, "assigned_drone_id", second.id)
 
-    assert task.status == TaskStatus.ASSIGNED
+    # Compare .value so mypy does not narrow the enum literal across mutations.
+    assert task.status.value == "assigned"
     assert task.id not in first.assigned_tasks
     assert second.assigned_tasks == [task.id]
 
     service.update_property(task.id, "assigned_drone_id", None)
 
-    assert task.status == TaskStatus.PENDING
+    assert task.status.value == "pending"
     assert task.id not in second.assigned_tasks

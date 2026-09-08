@@ -38,7 +38,7 @@ Every route result carries `flight_waypoints` next to the two-dimensional point 
 
 Task endpoints receive the owning task ID and an action mapped from the task type: area search maps to scan, inspection to take photo, return-home to return-to-launch, tasks with execution time to hover, and everything else to fly-to. Assignment and coverage planning accumulate per-drone waypoint lists alongside point paths; safety-return legs are marked return-to-launch and coverage pass endpoints are marked scan, so a mission file describes what the aircraft should do at each vertex, not only where it flies.
 
-Project schema 1.4 persists the waypoint lists. Legacy files without waypoints are backfilled from their planned paths, and waypoints without a point path derive one, keeping both representations interchangeable.
+Project schema 1.7 persists the waypoint lists as the single route representation. `Drone.planned_path` is a read-only projection of that list, and the 1.6→1.7 migration rebuilds waypoints from a legacy 2D path with the altitude rule above, keeping waypoints and reporting a conflict when the two representations disagreed.
 
 ## Altitude safety validation
 

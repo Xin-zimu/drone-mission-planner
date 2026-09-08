@@ -12,7 +12,7 @@ from drone_mission_planner.domain.models import (
     Obstacle,
 )
 from drone_mission_planner.domain.terrain import TerrainPeak, flat_terrain
-from drone_mission_planner.domain.waypoint import Waypoint
+from drone_mission_planner.domain.waypoint import Waypoint, waypoints_from_path
 from drone_mission_planner.planning.altitude_validator import (
     AltitudeRisk,
     AltitudeRiskKind,
@@ -148,7 +148,7 @@ def test_task_target_altitude_below_clearance_is_reported() -> None:
 def test_validate_model_altitudes_aggregates_all_drones() -> None:
     model = altitude_map(cruise_altitude=100.0)
     model.terrain.peaks.append(TerrainPeak(Point(100.0, 10.0), 30.0, 120.0))
-    model.drones[0].planned_path = [Point(10, 10), Point(190, 10)]
+    model.drones[0].waypoints = waypoints_from_path([Point(10, 10), Point(190, 10)], default_altitude=100.0)
     model.drones.append(
         Drone(
             "D-02",
@@ -157,7 +157,7 @@ def test_validate_model_altitudes_aggregates_all_drones() -> None:
             "B-01",
             cruise_altitude=100.0,
             min_clearance=30.0,
-            planned_path=[Point(10, 50), Point(190, 50)],
+            waypoints = waypoints_from_path([Point(10, 50), Point(190, 50)], default_altitude=100.0),
         )
     )
 
@@ -194,7 +194,6 @@ def test_waypoint_altitudes_high_enough_clear_the_peak() -> None:
     model.terrain.peaks.append(TerrainPeak(Point(100.0, 10.0), 30.0, 120.0))
     drone = model.drones[0]
     path = [Point(10, 10), Point(190, 10)]
-    drone.planned_path = list(path)
     drone.waypoints = [
         Waypoint(10.0, 10.0, altitude=100.0),
         Waypoint(190.0, 10.0, altitude=220.0),
@@ -210,7 +209,6 @@ def test_waypoint_altitudes_below_clearance_report_the_edited_altitude() -> None
     model.terrain.peaks.append(TerrainPeak(Point(100.0, 10.0), 30.0, 120.0))
     drone = model.drones[0]
     path = [Point(10, 10), Point(190, 10)]
-    drone.planned_path = list(path)
     drone.waypoints = [
         Waypoint(10.0, 10.0, altitude=40.0),
         Waypoint(190.0, 10.0, altitude=40.0),
@@ -230,7 +228,6 @@ def test_mismatched_waypoint_count_falls_back_to_commanded_altitude() -> None:
     model.terrain.peaks.append(TerrainPeak(Point(100.0, 10.0), 30.0, 120.0))
     drone = model.drones[0]
     path = [Point(10, 10), Point(190, 10)]
-    drone.planned_path = list(path)
     drone.waypoints = [Waypoint(10.0, 10.0, altitude=40.0)]
 
     risks = validate_altitude_path(model, drone, path)

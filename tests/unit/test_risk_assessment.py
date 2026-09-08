@@ -33,7 +33,6 @@ def _model() -> tuple[MapModel, Drone]:
         "B-01",
         battery_capacity=500.0,
         remaining_battery=500.0,
-        planned_path=[Point(40.0, 40.0), Point(200.0, 120.0)],
         waypoints=[
             Waypoint(40.0, 40.0, altitude=80.0),
             Waypoint(200.0, 120.0, altitude=80.0, action=WaypointAction.RETURN_TO_LAUNCH),
@@ -124,7 +123,6 @@ def test_mission_assessment_and_matrix_are_deterministic() -> None:
         "Bravo",
         Point(60.0, 60.0),
         "B-01",
-        planned_path=[Point(60.0, 60.0), Point(160.0, 160.0)],
         waypoints=[
             Waypoint(60.0, 60.0, altitude=80.0),
             Waypoint(160.0, 160.0, altitude=80.0, action=WaypointAction.RETURN_TO_LAUNCH),

@@ -23,7 +23,6 @@ def _service_with_route() -> tuple[ProjectService, Drone]:
         Waypoint(120.0, 60.0, altitude=100.0),
         Waypoint(240.0, 90.0, altitude=100.0, action=WaypointAction.RETURN_TO_LAUNCH),
     ]
-    drone.planned_path = path_from_waypoints(drone.waypoints)
     service.dirty = False
     return service, drone
 
@@ -31,7 +30,7 @@ def _service_with_route() -> tuple[ProjectService, Drone]:
 def test_update_waypoint_altitude_marks_dirty_and_syncs_path() -> None:
     service, drone = _service_with_route()
 
-    updated = service.update_waypoint(drone.id, 1, "altitude", 135.5)
+    updated = service.edit_waypoint(drone.id, 1, "altitude", 135.5)
 
     assert updated.altitude == 135.5
     assert drone.planned_path == path_from_waypoints(drone.waypoints)
@@ -43,13 +42,13 @@ def test_update_waypoint_rejects_invalid_values_and_reverts() -> None:
     service, drone = _service_with_route()
 
     with pytest.raises(ValueError):
-        service.update_waypoint(drone.id, 1, "altitude", -5.0)
+        service.edit_waypoint(drone.id, 1, "altitude", -5.0)
     with pytest.raises(ValueError):
-        service.update_waypoint(drone.id, 1, "speed", 0.0)
+        service.edit_waypoint(drone.id, 1, "speed", 0.0)
     with pytest.raises(ValueError):
-        service.update_waypoint(drone.id, 1, "hold_seconds", -1.0)
+        service.edit_waypoint(drone.id, 1, "hold_seconds", -1.0)
     with pytest.raises(ValueError):
-        service.update_waypoint(drone.id, 1, "x", 55.0)
+        service.edit_waypoint(drone.id, 1, "x", 55.0)
 
     assert drone.waypoints[1].altitude == 100.0
     assert drone.waypoints[1].speed is None
@@ -59,14 +58,14 @@ def test_update_waypoint_rejects_invalid_values_and_reverts() -> None:
 def test_update_waypoint_accepts_enum_text_and_optional_speed() -> None:
     service, drone = _service_with_route()
 
-    service.update_waypoint(drone.id, 1, "altitude_mode", "agl")
-    service.update_waypoint(drone.id, 1, "action", "hover")
-    service.update_waypoint(drone.id, 1, "speed", "")
+    service.edit_waypoint(drone.id, 1, "altitude_mode", "agl")
+    service.edit_waypoint(drone.id, 1, "action", "hover")
+    service.edit_waypoint(drone.id, 1, "speed", "")
     assert drone.waypoints[1].altitude_mode == AltitudeMode.AGL
     assert drone.waypoints[1].action == WaypointAction.HOVER
     assert drone.waypoints[1].speed is None
 
-    service.update_waypoint(drone.id, 1, "speed", 12.5)
+    service.edit_waypoint(drone.id, 1, "speed", 12.5)
     assert drone.waypoints[1].speed == 12.5
 
 
@@ -74,9 +73,9 @@ def test_update_waypoint_rejects_unknown_drone_and_index() -> None:
     service, drone = _service_with_route()
 
     with pytest.raises(KeyError):
-        service.update_waypoint("D-99", 0, "altitude", 120.0)
+        service.edit_waypoint("D-99", 0, "altitude", 120.0)
     with pytest.raises(IndexError):
-        service.update_waypoint(drone.id, 7, "altitude", 120.0)
+        service.edit_waypoint(drone.id, 7, "altitude", 120.0)
 
 
 def test_remove_waypoint_deletes_structural_free_vertices() -> None:

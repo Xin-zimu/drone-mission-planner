@@ -828,7 +828,6 @@ class MainWindow(QMainWindow):
             self.service.assign_task_route(
                 drone.id,
                 task.id,
-                result.waypoints,
                 result.flight_waypoints,
             )
         except (KeyError, ValueError) as exc:
@@ -880,7 +879,6 @@ class MainWindow(QMainWindow):
             self.service.project.planning_settings["mission_mode"] = "coverage"
             self.coverage_results[area.id] = result
             for drone in self.service.project.map.drones:
-                drone.planned_path = result.drone_paths.get(drone.id, [])
                 drone.waypoints = result.drone_waypoints.get(drone.id, [])
                 drone.assigned_tasks.clear()
         self._render_coverage_table()
@@ -930,7 +928,6 @@ class MainWindow(QMainWindow):
         with self.service.change("Plan all coverage areas"):
             self.service.project.planning_settings["mission_mode"] = "coverage"
             for drone in self.service.project.map.drones:
-                drone.planned_path = []
                 drone.waypoints = []
                 drone.assigned_tasks.clear()
             for area in ordered:
@@ -939,7 +936,6 @@ class MainWindow(QMainWindow):
                 for drone in self.service.project.map.drones:
                     path = result.drone_paths.get(drone.id, [])
                     if path and drone.id not in assigned:
-                        drone.planned_path = path
                         drone.waypoints = result.drone_waypoints.get(drone.id, [])
                         assigned.add(drone.id)
                 if result.failures:
@@ -1075,7 +1071,7 @@ class MainWindow(QMainWindow):
 
     def _on_waypoint_edited(self, drone_id: str, index: int, field: str, value: object) -> None:
         try:
-            self.service.update_waypoint(drone_id, index, field, value)
+            self.service.edit_waypoint(drone_id, index, field, value)
         except (KeyError, IndexError, ValueError) as exc:
             LOGGER.error("Waypoint edit rejected: %s", exc)
             self.statusBar().showMessage(f"Waypoint edit rejected: {exc}", 7000)
@@ -1111,9 +1107,9 @@ class MainWindow(QMainWindow):
         return None
 
     def _waypoint_altitudes(self, drone: Drone) -> list[float] | None:
-        """MSL altitudes per path vertex when the waypoint list is in sync."""
+        """MSL altitudes per route vertex when the drone has a usable route."""
 
-        if len(drone.waypoints) != len(drone.planned_path) or len(drone.waypoints) < 2:
+        if len(drone.waypoints) < 2:
             return None
         terrain = self.service.project.map.terrain
         return [waypoint_msl_altitude(waypoint, terrain) for waypoint in drone.waypoints]
@@ -1707,7 +1703,6 @@ class MainWindow(QMainWindow):
         with self.service.change("Apply assignment"):
             for drone in self.service.project.map.drones:
                 drone.assigned_tasks.clear()
-                drone.planned_path = result.drone_paths.get(drone.id, [])
                 drone.waypoints = result.drone_waypoints.get(drone.id, [])
             for task in self.service.project.map.tasks:
                 if task.status.value != "completed":
@@ -1926,9 +1921,7 @@ class MainWindow(QMainWindow):
                 coverage_resolution=coverage_resolution,
             )
             self.coverage_results[area.id] = coverage_result
-            paths = coverage_result.drone_paths
             for drone in self.service.project.map.drones:
-                drone.planned_path = paths.get(drone.id, [])
                 drone.waypoints = coverage_result.drone_waypoints.get(drone.id, [])
             failures = coverage_result.failures
             self._render_coverage_table(engine.snapshot().coverage)
@@ -2523,10 +2516,6 @@ class MainWindow(QMainWindow):
                         f"{drone.id} waypoint {index} references missing mission "
                         f"{waypoint.task_id}"
                     )
-            if bool(drone.planned_path) != bool(drone.waypoints):
-                issues.append(f"{drone.id} route representations are out of sync")
-            elif len(drone.planned_path) != len(drone.waypoints):
-                issues.append(f"{drone.id} path and waypoint counts differ")
         dialog = QDialog(self)
         dialog.setWindowTitle("Validation center")
         layout = QVBoxLayout(dialog)

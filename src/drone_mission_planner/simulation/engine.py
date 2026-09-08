@@ -456,7 +456,6 @@ class SimulationEngine:
         runtime.hold_remaining = 0.0
         runtime.status = DroneStatus.RETURNING
         drone.assigned_tasks.clear()
-        drone.planned_path = route.waypoints
         drone.waypoints = route.flight_waypoints
         runtime.apply_waypoints(drone, route.waypoints, self.map_model.terrain)
         self.replan_count += 1

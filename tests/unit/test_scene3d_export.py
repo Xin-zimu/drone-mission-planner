@@ -6,7 +6,7 @@ from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.enums import AltitudeMode, ObstacleShape
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
-from drone_mission_planner.domain.waypoint import Waypoint
+from drone_mission_planner.domain.waypoint import Waypoint, waypoints_from_path
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.ui.scene3d_export import (
     RISK_COLOR_CRITICAL,
@@ -71,18 +71,13 @@ def test_routes_prefer_waypoint_altitudes_with_msl_and_agl_modes() -> None:
     assert scene.markers[0].object_id == drone.id
 
 
-def test_route_falls_back_to_planned_path_with_clearance() -> None:
+def test_route_without_waypoints_is_not_exported() -> None:
     service = _project_with_terrain()
     drone = service.project.map.drones[0]
-    drone.cruise_altitude = 90.0
-    drone.min_clearance = 25.0
-    drone.planned_path = [Point(100.0, 110.0), Point(250.0, 200.0)]
+    drone.waypoints = []
     scene = build_scene3d(service.project.map)
 
-    route = scene.routes[0]
-    peak_altitude = service.project.map.terrain.altitude_at(250.0, 200.0)
-    assert route.points[0][2] == 90.0
-    assert route.points[1][2] == max(90.0, peak_altitude + 25.0)
+    assert all(route.object_id != drone.id for route in scene.routes)
 
 
 def test_obstacle_and_no_fly_volumes_stand_on_terrain() -> None:
@@ -125,7 +120,7 @@ def test_crossing_a_tall_obstacle_marks_risk_segments() -> None:
     drone = service.add_drone(Point(50.0, 250.0))
     obstacle = service.add_obstacle(Rect(200.0, 220.0, 100.0, 60.0))
     obstacle.height = 200.0
-    drone.planned_path = [Point(50.0, 250.0), Point(450.0, 250.0)]
+    drone.waypoints = waypoints_from_path([Point(50.0, 250.0), Point(450.0, 250.0)], default_altitude=100.0)
     scene = build_scene3d(service.project.map)
 
     route = scene.routes[0]

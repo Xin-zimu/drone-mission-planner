@@ -3,6 +3,7 @@ from __future__ import annotations
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import BaseStation, Drone, MapModel, MissionTask
+from drone_mission_planner.domain.waypoint import waypoints_from_path
 from drone_mission_planner.simulation.engine import SimulationEngine
 
 
@@ -40,7 +41,7 @@ def test_priority_hold_keeps_crossing_drones_outside_combined_safety_radius() ->
                 safety_radius=5,
                 communication_range=200,
                 assigned_tasks=["T-01"],
-                planned_path=[Point(10, 50), Point(90, 50)],
+                waypoints = waypoints_from_path([Point(10, 50), Point(90, 50)], default_altitude=100.0),
             ),
             Drone(
                 "D-02",
@@ -51,7 +52,7 @@ def test_priority_hold_keeps_crossing_drones_outside_combined_safety_radius() ->
                 safety_radius=5,
                 communication_range=200,
                 assigned_tasks=["T-02"],
-                planned_path=[Point(50, 90), Point(50, 10)],
+                waypoints = waypoints_from_path([Point(50, 90), Point(50, 10)], default_altitude=100.0),
             ),
         ]
     )

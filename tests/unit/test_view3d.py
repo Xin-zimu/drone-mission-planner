@@ -5,6 +5,7 @@ from PySide6.QtGui import QMouseEvent
 
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.waypoint import waypoints_from_path
 from drone_mission_planner.ui.scene3d_export import Scene3D, build_scene3d
 from drone_mission_planner.ui.view3d import LAYERS, ThreeDView
 
@@ -13,7 +14,7 @@ def _scene() -> Scene3D:
     service = ProjectService()
     service.add_base(Point(80.0, 90.0))
     drone = service.add_drone(Point(100.0, 110.0))
-    drone.planned_path = [Point(100.0, 110.0), Point(420.0, 260.0)]
+    drone.waypoints = waypoints_from_path([Point(100.0, 110.0), Point(420.0, 260.0)], default_altitude=100.0)
     service.add_obstacle(Rect(300.0, 180.0, 90.0, 70.0))
     return build_scene3d(service.project.map)
 

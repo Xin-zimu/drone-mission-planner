@@ -25,7 +25,7 @@
 | Live adaptation | Manual or seeded automatic failures, exact-position stop, unfinished-work redistribution from live state, coverage recovery without resetting history, temporary zones, task insertion/cancellation |
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
 | Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, event history, and HTML/JSON/CSV export |
-| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.4 (three-dimensional waypoints), validation, and clear corrupt/incompatible-file errors |
+| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.7, a single authoritative `waypoints` route (the 2D path is derived), migration reports for rebuilt/conflicting routes, and clear corrupt/incompatible-file errors |
 | Local basemap | Map → Import basemap… overlays a local PNG/JPG under the mission grid with opacity/lock and two-point metre calibration persisted in the project |
 | Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation and explicit not-flyable local-coordinate marking |
 | Project safety | Undo/redo for common edits and planning operations; atomic saves; timed crash-recovery snapshots; recent projects; local settings; and a project validation center |
@@ -127,7 +127,7 @@ The final suite covers geometry, rasterization, A*, smoothing, energy, assignmen
 
 ## Architecture
 
-The project enforces `UI → application → domain/planning/simulation/persistence` dependency direction. Planning and simulation never depend on PySide6, all domain objects are dataclasses, deterministic behavior accepts a fixed seed, and each core feature has automated tests.
+The project enforces `UI → application → domain/planning/simulation/persistence` dependency direction. Planning and simulation never depend on PySide6, all domain objects are dataclasses, deterministic behavior accepts a fixed seed, and each core feature has automated tests. A route has one authoritative representation — the three-dimensional waypoint list — and `Drone.planned_path` is a read-only projection of it (project format 1.7).
 
 ## Scope and roadmap
 

@@ -14,7 +14,7 @@ from drone_mission_planner.domain.models import (
     NoFlyZone,
     Obstacle,
 )
-from drone_mission_planner.domain.waypoint import path_from_waypoints, waypoint_msl_altitude
+from drone_mission_planner.domain.waypoint import waypoint_msl_altitude
 
 
 class AltitudeRiskKind(StrEnum):
@@ -130,7 +130,7 @@ def validate_model_altitudes(
             validate_altitude_path(
                 map_model,
                 drone,
-                drone.planned_path or path_from_waypoints(drone.waypoints),
+                drone.planned_path,
                 allow_no_fly_overflight=allow_no_fly_overflight,
             )
         )

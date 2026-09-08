@@ -36,7 +36,6 @@ def _map_with_route(
         max_speed=10.0,
         cruise_altitude=40.0,
         min_clearance=30.0,
-        planned_path=[waypoint.point for waypoint in waypoints],
         waypoints=waypoints,
     )
     model.drones.append(drone)

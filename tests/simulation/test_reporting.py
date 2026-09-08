@@ -9,6 +9,7 @@ from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import BaseStation, Drone, MapModel, MissionTask
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
+from drone_mission_planner.domain.waypoint import Waypoint, waypoints_from_path
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.simulation.engine import SimulationEngine
 from drone_mission_planner.simulation.reporting import build_simulation_report, export_report
@@ -36,7 +37,7 @@ def simulation_map() -> MapModel:
             max_speed=10,
             energy_per_meter=0.1,
             assigned_tasks=["T-01"],
-            planned_path=[Point(10, 10), Point(30, 10), Point(10, 10)],
+            waypoints = waypoints_from_path([Point(10, 10), Point(30, 10), Point(10, 10)], default_altitude=100.0),
         )
     )
     return model
@@ -97,6 +98,10 @@ def test_report_includes_altitude_risks_and_per_drone_counts() -> None:
     )
     model.drones[0].cruise_altitude = 40.0
     model.drones[0].min_clearance = 30.0
+    model.drones[0].waypoints = [
+        Waypoint(waypoint.x, waypoint.y, altitude=40.0)
+        for waypoint in model.drones[0].waypoints
+    ]
     engine = SimulationEngine(model)
     engine.run_until_complete()
 

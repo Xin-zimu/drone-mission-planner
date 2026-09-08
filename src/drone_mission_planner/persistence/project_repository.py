@@ -27,15 +27,20 @@ from drone_mission_planner.domain.models import (
     ProjectModel,
     SearchArea,
 )
-from drone_mission_planner.domain.terrain import TerrainModel, TerrainPeak
 from drone_mission_planner.domain.validation import validate_project
-from drone_mission_planner.domain.waypoint import Waypoint, path_from_waypoints, waypoints_from_path
+from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.domain.wind import WindModel
 
 from .equipment_codec import decode_equipment
-from .migrations import MigrationError, migrate_project
+from .migrations import (
+    CURRENT_PROJECT_VERSION,
+    MigrationError,
+    MigrationReport,
+    migrate_project,
+)
+from .terrain_codec import terrain_from_data
 
-CURRENT_VERSION = "1.6"
+CURRENT_VERSION = CURRENT_PROJECT_VERSION
 
 
 class ProjectFormatError(ValueError):
@@ -58,67 +63,6 @@ def _point(data: dict[str, Any]) -> Point:
 
 def _rect(data: dict[str, Any]) -> Rect:
     return Rect(float(data["x"]), float(data["y"]), float(data["width"]), float(data["height"]))
-
-
-def _terrain_peak(data: Any) -> TerrainPeak:
-    if isinstance(data, dict):
-        if "center" in data:
-            center = _point(data["center"])
-        else:
-            center = Point(float(data["center_x"]), float(data["center_y"]))
-        height_raw = data.get("height", data.get("peak_height", 0.0))
-        height = float(0.0 if height_raw is None else height_raw)
-        return TerrainPeak(center=center, radius=float(data["radius"]), height=height)
-    if isinstance(data, (list, tuple)) and len(data) == 4:
-        return TerrainPeak(
-            center=Point(float(data[0]), float(data[1])),
-            radius=float(data[2]),
-            height=float(data[3]),
-        )
-    raise ValueError("terrain peak must be an object or [x, y, radius, height]")
-
-
-def _terrain_grid_altitudes(data: Any) -> list[list[float]]:
-    if data is None:
-        return []
-    if not isinstance(data, list):
-        raise ValueError("terrain grid altitudes must be a list")
-    rows: list[list[float]] = []
-    for row in data:
-        if not isinstance(row, list):
-            raise ValueError("terrain grid altitude rows must be lists")
-        rows.append([float(value) for value in row])
-    return rows
-
-
-def _terrain(data: Any, fallback_resolution: float) -> TerrainModel:
-    if not isinstance(data, dict):
-        return TerrainModel(resolution=fallback_resolution)
-    peaks = [_terrain_peak(item) for item in data.get("peaks", [])]
-    grid_altitudes = _terrain_grid_altitudes(data.get("grid_altitudes", []))
-    grid_origin_data = data.get("grid_origin")
-    grid_origin = _point(grid_origin_data) if isinstance(grid_origin_data, dict) else None
-    base_altitude_raw = data.get("base_altitude", data.get("altitude", 0.0))
-    base_altitude = float(0.0 if base_altitude_raw is None else base_altitude_raw)
-    grid_values = [value for row in grid_altitudes for value in row]
-    if grid_values:
-        default_min = min(grid_values)
-        default_max = max(grid_values)
-    else:
-        default_min = base_altitude + sum(min(0.0, peak.height) for peak in peaks)
-        default_max = base_altitude + sum(max(0.0, peak.height) for peak in peaks)
-    return TerrainModel(
-        terrain_type=str(data.get("terrain_type", data.get("type", "flat"))),
-        resolution=float(data.get("resolution", fallback_resolution)),
-        base_altitude=base_altitude,
-        min_altitude=float(data.get("min_altitude", default_min)),
-        max_altitude=float(data.get("max_altitude", default_max)),
-        peaks=peaks,
-        grid_origin=grid_origin,
-        grid_width=int(data.get("grid_width", len(grid_altitudes[0]) if grid_altitudes else 0)),
-        grid_height=int(data.get("grid_height", len(grid_altitudes))),
-        grid_altitudes=grid_altitudes,
-    )
 
 
 def _wind(data: Any) -> WindModel:
@@ -153,11 +97,11 @@ def _waypoint(data: Any) -> Waypoint:
     raise ValueError("waypoint must be an object or [x, y, altitude]")
 
 
-def _drone(data: dict[str, Any], terrain: TerrainModel) -> Drone:
-    planned_path = [_point(point) for point in data.get("planned_path", [])]
-    waypoints_data = data.get("waypoints", [])
-    waypoints = [_waypoint(item) for item in waypoints_data]
-    drone = Drone(
+def _drone(data: dict[str, Any]) -> Drone:
+    """Decode one drone. Routes live only in ``waypoints`` (format 1.7+)."""
+
+    waypoints = [_waypoint(item) for item in data.get("waypoints", [])]
+    return Drone(
         id=data["id"],
         name=data["name"],
         position=_point(data["position"]),
@@ -173,7 +117,6 @@ def _drone(data: dict[str, Any], terrain: TerrainModel) -> Drone:
         communication_range=float(data.get("communication_range", 180.0)),
         safety_radius=float(data.get("safety_radius", 6.0)),
         assigned_tasks=list(data.get("assigned_tasks", [])),
-        planned_path=planned_path or path_from_waypoints(waypoints),
         waypoints=waypoints,
         cruise_altitude=float(data.get("cruise_altitude", 100.0)),
         min_clearance=float(data.get("min_clearance", 30.0)),
@@ -185,19 +128,13 @@ def _drone(data: dict[str, Any], terrain: TerrainModel) -> Drone:
         horizontal_power=float(data.get("horizontal_power", 110.0)),
         air_speed=float(data.get("air_speed", data.get("max_speed", 15.0))),
     )
-    if not drone.waypoints and drone.planned_path:
-        drone.waypoints = waypoints_from_path(
-            drone.planned_path,
-            altitude_provider=lambda point, _index: max(
-                drone.cruise_altitude,
-                terrain.altitude_at(point.x, point.y) + drone.min_clearance,
-            ),
-        )
-    return drone
 
 
 class ProjectRepository:
     """Read and write deterministic, human-readable `.dmproj` JSON files."""
+
+    def __init__(self) -> None:
+        self.last_migration_report = MigrationReport()
 
     def save(self, project: ProjectModel, path: str | Path) -> Path:
         validate_project(project)
@@ -220,6 +157,14 @@ class ProjectRepository:
         return target
 
     def load(self, path: str | Path) -> ProjectModel:
+        """Load a project and remember the migration report of the last load."""
+
+        project, _report = self.load_with_report(path)
+        return project
+
+    def load_with_report(self, path: str | Path) -> tuple[ProjectModel, MigrationReport]:
+        """Load a project plus what the format migration changed or could not decide."""
+
         source = Path(path)
         try:
             raw = json.loads(source.read_text(encoding="utf-8"))
@@ -227,8 +172,9 @@ class ProjectRepository:
             raise ProjectFormatError(f"Cannot read project: {exc}") from exc
         if not isinstance(raw, dict):
             raise ProjectFormatError("Project root must be a JSON object")
+        report = MigrationReport()
         try:
-            raw = migrate_project(raw)
+            raw = migrate_project(raw, report)
         except MigrationError as exc:
             raise ProjectFormatError(str(exc)) from exc
         version = str(raw.get("version", ""))
@@ -239,14 +185,15 @@ class ProjectRepository:
         try:
             project = self._decode(raw)
             validate_project(project)
-            return project
         except (KeyError, TypeError, ValueError) as exc:
             raise ProjectFormatError(f"Invalid project data: {exc}") from exc
+        self.last_migration_report = report
+        return project, report
 
     def _decode(self, raw: dict[str, Any]) -> ProjectModel:
         map_data = raw.get("map", {})
         grid_size = float(map_data.get("grid_size", 25.0))
-        terrain = _terrain(map_data.get("terrain"), grid_size)
+        terrain = terrain_from_data(map_data.get("terrain"), grid_size)
         basemap_data = map_data.get("basemap")
         basemap = (
             BasemapModel(
@@ -279,7 +226,7 @@ class ProjectRepository:
                 )
                 for item in map_data.get("bases", [])
             ],
-            drones=[_drone(item, terrain) for item in map_data.get("drones", [])],
+            drones=[_drone(item) for item in map_data.get("drones", [])],
             obstacles=[
                 Obstacle(
                     id=item["id"],
