@@ -39,7 +39,7 @@ Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §11, items
 
 Reproduction probes: `scripts/probe_f3b_opt04.py`, `scripts/probe_f3b_opt05.py`, `scripts/probe_f3b_verify.py`.
 
-Deferred to F3-c: OPT-06 (conflict re-check with a bounded repair budget) and OPT-07 (UI, cancellation, degradation and explanation). Environment note: `.pytest-tmp-run` also became ACL-denied during this pass (the same class of failure as `.pytest-tmp`); this pass used `.pytest-tmp-f3b2`.
+Deferred to F3-c: OPT-06 (conflict re-check with a bounded repair budget) and OPT-07 (UI, cancellation, degradation and explanation). Environment note: this pass used `--basetemp=.pytest-tmp-f3b2` because `.pytest-tmp` is genuinely inaccessible (its ACL cannot even be read and no child can be created, so any `tmp_path` test errors out). A separate failure of `.pytest-tmp-run` at 23:59 was **not** a directory problem: it happened while commands ran under the `workspace-write` policy with the `windows-acl-run` 受限令牌; under `danger-full-access` the same directory passes the same `tmp_path` test.
 
 ## v1.2 F3-a checkpoint — global multi-vehicle optimisation foundation (previous pass)
 

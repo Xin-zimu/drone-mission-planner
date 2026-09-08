@@ -20,7 +20,8 @@ D:/dmp/.venv/Scripts/python.exe -m ruff check D:/dmp/src D:/dmp/tests D:/dmp/scr
 D:/dmp/.venv/Scripts/python.exe -m mypy --config-file D:/dmp/pyproject.toml D:/dmp/src D:/dmp/tests
 ```
 
-> **`--basetemp` 必须带，且不要用 `.pytest-tmp` / `.pytest-tmp-run`**：这两个目录被高权限进程设了 ACL，当前用户连子目录都建不了（`WinError 5`）。本轮改用 `.pytest-tmp-f3b2`（实测可建可删）。
+> **`--basetemp` 必须带**。只有 **`.pytest-tmp`** 是真正坏掉的目录：当前用户连它的 ACL 都读不了（`Get-Acl` → `unauthorized operation`），建子目录/删目录一律 `WinError 5`，pytest 在会话起手 `rm_rf(basetemp)` 就失败，凡是用 `tmp_path` 的测试整批 ERROR。它的 owner 不是当前用户，修复要管理员 `takeown`/`icacls`，否则别碰它。
+> 其它 `.pytest-tmp*` 名字（`.pytest-tmp-run`、`.pytest-tmp-f3b2`、`.pytest-tmp2`、`.pytest-tmp-mut`）实测都能建子目录、能删、能跑。**23:59 那次 `.pytest-tmp-run` 失败不是目录 ACL，而是当时的执行策略 `workspace-write` + `windows-acl-run` 受限令牌**；切到 `danger-full-access` 后同一个目录里 `tmp_path` 测试直接 1 passed。所以某名字突然报 `WinError 5` 时：先看当前执行策略，再换新名，别急着断定目录坏了。
 > **不要再加 `-q`**：`pyproject.toml` 的 `addopts` 已含 `-q`，再写一个变成 `-qq`，pytest 会**不打印汇总行**（看不到 `376 passed`）。
 
 ## 2. 当前状态
@@ -52,7 +53,8 @@ D:/dmp/.venv/Scripts/python.exe -m mypy --config-file D:/dmp/pyproject.toml D:/d
 
 | 坑 | 现象 | 处理 |
 |---|---|---|
-| `.pytest-tmp` / `.pytest-tmp-run` ACL | `PermissionError: [WinError 5]`，连子目录都建不了 | 一律 `--basetemp=.pytest-tmp-f3b2`（或另建新名） |
+| `.pytest-tmp` 真坏 | 连 ACL 都读不了、不能建子目录、`tmp_path` 测试整批 ERROR | 只用 `--basetemp=.pytest-tmp-f3b2` 等可用名；`.pytest-tmp` 需管理员修 |
+| basetemp 偶发 `WinError 5` | 同一目录先前能跑、后来报错 | 先查执行策略（`workspace-write` 的受限令牌会拒写），再换新 basetemp 名 |
 | 重复 `-q` | 看不到 `N passed` 汇总行（`addopts` 已含 `-q`） | 命令行不要再加 `-q` |
 | 路径含空格 | DSH 命令静默失败/切分错误 | 用 `D:/dmp` junction |
 | Python 脚本改文件 | `write_text` 在 Windows 把 LF 变 CRLF，产生整文件假 diff | 用字节读写 + `replace(b"\r\n", b"\n")` |
