@@ -72,6 +72,18 @@ The engine records a `TaskTimeline` per mission (plan §10.7): when the aircraft
 
 `simulation/reporting.py` joins the planned schedule with the recorded timelines into `SimulationReport.task_timelines`: planned start/finish, actual arrival/start/finish, the deviation in seconds, waiting and service durations, deadline policy, lateness and any blocking reason. When a run has no planned schedule the planned columns and the deviations are `None` (rendered as an em dash), never `0`. JSON, CSV and HTML exports all carry the same table.
 
+## Global multi-vehicle optimisation
+
+`planning/optimization.py` separates the instance from the solver so the two can be tested apart:
+
+- `AssignmentProblem` is a solver-independent, **tick-based** view (default tick 0.1 s) with a directed travel matrix, vehicles (real start/end nodes, capacity, availability) and missions (demand, time window, service duration, mandatory flag).
+- `AssignmentSolver` is the interface. Its outcome carries an explicit status — `feasible`, `infeasible`, `timeout`, `cancelled` or `unsupported_constraint` — because the plan forbids reporting a time limit as a proof of infeasibility or ignoring a hard constraint the solver cannot model. A caller that needs dependencies, energy or return reserves declares them in `requires` and receives `unsupported_constraint` naming the fields, never a silently wrong answer.
+- `evaluate_routes` is an independent feasibility/schedule checker over explicit routes. It never consults the solver, so it can validate solver output and provide the greedy baseline.
+- `ORToolsAssignmentSolver` builds a heterogeneous VRPTW: transit callback (travel + service), a time dimension with per-mission windows, a capacity dimension per vehicle, and a global-span objective that minimises the last return. Rounding is conservative — travel rounds **up** to whole ticks and deadlines round **down** — so a window can close but never widen. The makespan includes each aircraft's return leg.
+- `solve_with_baseline` runs the deterministic greedy baseline (`greedy_routes`: earliest-deadline mission onto the least-loaded vehicle) and the optimiser, and keeps the optimiser only when it is feasible **and** strictly better; otherwise the baseline is returned with `kept_baseline=True`.
+
+`planning/travel_costs.py` produces the directed leg costs. The cache key contains the aircraft parameter profile (equivalent aircraft share a group), the rounded endpoints, the environment revision (a hash of terrain, wind, obstacles and no-fly zones) and the config revision, so an edited map cannot reuse a stale cost. Costs are directional: with a 6 m/s wind the same 300 m leg measured 18.2 s one way and 63.1 s the other.
+
 ## Altitude safety validation
 
 Every planned route is sampled along each segment and checked against terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. The validator reports structured warning or critical risks with the affected drone, segment index, sampled position, required altitude, actual flight altitude, optional object ID, and a concise reason.

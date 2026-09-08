@@ -41,6 +41,10 @@ A drone with a waypoint route is executed in three dimensions: waypoint altitude
 
 The simulation records the actual counterpart in `simulation/task_timeline.py`: arrival, waiting, service start/finish and deadline breaches per mission, emitted as events. `ui/schedule_view.py` renders those as a read-only Gantt — one row per aircraft, a planned lane and an actual lane, waiting/travel/service in different colours. The view holds no reference to the project service: clicking a bar only emits `task_selected`, which the main window routes through the same `select_object` path as the 2D and 3D views. `planning/energy_ledger.py` accounts energy by phase so waiting and service are not folded into travel energy.
 
+## Global optimisation
+
+`planning/optimization.py` keeps the instance (`AssignmentProblem`, integer ticks) apart from the solver (`AssignmentSolver` protocol, `ORToolsAssignmentSolver`), and reports an explicit outcome status instead of an empty route list — a timeout is never "infeasible", and a hard constraint the solver cannot model is returned as `unsupported_constraint` naming the fields. `evaluate_routes` re-checks any route set independently, which is what makes the greedy baseline a real baseline and lets the optimiser's output be validated rather than trusted. `planning/travel_costs.py` supplies directed, aircraft-specific leg costs behind a cache keyed by aircraft profile, endpoints and environment revision. OR-Tools remains an optional import: without it the optimiser reports `unsupported_constraint` and the baseline keeps working.
+
 ## Dynamic events
 
 `EventManager` owns ordered pending events and immutable processed records. `SimulationEngine` applies due failures inside logical steps and emits a replan request; it never calls UI or planning code. The application layer synchronizes live runtime state, invokes task assignment or coverage planning, then calls `apply_replan`. That method replaces only future path state while retaining clock, battery, flight statistics, completed-task IDs, event history, and coverage cells.

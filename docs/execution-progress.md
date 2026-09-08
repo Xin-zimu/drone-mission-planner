@@ -2,7 +2,44 @@
 
 Last updated: 2026-09-06
 
-## v1.2 F2-b checkpoint — scheduling closed loop (this pass)
+## v1.2 F3-a checkpoint — global multi-vehicle optimisation foundation (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §11, items OPT-01…OPT-03 plus the OPT-08 acceptance hooks. OR-Tools, declared since v1.0 but never imported, is now actually used — with a hard degradation path.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Interface | `planning/optimization.py`: `AssignmentProblem` (tick-based, solver-independent), `AssignmentSolver` protocol, `AssignmentOutcome` with five explicit statuses, `SolverSettings`. Unsupported hard constraints are declared in `requires` and answered with `unsupported_constraint` naming the fields. |
+| Costs | `planning/travel_costs.py`: directed leg costs per aircraft profile using the existing safe planner, cached under aircraft profile + endpoints + environment revision + config revision. Wind makes A→B differ from B→A. |
+| Solver | Heterogeneous VRPTW over the matrix: transit = travel + service, per-mission time windows, per-vehicle capacity, global-span objective. Travel rounds up and deadlines round down, so rounding can close a window but never widen it. Makespan includes the return leg. |
+| Baseline | `evaluate_routes` re-checks any explicit route set independently; `greedy_routes` is the deterministic baseline; `solve_with_baseline` keeps the optimiser only when feasible **and** strictly better, otherwise returns the baseline. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Five explicit statuses | `test_status_enum_covers_five_explicit_outcomes` |
+| Unsupported constraint reported, not ignored | `test_unsupported_constraint_is_reported_not_ignored` |
+| OR-Tools absent → `unsupported_constraint`, baseline still works | `test_missing_ortools_degrades_to_unsupported` |
+| Timeout ≠ infeasible | `test_timeout_is_not_reported_as_infeasible` |
+| Mandatory mission unreachable → infeasible with reason | `test_mandatory_unreachable_mission_is_infeasible_with_reason` |
+| Small instance equals the exhaustive optimum | `test_small_instance_matches_the_exhaustive_optimum` |
+| Baseline never replaced by a worse candidate | `test_baseline_is_never_replaced_by_a_worse_candidate` |
+| Conservative rounding / empty window | `test_rounding_is_conservative_for_time_and_deadlines`, `test_an_empty_window_after_rounding_is_reported` |
+| Directional, environment-keyed cost cache | `test_leg_costs_are_directional_and_cached_by_environment` (18.2 s vs 63.1 s with 6 m/s wind) |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `.venv\Scripts\python.exe -m pytest --basetemp=.pytest-tmp-run` | **345 passed** |
+| `-m ruff check src tests` | All checks passed |
+| `-m mypy src tests` | Success, 117 source files |
+
+Deferred to F3-b: dependencies, energy/return hard constraints and coverage-block chaining (OPT-04/05), conflict re-check with bounded repair (OPT-06), UI, cancellation surface and explanation (OPT-07).
+
+## v1.2 F2-b checkpoint — scheduling closed loop (previous pass)
 
 Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §10, items SCH-05…SCH-08. With this pass the F2 stage is complete.
 
