@@ -40,6 +40,26 @@ Task endpoints receive the owning task ID and an action mapped from the task typ
 
 Project schema 1.7 persists the waypoint lists as the single route representation. `Drone.planned_path` is a read-only projection of that list, and the 1.6→1.7 migration rebuilds waypoints from a legacy 2D path with the altitude rule above, keeping waypoints and reporting a conflict when the two representations disagreed.
 
+## Mission scheduling
+
+`planning/scheduling.py` is the single time model (plan §10.2–§10.5). For a mission assigned to an aircraft it derives, in seconds from mission start:
+
+```text
+arrival   = previous departure on that aircraft + leg time
+start     = max(arrival, earliest_start, predecessor departure + min_lag)
+wait      = start - arrival
+finish    = start + execution_duration
+departure = finish + explicit post-service hold
+```
+
+A wait is attributed to the bound that caused it (`time_window` or `predecessor`), so the schedule explains itself instead of only reporting a delay. `resolve_start` is the one implementation of the `max(...)` rule, shared by the evaluator and by assignment scoring.
+
+Deadlines carry an explicit policy. `hard` makes a late finish infeasible and is listed in `ScheduleResult.hard_violations`; `soft` and `legacy_soft` allow the late finish but report the lateness in seconds. Projects written before F2 are migrated to `legacy_soft` so an old scoring term never silently becomes a verified hard constraint.
+
+Dependencies are validated before evaluation: missing missions, self references, duplicate entries and cycles are reported (a cycle is printed as a concrete path such as `T-A → T-B → T-C → T-A`), and a mission whose predecessor is missing, cancelled, failed, unscheduled or itself blocked is marked `blocked` rather than scheduled early. Predecessors that already finished contribute their actual finish time, which is what a mid-mission replan needs.
+
+Greedy assignment now scores candidates with the cumulative timeline: the aircraft's own clock, the mission's time window and its predecessors' departures feed `finish`, and `deadline_risk = max(0, finish - deadline) × 12`. A `hard` deadline that cannot be met rejects the candidate with the offending finish time, instead of comparing only the single leg's travel time against the deadline. The fixed case in plan §10.4 (A arrives 30 s, waits 30 s, starts 60 s, finishes 100 s; B on the same aircraft arrives 120 s and finishes 150 s, ten seconds past its deadline) is covered by `tests/unit/test_scheduling.py`.
+
 ## Altitude safety validation
 
 Every planned route is sampled along each segment and checked against terrain clearance, obstacle height, no-fly altitude policy, and task target altitude. The validator reports structured warning or critical risks with the affected drone, segment index, sampled position, required altitude, actual flight altitude, optional object ID, and a concise reason.

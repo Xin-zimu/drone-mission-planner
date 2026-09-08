@@ -10,6 +10,7 @@ from typing import Any
 from drone_mission_planner.domain.basemap import BasemapModel
 from drone_mission_planner.domain.enums import (
     AltitudeMode,
+    DeadlinePolicy,
     DroneStatus,
     ObstacleShape,
     TaskStatus,
@@ -264,6 +265,11 @@ class ProjectRepository:
                     required_payload=float(item.get("required_payload", 0.0)),
                     earliest_start=item.get("earliest_start"),
                     deadline=item.get("deadline"),
+                    deadline_policy=DeadlinePolicy(
+                        item.get("deadline_policy", DeadlinePolicy.HARD)
+                    ),
+                    predecessor_ids=[str(value) for value in item.get("predecessor_ids", [])],
+                    min_lag_seconds=float(item.get("min_lag_seconds", 0.0)),
                     execution_duration=float(item.get("execution_duration", 4.0)),
                     assigned_drone_id=item.get("assigned_drone_id"),
                     target_altitude=float(item.get("target_altitude", 100.0)),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .basemap import BasemapModel
-from .enums import DroneStatus, ObstacleShape, TaskStatus, TaskType
+from .enums import DeadlinePolicy, DroneStatus, ObstacleShape, TaskStatus, TaskType
 from .equipment import EquipmentLibrary
 from .geometry import Point, Rect
 from .terrain import TerrainModel
@@ -93,6 +93,9 @@ class MissionTask:
     required_payload: float = 0.0
     earliest_start: float | None = None
     deadline: float | None = None
+    deadline_policy: DeadlinePolicy = DeadlinePolicy.HARD
+    predecessor_ids: list[str] = field(default_factory=list)
+    min_lag_seconds: float = 0.0
     execution_duration: float = 4.0
     assigned_drone_id: str | None = None
     target_altitude: float = 100.0

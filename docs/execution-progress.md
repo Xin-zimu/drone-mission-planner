@@ -2,7 +2,40 @@
 
 Last updated: 2026-09-06
 
-## v1.2 F1 checkpoint — one authoritative route representation (this pass)
+## v1.2 F2-a checkpoint — scheduling core (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §10, items SCH-01…SCH-04. SCH-05 (energy ledger), SCH-06 (simulation events), SCH-07 (Gantt view) and SCH-08 (plan/actual report) remain for the next pass.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Domain | `MissionTask` gains `deadline_policy` (`hard`/`soft`/`legacy_soft`), `predecessor_ids` and `min_lag_seconds`; `DeadlinePolicy` is a domain enum. Validation rejects non-finite or negative windows/lags, inverted windows, self references and duplicate dependencies. |
+| Scheduling | New `planning/scheduling.py`: `evaluate_schedule` propagates `arrival → start → wait → finish → departure` per mission, attributes each wait to the binding bound (`time_window`/`predecessor`), applies hard/soft deadline policy, and returns blocked missions with reasons. `validate_dependencies` reports missing missions, self references, duplicates and a concrete cycle path. `resolve_start` is the single `max(arrival, earliest_start, predecessor floor)` implementation. |
+| Assignment | `GreedyAssignmentPlanner` now processes missions in dependency order and scores candidates with the cumulative timeline (aircraft clock + leg time + time window + predecessor floor); `deadline_risk = max(0, finish − deadline) × 12`. A `hard` deadline that cannot be met rejects the candidate with the offending finish time. `AssignmentResult.schedule` exposes the evaluated schedule and each decision carries arrival/start/finish/wait/lateness. |
+| Format | Project format `1.8`: the three new mission fields are persisted; a 1.7 project with deadlines is migrated to `legacy_soft` (value untouched) and the change is reported. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Plan §10.4 fixed case (A 30/30/60/100; B arrives 120, finishes 150; hard fails, soft 10 s late) | `tests/unit/test_scheduling.py`, probe `f2-ab-case` — 8/8 checks |
+| Dependency errors (missing / self / duplicate / cycle) | `tests/unit/test_dependencies.py` — 4/4 kinds detected, cycle printed as a concrete path |
+| Boundaries (zero duration, empty window, negative, NaN, dangling reference) | `tests/unit/test_scheduling.py`, `tests/unit/test_schedule_fields.py` |
+| Cumulative scoring (single 10 s leg inside a 12 s deadline still finishes 35 s → 23 s late; hard policy rejects) | `tests/unit/test_assignment_schedule.py`, probe `f2-greedy` |
+| Fields + 1.8 migration | `tests/unit/test_schedule_fields.py` — 9 tests |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `.venv\Scripts\python.exe -m pytest --basetemp=.pytest-tmp-run` | **306 passed** |
+| `-m ruff check src tests` | All checks passed |
+| `-m mypy src tests` | Success, 107 source files |
+
+Deferred: SCH-05 (wait/service/return in one energy ledger), SCH-06 (simulation states/events), SCH-07 (read-only Gantt + map link), SCH-08 (plan vs actual deviation in reports).
+
+## v1.2 F1 checkpoint — one authoritative route representation (previous pass)
 
 Plan: [follow-up-development-plan.md](follow-up-development-plan.md), stage F1 (unified waypoint model, recommended iteration order item 1).
 

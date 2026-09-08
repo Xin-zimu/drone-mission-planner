@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from drone_mission_planner.domain.enums import DeadlinePolicy
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import BaseStation, Drone, MapModel, MissionTask
 from drone_mission_planner.domain.waypoint import waypoints_from_path
@@ -65,7 +66,13 @@ def test_weights_change_the_ranking() -> None:
         air_speed=20.0,
     )
     model.drones.extend([slow_near, fast_far])
-    task = MissionTask("T-01", "Visit", Point(200.0, 200.0), deadline=12.0)
+    task = MissionTask(
+        "T-01",
+        "Visit",
+        Point(200.0, 200.0),
+        deadline=12.0,
+        deadline_policy=DeadlinePolicy.LEGACY_SOFT,
+    )
     model.tasks.append(task)
 
     default = explain_assignments(model, weights=AssignmentWeights())[0]
@@ -104,7 +111,13 @@ def test_planner_uses_custom_weights_for_the_actual_assignment() -> None:
         air_speed=20.0,
     )
     model.drones.extend([slow_near, fast_far])
-    task = MissionTask("T-01", "Visit", Point(200.0, 200.0), deadline=12.0)
+    task = MissionTask(
+        "T-01",
+        "Visit",
+        Point(200.0, 200.0),
+        deadline=12.0,
+        deadline_policy=DeadlinePolicy.LEGACY_SOFT,
+    )
     model.tasks.append(task)
 
     distance_only = GreedyAssignmentPlanner(

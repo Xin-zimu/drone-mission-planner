@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from math import inf
 
-from drone_mission_planner.domain.enums import DroneStatus, TaskStatus, WaypointAction
+from drone_mission_planner.domain.enums import (
+    DeadlinePolicy,
+    DroneStatus,
+    TaskStatus,
+    WaypointAction,
+)
 from drone_mission_planner.domain.geometry import Point
 from drone_mission_planner.domain.models import Drone, MapModel, MissionTask
 from drone_mission_planner.domain.waypoint import Waypoint
@@ -11,6 +15,12 @@ from drone_mission_planner.domain.waypoint import Waypoint
 from .energy import EnergyEstimate, estimate_energy
 from .result import PathResult
 from .route_planner import RoutePlanner
+from .scheduling import (
+    ScheduleResult,
+    evaluate_schedule,
+    resolve_start,
+    validate_dependencies,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +86,11 @@ class AssignmentDecision:
     cost: float
     route: PathResult
     energy: EnergyEstimate
+    arrival_time: float = 0.0
+    start_time: float = 0.0
+    finish_time: float = 0.0
+    wait_seconds: float = 0.0
+    lateness_seconds: float = 0.0
 
 
 @dataclass(slots=True)
@@ -96,6 +111,7 @@ class AssignmentResult:
     failures: list[AssignmentFailure] = field(default_factory=list)
     drone_paths: dict[str, list[Point]] = field(default_factory=dict)
     drone_waypoints: dict[str, list[Waypoint]] = field(default_factory=dict)
+    schedule: ScheduleResult | None = None
 
     @property
     def assigned_count(self) -> int:
@@ -121,20 +137,56 @@ class GreedyAssignmentPlanner:
         positions = {drone.id: drone.position for drone in map_model.drones}
         used_energy = {drone.id: 0.0 for drone in map_model.drones}
         task_counts = {drone.id: 0 for drone in map_model.drones}
-        ordered_tasks = sorted(
-            (
-                task
-                for task in map_model.tasks
-                if task.status in {TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS}
-            ),
-            key=lambda task: (
-                -task.priority,
-                task.deadline if task.deadline is not None else inf,
-                task.id,
-            ),
-        )
-        for task in ordered_tasks:
-            options: list[tuple[float, str, Drone, PathResult, EnergyEstimate]] = []
+        clocks = {drone.id: 0.0 for drone in map_model.drones}
+        departures: dict[str, float] = {}
+        travel_times: dict[str, float] = {}
+        assignments: dict[str, str] = {}
+        blocked_reasons: dict[str, list[str]] = {}
+
+        pending = {
+            task.id: task
+            for task in map_model.tasks
+            if task.status in {TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS}
+        }
+        report = validate_dependencies(list(map_model.tasks))
+        ordered_ids = [task_id for task_id in report.order if task_id in pending]
+        ordered_ids.extend(task_id for task_id in pending if task_id not in set(ordered_ids))
+        for task_id, predecessor_id in report.missing:
+            blocked_reasons.setdefault(task_id, []).append(f"missing mission {predecessor_id}")
+        for task_id in report.self_references:
+            blocked_reasons.setdefault(task_id, []).append("depends on itself")
+        for task_id, predecessor_id in report.duplicates:
+            blocked_reasons.setdefault(task_id, []).append(
+                f"duplicate dependency {predecessor_id}"
+            )
+        for task_id, predecessor_id in report.blocked:
+            blocked_reasons.setdefault(task_id, []).append(
+                f"predecessor {predecessor_id} is cancelled or failed"
+            )
+        if report.cycle:
+            cycle_text = " → ".join(report.cycle)
+            for task_id in report.cycle:
+                blocked_reasons.setdefault(task_id, []).append(f"dependency cycle: {cycle_text}")
+
+        for task_id in ordered_ids:
+            task = pending[task_id]
+            dependency_reasons = list(blocked_reasons.get(task_id, ()))
+            for predecessor_id in task.predecessor_ids:
+                if predecessor_id in blocked_reasons:
+                    dependency_reasons.append(f"predecessor {predecessor_id} is blocked")
+            if dependency_reasons:
+                blocked_reasons.setdefault(task_id, []).extend(
+                    reason
+                    for reason in dependency_reasons
+                    if reason not in blocked_reasons.get(task_id, ())
+                )
+                result.failures.append(
+                    AssignmentFailure(task_id, {"dependency": list(dict.fromkeys(dependency_reasons))})
+                )
+                continue
+            options: list[
+                tuple[float, str, Drone, PathResult, EnergyEstimate, tuple[float, float, float, float, float]]
+            ] = []
             rejected: dict[str, list[str]] = {}
             for drone in sorted(map_model.drones, key=lambda item: item.id):
                 reasons: list[str] = []
@@ -185,9 +237,35 @@ class GreedyAssignmentPlanner:
                     ]
                     continue
                 battery_risk = energy.total_required / max(available, 1e-9)
-                deadline_risk = 0.0
+                # Cumulative timing (plan §10.3): the same aircraft's clock, the
+                # mission's own window, and its predecessors' departure times.
+                arrival = clocks[drone.id] + route.estimated_time
+                predecessor_floor: float | None = None
+                if task.predecessor_ids:
+                    ready = [
+                        departures[predecessor_id] + task.min_lag_seconds
+                        for predecessor_id in task.predecessor_ids
+                        if predecessor_id in departures
+                    ]
+                    if len(ready) == len(task.predecessor_ids):
+                        predecessor_floor = max(ready)
+                start, wait, _wait_reasons = resolve_start(
+                    arrival, task.earliest_start, predecessor_floor
+                )
+                finish = start + task.execution_duration
+                lateness = 0.0
                 if task.deadline is not None:
-                    deadline_risk = max(0.0, route.estimated_time - task.deadline) * 12.0
+                    lateness = max(0.0, finish - task.deadline)
+                    if (
+                        task.deadline_policy is DeadlinePolicy.HARD
+                        and finish > task.deadline + 1e-9
+                    ):
+                        rejected[drone.id] = [
+                            f"would finish at {finish:.1f} s, {lateness:.1f} s after its hard "
+                            f"deadline {task.deadline:.1f} s"
+                        ]
+                        continue
+                deadline_risk = lateness * 12.0
                 cost = self.weights.cost(
                     energy.mission_energy,
                     route.total_distance,
@@ -195,13 +273,41 @@ class GreedyAssignmentPlanner:
                     task_counts[drone.id],
                     deadline_risk,
                 )
-                options.append((cost, drone.id, drone, route, energy))
+                options.append(
+                    (
+                        cost,
+                        drone.id,
+                        drone,
+                        route,
+                        energy,
+                        (arrival, start, finish, wait, lateness),
+                    )
+                )
 
             if not options:
                 result.failures.append(AssignmentFailure(task.id, rejected))
+                blocked_reasons.setdefault(task.id, []).append(
+                    "unscheduled: no feasible drone"
+                )
                 continue
-            cost, _, drone, route, energy = min(options, key=lambda option: (option[0], option[1]))
-            result.decisions.append(AssignmentDecision(task.id, drone.id, cost, route, energy))
+            cost, _, drone, route, energy, timing = min(
+                options, key=lambda option: (option[0], option[1])
+            )
+            arrival, start, finish, wait, lateness = timing
+            result.decisions.append(
+                AssignmentDecision(
+                    task.id,
+                    drone.id,
+                    cost,
+                    route,
+                    energy,
+                    arrival_time=arrival,
+                    start_time=start,
+                    finish_time=finish,
+                    wait_seconds=wait,
+                    lateness_seconds=lateness,
+                )
+            )
             path = result.drone_paths[drone.id]
             waypoints = result.drone_waypoints[drone.id]
             path.extend(route.waypoints if not path else route.waypoints[1:])
@@ -211,6 +317,10 @@ class GreedyAssignmentPlanner:
             positions[drone.id] = task.position
             used_energy[drone.id] += energy.mission_energy
             task_counts[drone.id] += 1
+            clocks[drone.id] = finish
+            departures[task.id] = finish
+            travel_times[task.id] = route.estimated_time
+            assignments[task.id] = drone.id
 
         for drone in map_model.drones:
             path = result.drone_paths[drone.id]
@@ -224,6 +334,11 @@ class GreedyAssignmentPlanner:
                     for waypoint in return_waypoints:
                         waypoint.action = WaypointAction.RETURN_TO_LAUNCH
                     result.drone_waypoints[drone.id].extend(return_waypoints)
+        result.schedule = evaluate_schedule(
+            [task for task_id, task in pending.items()],
+            travel_seconds=travel_times,
+            assignments=assignments,
+        )
         return result
 
 
@@ -316,9 +431,11 @@ def _explain_candidate(
             reasons=tuple(reasons) or ("unknown constraint",),
         )
     battery_risk = energy.total_required / max(drone.remaining_battery, 1e-9)
+    start, _wait, _reasons = resolve_start(route.estimated_time, task.earliest_start, None)
+    finish = start + task.execution_duration
     deadline_risk = 0.0
     if task.deadline is not None:
-        deadline_risk = max(0.0, route.estimated_time - task.deadline) * 12.0
+        deadline_risk = max(0.0, finish - task.deadline) * 12.0
     task_load = len(drone.assigned_tasks)
     score = weights.cost(
         energy.mission_energy, route.total_distance, battery_risk, task_load, deadline_risk

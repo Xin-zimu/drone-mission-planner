@@ -15,7 +15,7 @@ from typing import Any
 
 from drone_mission_planner.persistence.terrain_codec import terrain_from_data
 
-CURRENT_PROJECT_VERSION = "1.7"
+CURRENT_PROJECT_VERSION = "1.8"
 
 _COORDINATE_TOLERANCE = 1e-6
 
@@ -248,6 +248,40 @@ def _migrate_1_6_to_1_7(
     return migrated
 
 
+def _migrate_1_7_to_1_8(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
+    """Add the scheduling fields of plan §10.2.
+
+    Missions that already carry a ``deadline`` are marked ``legacy_soft``: in the
+    pre-F2 code the value was only an assignment scoring term, so promoting it to
+    a verified hard constraint without saying so would be wrong. The deadline
+    value itself is never changed.
+    """
+
+    migrated = deepcopy(raw)
+    map_data = migrated.setdefault("map", {})
+    if not isinstance(map_data, dict):
+        map_data = {}
+        migrated["map"] = map_data
+    for task in map_data.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task.setdefault("predecessor_ids", [])
+        task.setdefault("min_lag_seconds", 0.0)
+        if "deadline_policy" in task:
+            continue
+        has_deadline = task.get("deadline") is not None
+        task["deadline_policy"] = "legacy_soft" if has_deadline else "hard"
+        if has_deadline and report is not None:
+            report.notes.append(
+                f"{task.get('id', '?')}: existing deadline marked legacy_soft "
+                "(it was an unverified scoring term before F2)"
+            )
+    migrated["version"] = "1.8"
+    return migrated
+
+
 def _points(data: Any) -> list[tuple[float, float]]:
     """Normalise a persisted point list to ``(x, y)`` float pairs.
 
@@ -288,4 +322,5 @@ _MIGRATION_STEPS: dict[str, Callable[[dict[str, Any], MigrationReport | None], d
     "1.4": _migrate_1_4_to_1_5,
     "1.5": _migrate_1_5_to_1_6,
     "1.6": _migrate_1_6_to_1_7,
+    "1.7": _migrate_1_7_to_1_8,
 }

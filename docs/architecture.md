@@ -35,6 +35,10 @@ Each drone runtime also tracks current flight altitude, accumulated climb/descen
 
 A drone with a waypoint route is executed in three dimensions: waypoint altitudes form the commanded MSL profile (AGL resolves against terrain), climb/descent rates limit vertical motion, waypoint speeds cap the horizontal legs, and waypoint actions drive the state machine — hover holds, photo events, scan-leg coverage contributions, and terrain landings. A drone with no waypoints has no route and is not flown.
 
+## Mission scheduling
+
+`planning/scheduling.py` owns the mission timeline: it propagates arrival, start, wait, finish and departure for a set of missions, validates the dependency graph, and reports hard-deadline violations and blocked missions. It is pure Python with no Qt dependency, deterministic, and the only implementation of the `start = max(arrival, earliest_start, predecessor floor)` rule — assignment scoring and (from F2-b on) the simulation and reports consume its results instead of recomputing times. Drones keep one clock per aircraft, so a mission's arrival already includes everything that aircraft had to fly before it. Missions whose predecessors are missing, cancelled, failed, unscheduled or cyclic are reported as blocked with the reason, never silently scheduled.
+
 ## Dynamic events
 
 `EventManager` owns ordered pending events and immutable processed records. `SimulationEngine` applies due failures inside logical steps and emits a replan request; it never calls UI or planning code. The application layer synchronizes live runtime state, invokes task assignment or coverage planning, then calls `apply_replan`. That method replaces only future path state while retaining clock, battery, flight statistics, completed-task IDs, event history, and coverage cells.

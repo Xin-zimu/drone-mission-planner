@@ -39,6 +39,19 @@ class TaskStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class DeadlinePolicy(StrEnum):
+    """How a mission's ``deadline`` affects feasibility (plan §10.2).
+
+    ``HARD`` makes a late finish infeasible, ``SOFT`` allows a late finish but
+    reports the lateness, and ``LEGACY_SOFT`` marks deadlines inherited from
+    projects where the value was only an assignment scoring term.
+    """
+
+    HARD = "hard"
+    SOFT = "soft"
+    LEGACY_SOFT = "legacy_soft"
+
+
 class ObstacleShape(StrEnum):
     RECTANGLE = "rectangle"
     CIRCLE = "circle"

@@ -139,6 +139,26 @@ def validate_project(project: ProjectModel) -> None:
             issues.append(f"{task.id} target altitude must be non-negative")
         if task.assigned_drone_id is not None and task.assigned_drone_id not in drone_ids:
             issues.append(f"{task.id} references missing drone {task.assigned_drone_id}")
+        if task.earliest_start is not None and (
+            not isfinite(task.earliest_start) or task.earliest_start < 0
+        ):
+            issues.append(f"{task.id} earliest start must be finite and non-negative")
+        if task.deadline is not None and not isfinite(task.deadline):
+            issues.append(f"{task.id} deadline must be finite")
+        if (
+            task.deadline is not None
+            and task.earliest_start is not None
+            and task.deadline < task.earliest_start
+        ):
+            issues.append(f"{task.id} deadline cannot precede its earliest start")
+        if not isfinite(task.min_lag_seconds) or task.min_lag_seconds < 0:
+            issues.append(f"{task.id} minimum dependency lag must be finite and non-negative")
+        if task.id in task.predecessor_ids:
+            issues.append(f"{task.id} cannot depend on itself")
+        if len(set(task.predecessor_ids)) != len(task.predecessor_ids):
+            issues.append(f"{task.id} dependency list contains duplicates")
+        if any(not str(predecessor).strip() for predecessor in task.predecessor_ids):
+            issues.append(f"{task.id} dependency list contains an empty task id")
     for item in model.obstacles:
         _rect(item.id, item.bounds, model.width, model.height, issues)
         if not isfinite(item.height) or item.height < 0:
