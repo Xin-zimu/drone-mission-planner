@@ -78,6 +78,11 @@ def test_planned_sweep_reaches_target_coverage_in_simulation() -> None:
     model, area = coverage_map()
     result = CoveragePlanner().plan(model, area)
     for drone in model.drones:
+        # This fixture asserts coverage, not energy feasibility: the default
+        # 100-unit battery cannot fly the ~2 km planned sweep (157/228 units),
+        # and the engine now stops an aircraft exactly when its energy runs out.
+        drone.battery_capacity = 400.0
+        drone.remaining_battery = 400.0
         drone.planned_path = result.drone_paths[drone.id]
         drone.waypoints = result.drone_waypoints[drone.id]
 

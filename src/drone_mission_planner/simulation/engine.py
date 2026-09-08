@@ -501,7 +501,8 @@ class SimulationEngine:
         if runtime.role == "relay":
             if runtime.status != DroneStatus.HOVERING:
                 runtime.status = DroneStatus.HOVERING
-            self._apply_hover_energy(runtime, dt)
+            if self._apply_hover_energy(runtime, dt):
+                return
             runtime.flight_time += dt
             self._track_altitude_extremes(runtime)
             return
@@ -519,7 +520,8 @@ class SimulationEngine:
         if runtime.execution_remaining > 0:
             runtime.status = DroneStatus.EXECUTING
             consumed = min(dt, runtime.execution_remaining)
-            self._apply_hover_energy(runtime, consumed)
+            if self._apply_hover_energy(runtime, consumed):
+                return
             runtime.execution_remaining = max(0.0, runtime.execution_remaining - dt)
             runtime.waiting_time += dt
             if runtime.execution_remaining > 0:
@@ -532,7 +534,8 @@ class SimulationEngine:
         if runtime.hold_remaining > 0:
             runtime.status = DroneStatus.HOVERING
             consumed = min(dt, runtime.hold_remaining)
-            self._apply_hover_energy(runtime, consumed)
+            if self._apply_hover_energy(runtime, consumed):
+                return
             runtime.waiting_time += consumed
             runtime.hold_remaining = max(0.0, runtime.hold_remaining - dt)
             if runtime.hold_remaining > 0:
@@ -545,6 +548,7 @@ class SimulationEngine:
         drone = self._drone_for_runtime(runtime)
         remaining_time = dt
         while remaining_time > 1e-9 and runtime.segment_index < len(runtime.path):
+            battery_depleted = False
             target_index = runtime.segment_index
             target = runtime.path[target_index]
             leg_start = runtime.path[target_index - 1]
@@ -603,6 +607,23 @@ class SimulationEngine:
                     start_altitude=old_altitude,
                     end_altitude=new_altitude,
                 )
+                if profile.energy > runtime.remaining_battery + 1e-12:
+                    ratio = runtime.remaining_battery / max(profile.energy, 1e-12)
+                    moved *= ratio
+                    time_spent *= ratio
+                    new_position = old_position.lerp(new_position, ratio)
+                    new_altitude = old_altitude + (new_altitude - old_altitude) * ratio
+                    profile = estimate_segment_energy(
+                        drone,
+                        old_position,
+                        new_position,
+                        terrain=self.map_model.terrain,
+                        wind=self.map_model.wind,
+                        start_altitude=old_altitude,
+                        end_altitude=new_altitude,
+                    )
+                    arriving = False
+                    battery_depleted = True
                 runtime.current_altitude = profile.end_altitude
                 runtime.altitude_gain += profile.climb_meters
                 runtime.altitude_loss += profile.descent_meters
@@ -612,11 +633,20 @@ class SimulationEngine:
                 runtime.flight_time += (
                     time_spent if runtime.waypoint_altitudes else profile.time
                 )
-                runtime.energy_used += profile.energy
-                runtime.remaining_battery = max(0.0, runtime.remaining_battery - profile.energy)
+                energy = min(profile.energy, runtime.remaining_battery)
+                runtime.energy_used += energy
+                runtime.remaining_battery = max(0.0, runtime.remaining_battery - energy)
             else:
-                runtime.flight_time += moved / max(runtime.max_speed, 1e-9)
                 energy = moved * runtime.energy_per_meter
+                if energy > runtime.remaining_battery + 1e-12:
+                    ratio = runtime.remaining_battery / max(energy, 1e-12)
+                    moved *= ratio
+                    time_spent *= ratio
+                    new_position = old_position.lerp(new_position, ratio)
+                    energy = runtime.remaining_battery
+                    arriving = False
+                    battery_depleted = True
+                runtime.flight_time += time_spent
                 runtime.energy_used += energy
                 runtime.remaining_battery = max(0.0, runtime.remaining_battery - energy)
             runtime.position = new_position
@@ -626,6 +656,9 @@ class SimulationEngine:
             self._update_motion_status(runtime, old_altitude)
             self._track_altitude_extremes(runtime)
             remaining_time -= time_spent
+            if battery_depleted:
+                self._fail_for_battery_depletion(runtime)
+                return
             reached_task = self._complete_reached_task(runtime, old_position)
             if reached_task is not None:
                 runtime.execution_remaining = reached_task.execution_duration
@@ -649,14 +682,24 @@ class SimulationEngine:
         if runtime.current_altitude > terrain_altitude + 0.05:
             descent_rate = drone.descent_rate if drone is not None else 2.5
             delta = min(descent_rate * dt, runtime.current_altitude - terrain_altitude)
+            energy = 0.0
+            battery_depleted = False
+            if drone is not None:
+                energy = drone.descent_power * (delta / max(descent_rate, 1e-9)) / 3600.0
+                if energy > runtime.remaining_battery + 1e-12:
+                    ratio = runtime.remaining_battery / max(energy, 1e-12)
+                    delta *= ratio
+                    energy = runtime.remaining_battery
+                    battery_depleted = True
             runtime.current_altitude -= delta
             runtime.altitude_loss += delta
             runtime.flight_time += delta / max(descent_rate, 1e-9)
             if drone is not None:
-                energy = drone.descent_power * (delta / max(descent_rate, 1e-9)) / 3600.0
                 runtime.energy_used += energy
                 runtime.remaining_battery = max(0.0, runtime.remaining_battery - energy)
             self._track_altitude_extremes(runtime)
+            if battery_depleted:
+                self._fail_for_battery_depletion(runtime)
             return
         runtime.current_altitude = terrain_altitude
         self.record_external_event(
@@ -719,15 +762,32 @@ class SimulationEngine:
         drone = self.map_model.find(runtime.id)
         return drone if isinstance(drone, Drone) else None
 
-    def _apply_hover_energy(self, runtime: DroneRuntime, seconds: float) -> None:
+    def _apply_hover_energy(self, runtime: DroneRuntime, seconds: float) -> bool:
         if seconds <= 0 or not self._environment_effects_active():
-            return
+            return False
         drone = self._drone_for_runtime(runtime)
         if drone is None:
-            return
+            return False
         energy = drone.hover_power * seconds / 3600.0
+        battery_depleted = energy > runtime.remaining_battery + 1e-12
+        energy = min(energy, runtime.remaining_battery)
         runtime.energy_used += energy
         runtime.remaining_battery = max(0.0, runtime.remaining_battery - energy)
+        if battery_depleted:
+            self._fail_for_battery_depletion(runtime)
+        return battery_depleted
+
+    def _fail_for_battery_depletion(self, runtime: DroneRuntime) -> None:
+        """Stop an aircraft exactly where its available flight energy runs out."""
+
+        runtime.remaining_battery = 0.0
+        event = self.event_manager.create(
+            self.time,
+            EventType.DRONE_FAILURE,
+            runtime.id,
+            {"reason": "Battery depleted"},
+        )
+        self._process_event(event)
 
     def _target_altitude_for(self, runtime: DroneRuntime, target: Point) -> float | None:
         for task_id in runtime.assigned_task_ids:

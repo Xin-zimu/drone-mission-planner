@@ -1,8 +1,56 @@
 # Execution Progress
 
-Last updated: 2026-09-05
+Last updated: 2026-09-06
 
-## Current checkpoint
+## v1.2 F0 checkpoint — reproducible green baseline (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md), stage F0 (baseline, units, versions, fixtures) of v1.2.
+
+### Environment (measured on this machine)
+
+| Item | Value |
+|---|---|
+| Python | 3.12.6 in project-local `.venv` (created this pass) |
+| Runtime deps | PySide6 6.11.2, pydantic 2.13.5, networkx 3.6.1, ortools 9.15.6755, numpy 2.5.3, pyqtgraph 0.14.0 |
+| Dev deps | pytest 8.4.2, pytest-qt 4.5.0, ruff 0.16.6, mypy 1.20.2 |
+
+Verification commands (run from the repository root):
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest --basetemp=.pytest-tmp-run
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy src
+```
+
+Known environment item: the gitignored `.pytest-tmp` directory is owned by an elevated process and denies the current user, so every run passes `--basetemp=.pytest-tmp-run` (covered by `.pytest-tmp*/` in `.gitignore`).
+
+### Baseline failures found and disposition
+
+The working tree carried an uncommitted, half-finished pass whose three regressions are now fixed:
+
+| Failing test | Root cause (measured) | Disposition |
+|---|---|---|
+| `tests/unit/test_deconfliction.py::test_crossing_routes_receive_a_wait_point` | The uncommitted change added `conflict_window` to the sampling tolerance, so one 4 s hold no longer cleared the crossing (probe: 4 s → conflict at t=13.0 s, 8 s → none); the loop stacked a second hold while the report listed only the first | `planning/deconfliction.py` accumulates the hold per vertex and reports the final total once |
+| `tests/unit/test_coverage.py::test_planned_sweep_reaches_target_coverage_in_simulation` | The uncommitted battery-depletion fix in `simulation/engine.py` is correct (an aircraft stops when its energy runs out) and exposed an energy-infeasible fixture: demand 157.01 / 228.44 units against 100 | The test raises its two drones to 400 units; planning, geometry and assertions unchanged |
+| `tests/integration/test_examples.py::test_rescue_example_recovers_d02_failure_and_reaches_coverage_target` | Same cause: `rescue_demo.dmproj` was energy-infeasible (D-01 needs 411.64 units after the injected failure against 132.2 available; D-03 needs 217.42 nominal against 130) | `examples/rescue_demo.dmproj` D-01 → 520 units, D-03 → 280 units, both fully charged; routes, tasks and acceptance unchanged (coverage 0.9949 ≥ 0.95) |
+
+### Semantic decisions (F0)
+
+1. **Time origin** — seconds from mission start; `earliest_start` and `deadline` stay absolute seconds. F0/F1 do not change this.
+2. **Units** — distances in metres; battery/energy values are uncalibrated abstract units (examples use 130–520). No Wh claim until the F2 energy ledger.
+3. **Versions** — product version `1.1.0` and project format version `1.6` are separate; F1 raises the format to `1.7` and leaves the product version alone.
+4. **Route authority** — `waypoints` is the single source of truth; `planned_path` becomes a read-only derived projection and is no longer persisted (F1).
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `.venv\Scripts\python.exe -m pytest --basetemp=.pytest-tmp-run` | **234 passed** in 6.38 s |
+| `-m ruff check .` | All checks passed |
+| `-m mypy src` | Success, 59 source files |
+| `-m mypy src tests` | **1 pre-existing error** (known item, not a pass): `tests/unit/test_project_service.py:124` comparison-overlap |
+
+## Previous checkpoint — M20 productization baseline
 
 M20 (productization baseline), its regression fixes, and the hardened Windows package are complete and are captured by the current checkpoint. Earlier checkpoints:
 

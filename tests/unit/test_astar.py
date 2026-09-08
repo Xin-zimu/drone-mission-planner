@@ -48,3 +48,13 @@ def test_planning_is_deterministic() -> None:
     second = planner.plan(grid, Point(20, 20), Point(280, 280), smoothing=False)
     assert first.waypoints == second.waypoints
     assert first.expanded_nodes == second.expanded_nodes
+
+
+def test_exact_maximum_map_edge_maps_to_final_grid_cell() -> None:
+    model = MapModel(width=100, height=100, grid_size=10.0)
+    grid = GridMap.from_map(model)
+
+    result = AStarPlanner().plan(grid, Point(100.0, 50.0), Point(50.0, 100.0))
+
+    assert grid.world_to_cell(Point(100.0, 100.0)) == (9, 9)
+    assert result.success

@@ -104,3 +104,22 @@ def test_remove_cleans_references_and_remains_saveable(tmp_path: Path) -> None:
     assert replacement.waypoints[0].task_id is None
 
     service.save(tmp_path / "clean.dmproj")
+
+
+def test_editing_task_assignment_synchronizes_both_sides() -> None:
+    service = ProjectService()
+    first = service.add_drone(Point(10.0, 10.0))
+    second = service.add_drone(Point(20.0, 20.0))
+    task = service.add_task(Point(30.0, 30.0))
+
+    service.update_property(task.id, "assigned_drone_id", first.id)
+    service.update_property(task.id, "assigned_drone_id", second.id)
+
+    assert task.status == TaskStatus.ASSIGNED
+    assert task.id not in first.assigned_tasks
+    assert second.assigned_tasks == [task.id]
+
+    service.update_property(task.id, "assigned_drone_id", None)
+
+    assert task.status == TaskStatus.PENDING
+    assert task.id not in second.assigned_tasks

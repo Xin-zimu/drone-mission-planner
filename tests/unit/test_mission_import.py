@@ -91,6 +91,17 @@ def test_kml_imports_point_and_polygon(tmp_path: Path) -> None:
     assert len(service.project.map.search_areas[0].points) == 5
 
 
+def test_kml_non_numeric_coordinates_raise_import_error(tmp_path: Path) -> None:
+    path = tmp_path / "broken.kml"
+    path.write_text(
+        "<kml><Placemark><Point><coordinates>bad,20</coordinates></Point></Placemark></kml>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MissionImportError, match="numeric"):
+        load_kml(_service().project.map, path)
+
+
 def test_waypoint_csv_imports_full_waypoint_columns(tmp_path: Path) -> None:
     path = tmp_path / "route.csv"
     path.write_text(

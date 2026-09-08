@@ -273,13 +273,51 @@ class ProjectService:
             raise ValueError(f"Property {name!r} is not editable")
         with self.change(f"Edit {item.id}"):
             previous = getattr(item, name)
-            setattr(item, name, value)
+            if isinstance(item, MissionTask) and name == "assigned_drone_id":
+                self._set_task_assignment(item, value)
+            else:
+                setattr(item, name, value)
             try:
                 validate_project(self.project)
             except ValueError:
-                setattr(item, name, previous)
+                if isinstance(item, MissionTask) and name == "assigned_drone_id":
+                    self._set_task_assignment(item, previous)
+                else:
+                    setattr(item, name, previous)
                 raise
         return item
+
+    def assign_task_route(
+        self,
+        drone_id: str,
+        task_id: str,
+        path: list[Point],
+        waypoints: list[Waypoint],
+    ) -> Drone:
+        """Replace one drone's route and keep its task assignment synchronized."""
+
+        drone = self._drone(drone_id)
+        task = self.project.map.find(task_id)
+        if not isinstance(task, MissionTask):
+            raise KeyError(task_id)
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}:
+            raise ValueError(f"Mission {task.id} is already {task.status.value}")
+        with self.change("Plan route"):
+            for assigned_id in list(drone.assigned_tasks):
+                assigned = self.project.map.find(assigned_id)
+                if (
+                    isinstance(assigned, MissionTask)
+                    and assigned.id != task.id
+                    and assigned.assigned_drone_id == drone.id
+                    and assigned.status not in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}
+                ):
+                    self._set_task_assignment(assigned, None)
+            self._set_task_assignment(task, drone.id)
+            drone.assigned_tasks = [task.id]
+            drone.planned_path = list(path)
+            drone.waypoints = list(waypoints)
+            validate_project(self.project)
+        return drone
 
     def set_basemap_file(self, file: str) -> BasemapModel:
         """Attach a local image basemap (or clear it with an empty string)."""
@@ -432,6 +470,20 @@ class ProjectService:
         if not isinstance(item, Drone):
             raise KeyError(drone_id)
         return item
+
+    def _set_task_assignment(self, task: MissionTask, drone_id: Any) -> None:
+        """Synchronize both sides of a task/drone assignment."""
+
+        normalized = None if drone_id is None or str(drone_id).strip() == "" else str(drone_id)
+        target = self._drone(normalized) if normalized is not None else None
+        for drone in self.project.map.drones:
+            if drone.id != normalized:
+                drone.assigned_tasks = [item for item in drone.assigned_tasks if item != task.id]
+        if target is not None and task.id not in target.assigned_tasks:
+            target.assigned_tasks.append(task.id)
+        task.assigned_drone_id = normalized
+        if task.status not in {TaskStatus.COMPLETED, TaskStatus.CANCELLED}:
+            task.status = TaskStatus.ASSIGNED if normalized is not None else TaskStatus.PENDING
 
     @staticmethod
     def _sync_waypoint_path(drone: Drone) -> None:

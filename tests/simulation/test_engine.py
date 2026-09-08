@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.enums import DroneStatus, TaskStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import (
@@ -73,6 +74,57 @@ def test_task_execution_battery_and_return() -> None:
     assert drone.distance_flown == pytest.approx(40.0)
     assert drone.remaining_battery == pytest.approx(96.0)
     assert engine.statistics()[0].completed_tasks == 1
+
+
+def test_service_planned_route_assigns_and_completes_its_task() -> None:
+    service = ProjectService()
+    service.project.map.width = 100
+    service.project.map.height = 100
+    service.project.map.grid_size = 5.0
+    service.add_base(Point(10.0, 10.0))
+    drone = service.add_drone(Point(10.0, 10.0))
+    task = service.add_task(Point(30.0, 10.0))
+    task.execution_duration = 0.0
+    path = [drone.position, task.position]
+    waypoints = [
+        Waypoint(point.x, point.y, altitude=100.0, task_id=task.id if index else None)
+        for index, point in enumerate(path)
+    ]
+
+    service.assign_task_route(drone.id, task.id, path, waypoints)
+    engine = SimulationEngine(service.project.map, fixed_dt=0.05)
+    engine.run_until_complete()
+
+    assert drone.assigned_tasks == [task.id]
+    assert task.assigned_drone_id == drone.id
+    assert engine.snapshot().task_statuses[task.id] == TaskStatus.COMPLETED
+
+
+def test_battery_depletion_stops_flight_and_requests_replan() -> None:
+    model = MapModel(width=200, height=100, grid_size=10.0)
+    model.drones.append(
+        Drone(
+            "D-01",
+            "Low battery",
+            Point(10.0, 10.0),
+            max_speed=10.0,
+            battery_capacity=1.0,
+            remaining_battery=1.0,
+            energy_per_meter=10.0,
+            planned_path=[Point(10.0, 10.0), Point(110.0, 10.0)],
+        )
+    )
+
+    engine = SimulationEngine(model, fixed_dt=0.05)
+    engine.run_until_complete()
+    runtime = engine.runtimes["D-01"]
+
+    assert runtime.status == DroneStatus.FAILED
+    assert runtime.failure_reason == "Battery depleted"
+    assert runtime.remaining_battery == 0.0
+    assert runtime.position.x == pytest.approx(10.1)
+    assert runtime.distance_flown == pytest.approx(0.1)
+    assert engine.drain_replan_requests() == ("D-01",)
 
 
 def test_task_completes_when_route_segment_passes_checkpoint() -> None:

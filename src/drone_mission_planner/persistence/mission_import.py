@@ -345,9 +345,14 @@ def _parse_coordinate_text(text: str) -> list[tuple[float, float, float]]:
         parts = token.split(",")
         if len(parts) < 2:
             raise MissionImportError(f"KML coordinate {token!r} must be lon,lat[,alt]")
-        longitude = float(parts[0])
-        latitude = float(parts[1])
-        altitude = float(parts[2]) if len(parts) >= 3 else 0.0
+        try:
+            longitude = float(parts[0])
+            latitude = float(parts[1])
+            altitude = float(parts[2]) if len(parts) >= 3 else 0.0
+        except ValueError as exc:
+            raise MissionImportError(
+                f"KML coordinate {token!r} must contain numeric lon,lat[,alt] values"
+            ) from exc
         values.append((longitude, latitude, altitude))
     return values
 

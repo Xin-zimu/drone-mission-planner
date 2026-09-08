@@ -824,9 +824,17 @@ class MainWindow(QMainWindow):
             LOGGER.error("Route %s → %s failed: %s", drone.id, task.id, result.failure_reason)
             QMessageBox.warning(self, "Planning failed", result.failure_reason or "Unknown error")
             return
-        with self.service.change("Plan route"):
-            drone.planned_path = result.waypoints
-            drone.waypoints = result.flight_waypoints
+        try:
+            self.service.assign_task_route(
+                drone.id,
+                task.id,
+                result.waypoints,
+                result.flight_waypoints,
+            )
+        except (KeyError, ValueError) as exc:
+            LOGGER.error("Route assignment rejected: %s", exc)
+            QMessageBox.warning(self, "Planning failed", str(exc))
+            return
         self._render_altitude_table()
         self._render_map_if_visible()
         self._update_title()

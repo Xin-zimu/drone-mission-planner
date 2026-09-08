@@ -115,7 +115,10 @@ class SpacetimeReservationTable:
             ),
             start=1,
         ):
-            tolerance = self.sample_dt + 0.1
+            # Sampling can shift otherwise simultaneous positions by at most
+            # one sample.  The configured window then adds the required
+            # temporal separation around the sampled reservation.
+            tolerance = max(0.0, conflict_window) + self.sample_dt + 0.1
             for moment, x, y in leg_samples:
                 for entry in self.entries:
                     if entry.drone_id == ignore_drone_id:
@@ -149,6 +152,10 @@ def apply_deconfliction(
         waypoints: list[Waypoint] = result.drone_waypoints.get(drone.id, [])
         speed = max(drone.air_speed, 1e-9)
         waits: dict[int, float] = {}
+        # Mission holds already on a vertex are the base; deconfliction waits
+        # stack on top of them instead of replacing the task's own hold.
+        base_holds: dict[int, float] = {}
+        conflict_sources: dict[int, str] = {}
         for _ in range(max_waits_per_drone):
             conflict = table.first_conflict(
                 path,
@@ -168,10 +175,18 @@ def apply_deconfliction(
             if vertex_index < 1 or vertex_index >= len(waypoints):
                 break
             waypoint = waypoints[vertex_index]
+            if vertex_index not in base_holds:
+                base_holds[vertex_index] = waypoint.hold_seconds
             waits[vertex_index] = waits.get(vertex_index, 0.0) + wait_seconds
-            waypoint.hold_seconds += wait_seconds
+            conflict_sources[vertex_index] = other_id
+            waypoint.hold_seconds = base_holds[vertex_index] + waits[vertex_index]
             waypoint.action = WaypointAction.HOVER
-            report.waits.append((drone.id, vertex_index, wait_seconds, other_id))
+        # One report entry per held vertex, carrying the final accumulated wait,
+        # so notes and reports never show a partial hold.
+        for vertex_index in sorted(waits):
+            report.waits.append(
+                (drone.id, vertex_index, waits[vertex_index], conflict_sources[vertex_index])
+            )
         if path:
             table.reserve_path(drone.id, path, speed=speed, waits=waits)
     return report

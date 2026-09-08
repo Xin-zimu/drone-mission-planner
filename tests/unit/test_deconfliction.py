@@ -9,7 +9,10 @@ from drone_mission_planner.planning.assignment import (
     AssignmentResult,
     GreedyAssignmentPlanner,
 )
-from drone_mission_planner.planning.deconfliction import apply_deconfliction
+from drone_mission_planner.planning.deconfliction import (
+    SpacetimeReservationTable,
+    apply_deconfliction,
+)
 from drone_mission_planner.simulation.engine import SimulationEngine
 
 
@@ -77,6 +80,38 @@ def test_non_crossing_routes_get_no_waits() -> None:
     report = apply_deconfliction(model, result)
 
     assert report.waits == []
+
+
+def test_conflict_window_detects_routes_using_same_position_at_nearby_times() -> None:
+    table = SpacetimeReservationTable(sample_dt=0.5)
+    table.reserve_path(
+        "D-01",
+        [Point(0.0, 50.0), Point(100.0, 50.0)],
+        speed=10.0,
+    )
+    later_crossing = [
+        Point(50.0, -20.0),
+        Point(50.0, 50.0),
+        Point(50.0, 100.0),
+    ]
+
+    outside_window = table.first_conflict(
+        later_crossing,
+        speed=10.0,
+        separation=1.0,
+        conflict_window=0.0,
+        ignore_drone_id="D-02",
+    )
+    inside_window = table.first_conflict(
+        later_crossing,
+        speed=10.0,
+        separation=1.0,
+        conflict_window=3.0,
+        ignore_drone_id="D-02",
+    )
+
+    assert outside_window is None
+    assert inside_window is not None
 
 
 def test_relay_drones_are_not_assigned_missions() -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, floor, hypot
+from math import ceil, floor, hypot, isclose
 
 from drone_mission_planner.domain.geometry import Point, Rect
 from drone_mission_planner.domain.models import MapModel
@@ -38,7 +38,16 @@ class GridMap:
         return not self.in_bounds(cell) or cell in self.blocked
 
     def world_to_cell(self, point: Point) -> Cell:
-        return floor(point.x / self.resolution), floor(point.y / self.resolution)
+        x = floor(point.x / self.resolution)
+        y = floor(point.y / self.resolution)
+        # Domain coordinates include the map's maximum edge.  When that edge
+        # falls exactly on a grid boundary, map it to the final cell instead
+        # of producing the first out-of-bounds cell.
+        if x == self.width and isclose(point.x, self.width * self.resolution, abs_tol=1e-9):
+            x = self.width - 1
+        if y == self.height and isclose(point.y, self.height * self.resolution, abs_tol=1e-9):
+            y = self.height - 1
+        return x, y
 
     def cell_to_world(self, cell: Cell) -> Point:
         return Point((cell[0] + 0.5) * self.resolution, (cell[1] + 0.5) * self.resolution)

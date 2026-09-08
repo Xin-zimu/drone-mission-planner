@@ -17,7 +17,7 @@
         "assigned_tasks": [
           "T-01"
         ],
-        "battery_capacity": 220.0,
+        "battery_capacity": 520.0,
         "climb_power": 140.0,
         "climb_rate": 3.0,
         "communication_range": 1000.0,
@@ -244,7 +244,7 @@
           "x": 387.76977631085094,
           "y": 157.5
         },
-        "remaining_battery": 132.19809159823907,
+        "remaining_battery": 520.0,
         "safety_radius": 8.0,
         "status": "flying",
         "waypoints": [
@@ -795,7 +795,7 @@
         "assigned_tasks": [
           "T-02"
         ],
-        "battery_capacity": 210.0,
+        "battery_capacity": 280.0,
         "climb_power": 140.0,
         "climb_rate": 3.0,
         "communication_range": 1000.0,
@@ -1090,7 +1090,7 @@
           "x": 960.4441456693744,
           "y": 226.33280368661804
         },
-        "remaining_battery": 129.97911852593666,
+        "remaining_battery": 280.0,
         "safety_radius": 8.0,
         "status": "flying",
         "waypoints": [
