@@ -249,16 +249,25 @@ def _migrate_1_6_to_1_7(
 
 
 def _points(data: Any) -> list[tuple[float, float]]:
-    """Normalise a persisted point list to ``(x, y)`` float pairs."""
+    """Normalise a persisted point list to ``(x, y)`` float pairs.
+
+    A missing value is an empty route; anything else that is not a list of
+    point objects/pairs is rejected so a malformed legacy route fails loudly
+    instead of silently becoming an empty route.
+    """
 
     points: list[tuple[float, float]] = []
-    if not isinstance(data, list):
+    if data is None:
         return points
+    if not isinstance(data, list):
+        raise ValueError("route points must be a list")
     for item in data:
         if isinstance(item, dict):
             points.append((float(item["x"]), float(item["y"])))
         elif isinstance(item, (list, tuple)) and len(item) >= 2:
             points.append((float(item[0]), float(item[1])))
+        else:
+            raise ValueError(f"route point {item!r} must be an object or [x, y]")
     return points
 
 

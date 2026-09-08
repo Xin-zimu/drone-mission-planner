@@ -177,6 +177,8 @@ class ProjectRepository:
             raw = migrate_project(raw, report)
         except MigrationError as exc:
             raise ProjectFormatError(str(exc)) from exc
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            raise ProjectFormatError(f"Invalid project data during migration: {exc}") from exc
         version = str(raw.get("version", ""))
         if version != CURRENT_VERSION:
             raise ProjectFormatError(

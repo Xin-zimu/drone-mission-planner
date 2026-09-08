@@ -200,3 +200,19 @@ def test_future_format_is_rejected_with_the_expected_version(tmp_path: Path) -> 
 
     with pytest.raises(ProjectFormatError, match=CURRENT_PROJECT_VERSION):
         ProjectRepository().load(source)
+
+
+def test_malformed_legacy_route_is_a_typed_format_error(tmp_path: Path) -> None:
+    raw = _project_v16(planned_path=[{"x": 10.0, "y": 10.0}, {"y": 20.0}])
+    source = _write(tmp_path / "malformed.dmproj", raw)
+
+    with pytest.raises(ProjectFormatError, match="during migration"):
+        ProjectRepository().load(source)
+
+
+def test_non_list_legacy_route_is_not_silently_dropped(tmp_path: Path) -> None:
+    raw = _project_v16(planned_path={"x": 10.0, "y": 10.0})
+    source = _write(tmp_path / "not_a_list.dmproj", raw)
+
+    with pytest.raises(ProjectFormatError, match="during migration"):
+        ProjectRepository().load(source)
