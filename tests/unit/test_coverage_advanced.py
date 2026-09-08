@@ -88,19 +88,49 @@ def test_vertical_scan_direction_rotates_the_pattern() -> None:
     assert all(start.x == pytest.approx(end.x) for start, end in vertical_ends[:3])
 
 
-def test_plan_all_areas_respects_priority_order() -> None:
+def _two_area_model(remaining_battery: float = 100.0) -> MapModel:
     model = MapModel(width=400, height=400, grid_size=10.0)
     model.bases.append(BaseStation("B-01", "Base", Point(10, 10)))
-    model.drones.append(Drone("D-01", "Alpha", Point(10, 10), "B-01", max_speed=10))
+    model.drones.append(
+        Drone(
+            "D-01",
+            "Alpha",
+            Point(10, 10),
+            "B-01",
+            max_speed=10,
+            remaining_battery=remaining_battery,
+        )
+    )
     low = SearchArea("S-LOW", "Low", Rect(50, 50, 100, 100), scan_spacing=25.0, priority=0)
     high = SearchArea("S-HIGH", "High", Rect(220, 50, 100, 100), scan_spacing=25.0, priority=5)
     model.search_areas.extend([low, high])
+    return model
 
-    results = CoveragePlanner().plan_all_areas(model)
+
+def test_plan_all_areas_reuses_one_drone_across_areas() -> None:
+    """Plan §11.7: the "one area result per aircraft" limit is gone."""
+
+    results = CoveragePlanner().plan_all_areas(_two_area_model())
+
+    assert results["S-HIGH"].drone_paths.get("D-01")
+    assert results["S-LOW"].drone_paths.get("D-01")
+
+
+def test_plan_all_areas_keeps_priority_order_when_the_battery_is_spent() -> None:
+    results = CoveragePlanner().plan_all_areas(_two_area_model(remaining_battery=0.5))
 
     assert results["S-HIGH"].drone_paths.get("D-01")
     assert not results["S-LOW"].drone_paths.get("D-01")
     assert "No drones available" in results["S-LOW"].failures.values()
+
+
+def test_plan_all_areas_can_still_exclude_used_drones() -> None:
+    results = CoveragePlanner().plan_all_areas(
+        _two_area_model(), allow_cross_area_reuse=False
+    )
+
+    assert results["S-HIGH"].drone_paths.get("D-01")
+    assert not results["S-LOW"].drone_paths.get("D-01")
 
 
 def test_incremental_rescan_is_shorter_than_full_replan() -> None:

@@ -2,7 +2,46 @@
 
 Last updated: 2026-09-06
 
-## v1.2 F3-a checkpoint — global multi-vehicle optimisation foundation (this pass)
+## v1.2 F3-b checkpoint — hard constraints and cross-area coverage blocks (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §11, items OPT-04 and OPT-05.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Hard constraints | `planning/optimization.py`: `SolverTask` gained `predecessor_ids`, `min_lag_seconds`, `energy_demand`, `optional_penalty` and `exit_node`; `SolverVehicle` gained `energy_capacity`, `reserve_energy`, `energy_per_tick` and `hover_energy_per_second`. `SUPPORTED_CONSTRAINTS` now covers six families, so the solver answers `unsupported_constraint` only for what it genuinely cannot model. |
+| Independent verifier | `evaluate_routes` enforces global dependency order with minimum lag, whole-route energy (travel, service, airborne wait and the return leg) and the landing reserve, each rejection naming its numbers. `verify_outcome` re-checks any solver answer and `solve_with_baseline` keeps the baseline when the candidate fails, so a solver's `feasible` status never overrides the verifier (plan §11.3). Optional missions are reported in `skipped` with their penalty instead of failing the plan. |
+| Solver | OR-Tools: dependencies use sound time-window propagation plus exact ordering for mandatory pairs and `successor_active <= predecessor_active`; a per-vehicle energy dimension is capped at `capacity − reserve` with the return leg as an arc into the end node; optional missions carry their priority as the disjunction penalty; cycles, missing predecessors and unreachable return legs return infeasible with a reason. The routing solver has no `OnlyEnforceIf`, so waiting energy stays a conservative bound and the exact ledger is re-applied by the verifier (plan §11.8). |
+| Coverage blocks | New `planning/coverage_blocks.py`: `CoverageBlock` owns entry, exit, scan direction, trajectory, duration, distance, energy and coverage benefit. `__post_init__` refuses an entry/exit pair that is not a real block for the declared direction, and `block_tasks` turns blocks into solver tasks (entry node plus exit node) so point missions, area blocks, transit and the return leg share one sequence. |
+| Cross-area reuse | `CoveragePlanner.plan_all_areas` no longer limits an aircraft to one area result: it plans in priority order and subtracts each area's real energy from the aircraft's remaining battery, so one aircraft can fly area A then area B while the cumulative energy stays inside the battery. `allow_cross_area_reuse=False` restores the old scarce-aircraft behaviour. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Dependency, energy and return supported, not deferred | `tests/unit/test_optimization_constraints.py` (18 tests), probe `f3b-opt04-post` |
+| Dependency violation names the times | probe: `T-02 starts at 20.0 s before predecessor T-01 finishes at 25.0 s` |
+| Energy over budget names the numbers | probe: `route consumes 45.0 energy against usable 20.0 (capacity 100.0, reserve 80.0)` |
+| Airborne waiting is charged | probe: a 10 s hold at 0.5 energy/s adds 5.0 |
+| A rogue solver answer is rejected | `test_solver_answer_is_reverified_by_the_independent_checker` |
+| One aircraft serves two independent areas | `tests/unit/test_coverage_blocks.py` (10 tests), probe `f3b-opt05-post` — `areas_served_by_one_drone 2`, chained makespan 157.8 s, chained energy 137.64 |
+| A non-existent scan block is refused | `test_a_mismatched_entry_exit_pair_is_refused` (ValueError) |
+| Reuse stops when the battery is spent | `test_plan_all_areas_keeps_priority_order_when_the_battery_is_spent` |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `pytest D:/dmp/tests --basetemp=D:/dmp/.pytest-tmp-f3b2` | **376 passed** |
+| `-m ruff check src tests scripts` | All checks passed |
+| `-m mypy src tests` | Success, 120 source files |
+
+Reproduction probes: `scripts/probe_f3b_opt04.py`, `scripts/probe_f3b_opt05.py`, `scripts/probe_f3b_verify.py`.
+
+Deferred to F3-c: OPT-06 (conflict re-check with a bounded repair budget) and OPT-07 (UI, cancellation, degradation and explanation). Environment note: `.pytest-tmp-run` also became ACL-denied during this pass (the same class of failure as `.pytest-tmp`); this pass used `.pytest-tmp-f3b2`.
+
+## v1.2 F3-a checkpoint — global multi-vehicle optimisation foundation (previous pass)
 
 Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §11, items OPT-01…OPT-03 plus the OPT-08 acceptance hooks. OR-Tools, declared since v1.0 but never imported, is now actually used — with a hard degradation path.
 

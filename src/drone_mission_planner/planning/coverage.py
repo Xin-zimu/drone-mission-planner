@@ -301,24 +301,42 @@ class CoveragePlanner:
         map_model: MapModel,
         *,
         covered_by_area: dict[str, Iterable[CoverageCell]] | None = None,
+        allow_cross_area_reuse: bool = True,
     ) -> dict[str, CoveragePlanResult]:
-        """Plan every search area, honouring priority order and drone reuse."""
+        """Plan every search area in priority order (plan §11.7).
+
+        With ``allow_cross_area_reuse`` an aircraft may continue into a later area
+        as long as the battery it has left still covers what it already flew, so
+        the old "one area result per aircraft" limit is gone while the cumulative
+        time and energy stay bounded. ``False`` restores the earlier
+        scarce-aircraft behaviour.
+        """
 
         covered_map = covered_by_area or {}
         results: dict[str, CoveragePlanResult] = {}
         used_drone_ids: set[str] = set()
+        remaining = {drone.id: drone.remaining_battery for drone in map_model.drones}
         operational = [
             drone
             for drone in map_model.drones
             if drone.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
         ]
         for area in sorted(map_model.search_areas, key=lambda item: (-item.priority, item.id)):
-            pool = [drone for drone in operational if drone.id not in used_drone_ids]
+            if allow_cross_area_reuse:
+                pool = [drone for drone in operational if remaining.get(drone.id, 0.0) > 0.0]
+            else:
+                pool = [drone for drone in operational if drone.id not in used_drone_ids]
             result = self.plan(map_model, area, pool, covered_cells=covered_map.get(area.id))
             results[area.id] = result
+            for drone_id in result.failures:
+                remaining[drone_id] = 0.0
             for drone_id, path in result.drone_paths.items():
-                if path:
-                    used_drone_ids.add(drone_id)
+                if not path:
+                    continue
+                used_drone_ids.add(drone_id)
+                remaining[drone_id] = remaining.get(drone_id, 0.0) - result.drone_energies.get(
+                    drone_id, 0.0
+                )
         return results
 
     def coverage_resolution_for(self, map_model: MapModel, area: SearchArea) -> float:

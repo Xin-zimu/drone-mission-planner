@@ -76,15 +76,26 @@ def test_status_enum_covers_five_explicit_outcomes() -> None:
 
 
 def test_unsupported_constraint_is_reported_not_ignored() -> None:
-    problem = _problem(requires=("predecessor_ids", "return_energy"))
+    problem = _problem(requires=("cross_vehicle_synchronisation",))
 
     outcome = ORToolsAssignmentSolver().solve(problem)
 
     assert outcome.status is SolverStatus.UNSUPPORTED_CONSTRAINT
-    assert outcome.unsupported == ("predecessor_ids", "return_energy")
-    assert "predecessor_ids" in outcome.message
+    assert outcome.unsupported == ("cross_vehicle_synchronisation",)
+    assert "cross_vehicle_synchronisation" in outcome.message
     assert outcome.routes == ()
     assert not outcome.feasible
+
+
+def test_dependency_energy_and_return_are_supported_since_opt04() -> None:
+    """OPT-04 closed the gap this test used to encode (plan §11.2/§11.10)."""
+
+    assert {"predecessor_ids", "energy", "return_energy"} <= set(opt.SUPPORTED_CONSTRAINTS)
+    problem = _problem(requires=("predecessor_ids", "energy", "return_energy"))
+
+    outcome = ORToolsAssignmentSolver().solve(problem)
+
+    assert outcome.status is not SolverStatus.UNSUPPORTED_CONSTRAINT
 
 
 def test_missing_ortools_degrades_to_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,14 +110,19 @@ def test_missing_ortools_degrades_to_unsupported(monkeypatch: pytest.MonkeyPatch
     assert baseline.status is SolverStatus.FEASIBLE
 
 
-def test_timeout_is_not_reported_as_infeasible() -> None:
-    size = 9
-    matrix = [[0 if i == j else 100 + abs(i - j) for j in range(size)] for i in range(size)]
-    problem = _problem(
-        matrix,
-        vehicles=1,
+def test_timeout_is_not_reported_as_infeasible(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two mandatory missions that cannot both fit one aircraft's capacity, so no
+    # solution exists, and the clock is forced past the budget: the controlled
+    # timeout branch must answer, never an infeasibility claim (plan §11.3).
+    problem = AssignmentProblem(
+        node_count=3,
+        travel_ticks=[[0, 1, 2], [1, 0, 1], [2, 1, 0]],
+        vehicles=(SolverVehicle("D-01", 0, 0, capacity=1.0),),
+        tasks=(SolverTask("T-01", 1, demand=1.0), SolverTask("T-02", 2, demand=1.0)),
         settings=SolverSettings(time_limit_seconds=0.001, tick_seconds=1.0),
     )
+    clock = iter([0.0, 100.0])
+    monkeypatch.setattr(opt, "perf_counter", lambda: next(clock))
 
     outcome = ORToolsAssignmentSolver().solve(problem)
 
