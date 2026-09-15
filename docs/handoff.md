@@ -1,7 +1,7 @@
-# 新对话交接单（drone-mission-planner / v1.3）
+# 新对话交接单（drone-mission-planner / v1.2.0）
 
 > 用途：新开对话时把这份交给下一个会话，即可直接续做，不必重新侦察。
-> 生成时间：2026-09-10 · HEAD = 本轮 F5-a 收口 · 分组全量 **409 passed**
+> 生成时间：2026-09-15 · HEAD = v1.2.0 release prep · 分组全量 **424 passed**
 
 ## 1. 仓库与环境
 
@@ -10,12 +10,12 @@
 | 仓库 | `D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main`（路径含空格） |
 | **无空格别名** | **`D:\dmp`**（junction，指向仓库根）——DSH 命令按空格切分，**验证命令一律用 `D:/dmp/...`** |
 | Python | `.venv` = Python 3.12.6；依赖 PySide6 6.11.2、pydantic 2.13.5、networkx 3.6.1、ortools 9.15.6755、numpy 2.5.3、pyproj 3.7.x、pytest 8.4.2、pytest-qt 4.5.0、ruff 0.16.6、mypy 1.20.2 |
-| 项目格式版本 | **1.11**（产品版本仍 1.1.0，两者分开） |
+| 项目格式版本 | **1.11**（产品版本 1.2.0，两者分开） |
 
 ### 验证命令（照抄）
 
 ```powershell
-D:/dmp/.venv/Scripts/python.exe -m pytest D:/dmp/tests --basetemp=D:/dmp/.pytest-tmp-f4-full
+D:/dmp/.venv/Scripts/python.exe -m pytest D:/dmp/tests --basetemp=D:/dmp/.pytest-tmp-v120-full
 D:/dmp/.venv/Scripts/python.exe -m ruff check D:/dmp/src D:/dmp/tests D:/dmp/scripts
 D:/dmp/.venv/Scripts/python.exe -m mypy --config-file D:/dmp/pyproject.toml D:/dmp/src D:/dmp/tests
 ```
@@ -28,8 +28,8 @@ D:/dmp/.venv/Scripts/python.exe -m mypy --config-file D:/dmp/pyproject.toml D:/d
 
 - 进度与差距见 **`docs/plan-alignment.md`**；流程优化见 **`docs/workflow-optimization.md`**；逐轮证据见 **`docs/execution-progress.md`**。
 - 计划原文：`docs/follow-up-development-plan.md`（§10 调度、§11 全局优化、§22 阶段表）。
-- 提交链（新→旧）：本轮 F4 → F3-c → F3-b → `5132c69`(文档汇总) → `bf1ed44`(F3-a) → `4a2fc4d`(F2-b) → `c315f5b`(F2-a) → `b358289`/`8559ed1`/`ce90cea`/`ea3b03d`(F1) → `9354664`(F0 基线)。
-- 测试数演进：234 → 264(F1) → 306(F2-a) → 332(F2-b) → 345(F3-a) → 376(F3-b) → 382(F3-c) → 402(F4，分组全量) → **409(F5-a，分组全量)**。
+- 提交链（新→旧）：v1.2.0 release prep → `eccf06c`(F4-F6 收口) → F3-c → F3-b → `5132c69`(文档汇总) → `bf1ed44`(F3-a) → `4a2fc4d`(F2-b) → `c315f5b`(F2-a) → `b358289`/`8559ed1`/`ce90cea`/`ea3b03d`(F1) → `9354664`(F0 基线)。
+- 测试数演进：234 → 264(F1) → 306(F2-a) → 332(F2-b) → 345(F3-a) → 376(F3-b) → 382(F3-c) → 402(F4，分组全量) → 409(F5-a，分组全量) → **424(F6/F7，分组全量)**。
 - 复现探针：`scripts/probe_f3b_opt04.py`、`scripts/probe_f3b_opt05.py`、`scripts/probe_f3b_verify.py`。
 
 ## 3. 关键架构决策（不要回退）

@@ -1,6 +1,41 @@
 # Execution Progress
 
-Last updated: 2026-09-11
+Last updated: 2026-09-15
+
+## v1.2 F7 checkpoint — integration, release metadata and v1.2.0 tag prep (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §22.1 F7 and §23.4 v1.2 final checklist.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Product version | Raised the product version from `1.1.0` to `1.2.0` in package metadata, runtime `__version__`, Windows version resource and the About dialog. The project file format remains `1.11`. |
+| Release notes | Added the `1.2.0` changelog entry and a dedicated `reports/v1.2.0-release-report.md` with scope, artifact, validation and known-limit notes. |
+| User docs | Updated README release scope, persistence description and GIS/DEM capability summary for v1.2.0. |
+| Release boundary | Documented that v1.2.0 includes automated validation and package smoke evidence, but not external ground-station import logs or SITL execution logs. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Version metadata is coherent | `pyproject.toml`, `src/drone_mission_planner/__init__.py`, `packaging/version_info.txt` and About text all use `1.2.0`. |
+| Release scope is documented | `CHANGELOG.md`, `README.md` and `reports/v1.2.0-release-report.md` describe v1.2.0 capabilities and limits. |
+| Project schema is not confused with product version | `reports/v1.2.0-release-report.md` states `.dmproj` remains `1.11`. |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `python -m pip install --no-build-isolation --editable "D:/dmp[dev]"` | Installed `drone-mission-planner==1.2.0` |
+| `python -m ruff check D:/dmp/src D:/dmp/tests D:/dmp/scripts` | All checks passed |
+| `python -m mypy --config-file D:/dmp/pyproject.toml D:/dmp/src D:/dmp/tests` | Success: no issues found in 123 source files |
+| Release-focused pytest group | **50 passed**, 3 warnings |
+| Full test inventory, per-file isolated as described in `handoff.md` | **424 passed** across 54 files |
+| `packaging/build-windows.ps1 -PythonExecutable D:/dmp/.venv/Scripts/python.exe` | Built `dist/DroneMissionPlanner.exe` (57,748,559 bytes) and passed packaged startup smoke |
+| Local Windows zip artifact | Built `artifacts/DroneMissionPlanner-Windows-x64-v1.2.0.zip` (57,265,790 bytes) |
+
+Remaining after F7: external ground-station import evidence, SITL execution logs, richer target profiles, UI validation-report display, DEM import wizard/large-raster engineering, and P1/P2 features F8-F12.
 
 ## v1.2 F6 checkpoint — target export validation, QGC/WPL capability gates and mission package manifest (this pass)
 

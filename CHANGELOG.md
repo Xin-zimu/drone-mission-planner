@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 - 2026-09-15
+
+- Completed the v1.2 real-mission planning foundation: authoritative 3D waypoints, cumulative scheduling, dependency and energy accounting, global multi-vehicle optimisation, conflict repair, georeferencing, GIS/DEM import, and target-aware route export validation.
+- Added project georeferencing with local-only/georeferenced modes, WGS84/ECEF/ENU conversion, explicit height datum tracking, control-point residuals, spatial bounds, geofences, and guarded real-coordinate export.
+- Added traceable GIS/DEM data sources, GeoJSON/KML vector import with topology validation and transactional apply, preserved polygon holes and multipart provenance, and GeoTIFF DEM application with NoData-aware terrain samples.
+- Added PX4/QGroundControl multirotor export profiles, L0-L3 validation reports, QGC/WPL capability gates, per-waypoint speed command emission, and mission package manifests with file hashes and data-source summaries.
+- Added regional and georeferenced example projects plus regression coverage for georeference migration, GIS import topology, DEM validity, route export gates, optimisation constraints, UI smoke paths, and release workflows.
+- Release scope note: v1.2.0 provides automated L0-L2 style validation evidence and package smoke checks. Real ground-station import evidence and SITL log evidence remain explicit external validation follow-ups before operational use.
+
 ## 1.1.0 - 2026-09-06
 
 - Completed the M20 productization baseline: transactional undo/redo, configurable recovery autosaves, recent projects, local settings, validation center, and atomic project saves.

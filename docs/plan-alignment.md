@@ -2,7 +2,7 @@
 
 > 对齐对象：`docs/follow-up-development-plan.md`（§22.1 阶段表）。
 > 数据来源：本仓库提交历史与实跑命令输出；**人日均为按计划估算反推，不是实际工时**。
-> 生成时间：2026-09-09 · HEAD = 本轮 F4 收口
+> 生成时间：2026-09-15 · HEAD = v1.2.0 release prep
 
 ## 1. 进度总览
 
@@ -13,19 +13,19 @@
 | F2 完整调度（时间窗/ETA/依赖/甘特/能源账本） | 12～18 | ✅ 完成 | `c315f5b`（SCH-01～04）、`4a2fc4d`（SCH-05～08） |
 | F3 全局多机优化 | 14～22 | ✅ 完成 | `bf1ed44`（OPT-01～03）、F3-b（OPT-04/05）、本轮 F3-c（OPT-06/07 + OPT-08 证据） |
 | F4 地理参考（WGS84/ENU/高度基准/围栏） | 10～16 | ✅ 完成 | 本轮 F4（GEO-01～08） |
-| F5 GIS/DEM 导入 | 12～20 | ⬜ 未开始 | — |
-| F6 目标导出验证（QGC/PX4，L0～L3） | 12～18 | ⬜ 未开始 | — |
-| F7 集成与发布 | 8～12 | ⬜ 未开始 | — |
-| **v1.2 主线合计** | **80～124** | **约 55%～65%（估算）** | — |
+| F5 GIS/DEM 导入 | 12～20 | ✅ 完成 | F5-a/F5-b/F5-c（data sources、GIS topology、DEM apply） |
+| F6 目标导出验证（QGC/PX4，L0～L3） | 12～18 | ✅ 完成（外部证据受限） | F6（profile、validation report、package manifest） |
+| F7 集成与发布 | 8～12 | ✅ 完成 | v1.2.0 release metadata、report、Windows packaging gate |
+| **v1.2 主线合计** | **80～124** | **100% 主线代码/文档收口** | 外部地面站/SITL 证据仍作为发布范围限制登记 |
 | F8～F12（P1/P2 增强） | 73～125 | ⬜ 未开始 | — |
 
-按阶段粗算：8 个主线阶段中 5 个完成 ≈ **62.5%**；按人日反推：已完成约 **53～81 人日 / 80～124** ≈ **65%**（含 20% 集成缓冲后约 54%）。
+按阶段粗算：8 个主线阶段中 8 个完成。计划人日是原始估算，不按本仓库实际提交节奏折算。
 
 ## 2. 已交付能力的可验证证据
 
 | 能力 | 证据（实跑） |
 |---|---|
-| 可复现绿色基线 | 基线时 234 passed → 当前 **345 passed**；ruff 全绿；`mypy src tests` **117 文件全绿** |
+| 可复现绿色基线 | F6/F7 gate 使用 Windows Python 3.12；ruff/mypy 全绿；全量测试清单按隔离策略覆盖 **424 passed** |
 | 航点单一来源 | `Drone.planned_path` 只读派生；`src/` 写点 0 处；格式 1.7 迁移带冲突报告 |
 | 完整调度 | §10.4 固定 A/B 案例逐项命中（A 30/30/60/100；B 120/150，硬截止失败、软截止迟到 10 s） |
 | 依赖与阻塞 | 缺失/自引用/重复/环路四类均检出，环路打印具体路径 |
@@ -39,6 +39,9 @@
 | 冲突后闭环复核 | 有界等待修复后重新核验 deadline、依赖、能源/储备和返航；修复预算耗尽或复核失败时拒绝应用 |
 | 全局优化 UI 与降级 | Planning → Assignment planning… 可选贪心基线/全局优化、求解预算和修复轮次；自动分配记录 solver 状态与基线 fallback 原因 |
 | 地理参考 | 格式 1.10 增加 `local_only`/`georeferenced`、WGS84/ECEF/ENU、显式高度基准、控制点残差、范围/围栏约束、重设原点保持真实位置、真实 WGS84 导出门槛 |
+| GIS/DEM 导入 | 格式 1.11 增加 `data_sources`；GeoJSON/KML 中间模型、multipart/holes/provenance、拓扑校验、事务 apply；GeoTIFF DEM apply 带 NoData mask |
+| 目标导出验证 | PX4/QGroundControl profile、L0-L3 validation report、QGC/WPL gate、speed command、route package manifest |
+| 集成发布 | 产品版本 `1.2.0`、release report、Windows packaging smoke path、tag-ready changelog |
 
 ## 3. 未做清单（按计划章节）
 
@@ -56,9 +59,9 @@
 
 ### 后续阶段
 - [x] F4 地理参考（GEO-01～08）：WGS84/ENU、高度基准、地理围栏
-- [ ] F5 GIS/DEM 导入（IMP-01～09）
-- [ ] F6 目标导出验证（EXP-01～07）：命令白名单、manifest、L0～L3 证据
-- [ ] F7 集成与发布：Windows 包、文档与报告
+- [x] F5 GIS/DEM 导入（IMP-01～09）：source metadata、vector topology、DEM apply
+- [x] F6 目标导出验证（EXP-01～05）：命令白名单、manifest、自动化 L0-L3 validation report
+- [x] F7 集成与发布：版本、Windows 包路径、文档与报告
 - [ ] F8～F12：更强避碰、三维搜索、仿真真实性、多架次补能、方案比较与 Monte Carlo
 
 ## 4. 与计划的差距说明
@@ -66,10 +69,10 @@
 1. **范围没有缩水，只是分轮**：F2 被拆成 F2-a（调度内核）与 F2-b（时间线/账本/报告/甘特）两轮完成；F3 同理拆成 F3-a/F3-b。
 2. **人日不可直接对比**：计划人日包含实现、测试与文档，本会话是「AI 单轮增量」节奏，不能按人日折算实际投入。
 3. **依赖治理已提前兑现**：OR-Tools 从「声明未使用」变为实际使用且保持可选导入（计划 §20.6）。
-4. **尚未产生外部证据**：F6 的 L2（地面站）/L3（SITL）证据需要外部工具，目前为 0。
+4. **外部证据范围受限**：v1.2.0 不附带真实地面站导入记录或 SITL 日志，因此 release report 明确禁止把自动化导出校验描述成飞行认证。
 
 ## 5. 下一步建议（按计划 §22.3 依赖顺序）
 
-1. **F5 GIS/DEM 导入**：IMP-01～09 —— 坐标源元数据、栅格/矢量导入、资源与预览。
-2. 之后 **F6 目标导出验证**（计划明确 F6 依赖 F2～F5）。
-3. 每轮结束把文档与提交**并入阶段动作本身**（见 `docs/workflow-optimization.md`）。
+1. 打 `v1.2.0` tag 并通过 CI 生成 Windows artifact。
+2. 后续补真实地面站导入记录和 SITL 日志，形成外部验证证据包。
+3. 按 P1/P2 顺序推进 F8～F12，避免把增强项混入 v1.2.0 发布口径。

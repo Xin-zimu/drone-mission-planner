@@ -1,6 +1,6 @@
 # Drone Mission Planner
 
-**多无人机协同任务规划与动态仿真平台** — a fully local PySide6 desktop application for composing, planning, validating, simulating, and reporting 2D multi-UAV missions. Version 1.0 is software-only: it does not connect to real aircraft or cloud services.
+**多无人机协同任务规划与动态仿真平台** — a fully local PySide6 desktop application for composing, planning, validating, simulating, and reporting multi-UAV missions. Version 1.2 adds real-mission planning foundations while remaining software-only: it does not connect to real aircraft or cloud services.
 
 ![Final mountain search-and-rescue dashboard](reports/screenshots/phase-08-final-rescue.png)
 
@@ -27,9 +27,10 @@
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
 | Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, plan-versus-actual mission times with deviations, event history, and HTML/JSON/CSV export |
 | Schedule | Read-only Gantt tab: one row per aircraft with a planned lane and an actual lane (waiting/travel/service in different colours); clicking a mission bar selects it on the map and in the inspector |
-| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.10, project-level `local_only`/`georeferenced` metadata with CRS, height datum, control points, geofences and validation status, a single authoritative `waypoints` route (the 2D path is derived), scheduling fields with migration reports for rebuilt/conflicting routes and legacy deadlines, and clear corrupt/incompatible-file errors |
+| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.11, project-level `local_only`/`georeferenced` metadata with CRS, height datum, control points, geofences and validation status, traceable `data_sources`, a single authoritative `waypoints` route (the 2D path is derived), scheduling fields with migration reports for rebuilt/conflicting routes and legacy deadlines, and clear corrupt/incompatible-file errors |
 | Local basemap | Map → Import basemap… overlays a local PNG/JPG under the mission grid with opacity/lock and two-point metre calibration persisted in the project |
 | Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation; validated georeferenced projects export real WGS84 latitude/longitude/height, while local-only, unknown-height, stale, or unvalidated projects stay explicitly not flyable |
+| GIS/DEM import | GeoJSON/KML vector import preserves source feature IDs, multipart provenance, polygon holes, topology issues, and transactional apply; GeoTIFF DEM import applies ENU terrain grids with NoData masks and source metadata |
 | Project safety | Undo/redo for common edits and planning operations; atomic saves; timed crash-recovery snapshots; recent projects; local settings; and a project validation center |
 
 ## Windows application
@@ -136,7 +137,7 @@ The project enforces `UI → application → domain/planning/simulation/persiste
 
 ## Scope and roadmap
 
-Version 1.0 is a local planning and simulation platform with 2D route geometry plus 2.5D terrain visualization and terrain/wind-aware energy estimates. Real flight control, MAVLink/PX4, ROS 2, fully three-dimensional path search, and hardware telemetry are intentionally outside this release; the project summary documents extension points.
+Version 1.2 is a local planning and simulation platform with scheduling, optimisation, georeferencing, GIS/DEM import, and target-aware export validation. Real flight control, hardware telemetry, ROS 2 integration, and external SITL/ground-station certification evidence are intentionally outside this release; the project summary documents extension points.
 
 ## License
 
