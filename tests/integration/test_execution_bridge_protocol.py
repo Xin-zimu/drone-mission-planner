@@ -53,9 +53,9 @@ def test_bridge_skeleton_responds_to_hello_ping_and_capabilities() -> None:
     asyncio.run(scenario())
 
 
-def test_bridge_skeleton_loads_mission_and_blocks_execution() -> None:
+def test_bridge_skeleton_loads_mission_and_executes_sim_sequence() -> None:
     server = protocol_server.BridgeProtocolServer()
-    mission = {"mission_id": "m-1", "source_route_hash": "hash-1"}
+    mission = _sim_mission()
 
     loaded = server.handle_message(
         {
@@ -66,12 +66,35 @@ def test_bridge_skeleton_loads_mission_and_blocks_execution() -> None:
             "mission": mission,
         }
     )
-    blocked = server.handle_message(
+    completed = server.handle_message(
         {"type": "execute_mission", "request_id": "exec-1", "mission_id": "m-1"}
     )
 
     assert loaded["type"] == "mission_loaded"
     assert loaded["source_route_hash"] == "hash-1"
+    assert completed["type"] == "mission_state"
+    assert completed["state"] == "landed"
+    assert completed["completed_waypoints"] == 3
+    assert completed["command_log"] == ["takeoff", "go_to", "go_to", "land"]
+
+
+def test_bridge_hardware_backend_still_rejects_execution_in_cf4() -> None:
+    server = protocol_server.BridgeProtocolServer(backend="hardware")
+    mission = _sim_mission()
+    server.handle_message(
+        {
+            "type": "load_mission",
+            "request_id": "load-1",
+            "mission_id": "m-1",
+            "source_route_hash": "hash-1",
+            "mission": mission,
+        }
+    )
+
+    blocked = server.handle_message(
+        {"type": "execute_mission", "request_id": "exec-1", "mission_id": "m-1"}
+    )
+
     assert blocked["type"] == "error"
     assert blocked["code"] == "execution_not_implemented"
 
@@ -93,3 +116,39 @@ async def _exchange(
     response = json.loads((await reader.readline()).decode("utf-8"))
     assert isinstance(response, dict)
     return response
+
+
+def _sim_mission() -> dict[str, Any]:
+    return {
+        "mission_id": "m-1",
+        "source_route_hash": "hash-1",
+        "waypoints": [
+            {
+                "index": 1,
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 0.5,
+                "yaw_rad": 0.0,
+                "duration_s": 0.5,
+                "action": "fly_to",
+            },
+            {
+                "index": 2,
+                "x_m": 0.5,
+                "y_m": 0.0,
+                "z_m": 0.5,
+                "yaw_rad": 0.0,
+                "duration_s": 1.0,
+                "action": "fly_to",
+            },
+            {
+                "index": 3,
+                "x_m": 0.5,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                "yaw_rad": 0.0,
+                "duration_s": 0.5,
+                "action": "land",
+            },
+        ],
+    }

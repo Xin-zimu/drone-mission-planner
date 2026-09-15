@@ -5,7 +5,9 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
+from .crazyswarm_adapter import SimCrazyflieAdapter
 from .execution_state import BridgeExecutionState
+from .mission_executor import MissionExecutor
 from .protocol_models import (
     BRIDGE_VERSION,
     PROTOCOL_VERSION,
@@ -23,6 +25,7 @@ class BridgeSessionState:
     selected_robot_id: str | None = None
     loaded_mission_id: str | None = None
     loaded_route_hash: str | None = None
+    loaded_mission: dict[str, Any] | None = None
     state: BridgeExecutionState = BridgeExecutionState.BRIDGE_READY
     robots: dict[str, BridgeRobot] = field(
         default_factory=lambda: {
@@ -72,7 +75,7 @@ class BridgeProtocolServer:
                     raw = await reader.readline()
                     if not raw:
                         break
-                    response = self.handle_message(decode_message(raw))
+                    response = await self.handle_message_async(decode_message(raw))
                 except BridgeMessageTooLargeError as exc:
                     response = self._error("message_too_large", str(exc))
                 except BridgeProtocolError as exc:
@@ -82,6 +85,12 @@ class BridgeProtocolServer:
         finally:
             writer.close()
             await writer.wait_closed()
+
+    async def handle_message_async(self, message: dict[str, Any]) -> dict[str, Any]:
+        request_id = _request_id(message)
+        if str(message["type"]) == "execute_mission":
+            return await self._execute_sim_async(request_id)
+        return self.handle_message(message)
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any]:
         request_id = _request_id(message)
@@ -118,11 +127,7 @@ class BridgeProtocolServer:
         if message_type == "run_preflight":
             return self._preflight(request_id)
         if message_type == "execute_mission":
-            return self._error(
-                "execution_not_implemented",
-                "CF3 bridge skeleton does not control Crazyswarm2 or motors",
-                request_id=request_id,
-            )
+            return asyncio.run(self._execute_sim_async(request_id))
         if message_type in {"abort_land", "emergency_stop"}:
             return self._error(
                 "flight_control_not_available",
@@ -132,6 +137,7 @@ class BridgeProtocolServer:
         if message_type == "clear_mission":
             self.state.loaded_mission_id = None
             self.state.loaded_route_hash = None
+            self.state.loaded_mission = None
             self.state.state = BridgeExecutionState.BRIDGE_READY
             return {"type": "mission_state", "request_id": request_id, "state": self.state.state.value}
         return self._error("unknown_message_type", f"unsupported message type {message_type}", request_id=request_id)
@@ -163,6 +169,7 @@ class BridgeProtocolServer:
             return self._error("route_hash_mismatch", "mission hash does not match request hash", request_id=request_id)
         self.state.loaded_mission_id = mission_id
         self.state.loaded_route_hash = route_hash
+        self.state.loaded_mission = mission
         self.state.state = BridgeExecutionState.MISSION_LOADED
         return {
             "type": "mission_loaded",
@@ -187,6 +194,34 @@ class BridgeProtocolServer:
             "mission_id": self.state.loaded_mission_id,
             "passed": not any(issue["blocking"] for issue in issues),
             "issues": issues,
+        }
+
+    async def _execute_sim_async(self, request_id: str | None) -> dict[str, Any]:
+        if self.state.backend != "sim":
+            return self._error(
+                "execution_not_implemented",
+                "hardware execution is not available in this bridge phase",
+                request_id=request_id,
+            )
+        if self.state.loaded_mission is None:
+            return self._error("mission_missing", "no mission is loaded", request_id=request_id)
+        adapter = SimCrazyflieAdapter(time_scale=0.0)
+        executor = MissionExecutor(adapter)
+        try:
+            result = await executor.execute(self.state.loaded_mission)
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            self.state.state = BridgeExecutionState.FAULT
+            return self._error("mission_execution_failed", str(exc), request_id=request_id)
+        self.state.state = result.final_state
+        return {
+            "type": "mission_state",
+            "request_id": request_id,
+            "mission_id": result.mission_id,
+            "state": result.final_state.value,
+            "completed_waypoints": result.completed_waypoints,
+            "command_log": list(result.command_log),
         }
 
     def _error(self, code: str, message: str, *, request_id: str | None = None) -> dict[str, Any]:
@@ -218,4 +253,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
