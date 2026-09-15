@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>dmp_crazyflie_bridge</name>
+  <version>0.1.0</version>
+  <description>Drone Mission Planner Crazyflie execution bridge skeleton.</description>
+  <maintainer email="maintainer@example.com">Drone Mission Planner</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+

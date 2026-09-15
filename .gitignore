@@ -19,3 +19,5 @@ reports/*.xml
 reports/*.json
 !reports/performance.json
 !reports/final-simulation-report.json
+crazyflies.local.yaml
+**/crazyflies.local.yaml
