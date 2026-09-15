@@ -20,3 +20,11 @@ Run the skeleton locally:
 python -m dmp_crazyflie_bridge.protocol_server
 ```
 
+Non-flight environment probe:
+
+```bash
+python scripts/probe_environment.py
+```
+
+The probe only reports local tools, Python modules and visible Crazyflie-related
+USB devices. It never enables motor commands.
