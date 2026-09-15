@@ -95,6 +95,7 @@ class MapView(QGraphicsView):
         self._uncovered_cells: dict[str, tuple[Point, ...]] = {}
         self._coverage_resolutions: dict[str, float] = {}
         self._communication_links: tuple[tuple[Point, Point], ...] = ()
+        self._actual_paths: dict[str, tuple[Point, ...]] = {}
         self._selected_id: str | None = None
         self._waypoint_highlight: tuple[str, int] | None = None
         self._basemap_pixmap: QPixmap | None = None
@@ -186,6 +187,7 @@ class MapView(QGraphicsView):
         for index, drone in enumerate(self._model.drones):
             if drone.planned_path:
                 self._add_route(drone, index)
+        self._add_actual_paths()
         for base in self._model.bases:
             self._add_base_item(base)
         for task in self._model.tasks:
@@ -219,6 +221,14 @@ class MapView(QGraphicsView):
 
     def clear_communication_links(self) -> None:
         self._communication_links = ()
+
+    def set_actual_paths(self, paths: dict[str, tuple[Point, ...]]) -> None:
+        self._actual_paths = {drone_id: tuple(points) for drone_id, points in paths.items()}
+        self.render_model()
+
+    def clear_actual_paths(self) -> None:
+        self._actual_paths.clear()
+        self.render_model()
 
     def reset_view(self) -> None:
         self.resetTransform()
@@ -1274,6 +1284,25 @@ class MapView(QGraphicsView):
             item = QGraphicsPathItem(path)
             item.setPen(QPen(QColor(85, 214, 190, 105), 1.5, Qt.PenStyle.DashLine))
             item.setZValue(-3)
+            self._scene.addItem(item)
+
+    def _add_actual_paths(self) -> None:
+        for drone_id, points in self._actual_paths.items():
+            if len(points) < 2:
+                continue
+            path = self._scene_path(list(points))
+            item = QGraphicsPathItem(path)
+            item.setPen(
+                QPen(
+                    QColor("#ffb454"),
+                    3.0,
+                    Qt.PenStyle.DashLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            item.setZValue(1)
+            item.setToolTip(f"{drone_id} actual execution path")
             self._scene.addItem(item)
 
     def _add_route(self, drone: Drone, index: int) -> None:

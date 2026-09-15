@@ -34,6 +34,26 @@ def test_main_window_renders_project(qtbot: object) -> None:
     assert window.isVisible()
     assert window.object_tree.topLevelItemCount() == 6
     assert len(window.map_view.scene().items()) >= 8
+    assert window.execution_panel.execute_button.text() == "EXECUTE"
+
+
+def test_map_view_renders_actual_execution_path(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    drone = service.add_drone(Point(40.0, 20.0))
+    drone.waypoints = waypoints_from_path([drone.position, Point(120.0, 60.0)], default_altitude=0.5)
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+    before = len(window.map_view.scene().items())
+
+    window.map_view.set_actual_paths({drone.id: (Point(40.0, 20.0), Point(80.0, 45.0))})
+
+    assert len(window.map_view.scene().items()) > before
+    assert any(
+        item.toolTip() == f"{drone.id} actual execution path"
+        for item in window.map_view.scene().items()
+    )
 
 
 def test_coordinate_conversion_is_stable(qtbot: object) -> None:

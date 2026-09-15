@@ -113,6 +113,7 @@ from drone_mission_planner.simulation.reporting import build_simulation_report, 
 from drone_mission_planner.ui.schedule_view import ScheduleView
 
 from .environment_panel import EnvironmentPanel
+from .execution_panel import ExecutionPanel
 from .map_view import MapView, RenderMode, ToolMode
 from .property_panel import PropertyPanel
 from .scene3d_export import build_scene3d
@@ -485,6 +486,17 @@ class MainWindow(QMainWindow):
         properties_dock.setWidget(self.property_panel)
         properties_dock.setMinimumWidth(330)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, properties_dock)
+
+        self.execution_panel = ExecutionPanel()
+        execution_dock = QDockWidget("Execution", self)
+        execution_dock.setObjectName("ExecutionDock")
+        execution_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        execution_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        execution_dock.setWidget(self.execution_panel)
+        execution_dock.setMinimumWidth(330)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, execution_dock)
+        self.tabifyDockWidget(properties_dock, execution_dock)
+        properties_dock.raise_()
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
