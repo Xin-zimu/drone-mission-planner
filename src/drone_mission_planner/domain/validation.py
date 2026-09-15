@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import ceil, isfinite
 
 from .geometry import Point, Rect
+from .georeference import EnuCoordinate
 from .models import ProjectModel
 from .terrain import TerrainModel
 
@@ -52,6 +53,8 @@ def validate_project(project: ProjectModel) -> None:
         issues.append("wind speed cannot be negative")
     if not isfinite(model.wind.gust_factor) or not 0 <= model.wind.gust_factor <= 1:
         issues.append("wind gust factor must be between 0 and 1")
+    _georeference_constraints(project, issues)
+    _data_sources(project, issues)
 
     ids = [item.id for item in model.objects()]
     if len(ids) != len(set(ids)):
@@ -218,15 +221,24 @@ def _terrain_grid(terrain: TerrainModel, issues: list[str]) -> None:
         issues.append("terrain grid height must match altitude rows")
         return
     values: list[float] = []
+    valid_mask = terrain.grid_valid_mask
+    if valid_mask and len(valid_mask) != terrain.grid_height:
+        issues.append("terrain grid valid mask height must match altitude rows")
+        return
     for row_index, row in enumerate(terrain.grid_altitudes, start=1):
         if len(row) != terrain.grid_width:
             issues.append(f"terrain grid row {row_index} width must match grid width")
-        for value in row:
+        if valid_mask and len(valid_mask[row_index - 1]) != terrain.grid_width:
+            issues.append(f"terrain grid valid mask row {row_index} width must match grid width")
+            continue
+        for column_index, value in enumerate(row):
             if not isfinite(value):
                 issues.append(f"terrain grid row {row_index} altitude values must be finite")
                 continue
-            values.append(value)
+            if not valid_mask or valid_mask[row_index - 1][column_index]:
+                values.append(value)
     if not values:
+        issues.append("terrain grid must contain at least one valid altitude sample")
         return
     actual_min = min(values)
     actual_max = max(values)
@@ -236,3 +248,52 @@ def _terrain_grid(terrain: TerrainModel, issues: list[str]) -> None:
         or abs(actual_max - terrain.max_altitude) > tolerance
     ):
         issues.append("terrain grid altitude range must match grid samples")
+
+
+def _georeference_constraints(project: ProjectModel, issues: list[str]) -> None:
+    georeference = project.georeference
+    coordinates = tuple(EnuCoordinate(point.x, point.y) for point in _project_points(project))
+    violations = georeference.spatial_violations(coordinates)
+    for violation in violations[:8]:
+        issues.append(f"georeference {violation.code}: {violation.message}")
+    if len(violations) > 8:
+        issues.append(f"georeference constraints have {len(violations) - 8} more violation(s)")
+
+
+def _project_points(project: ProjectModel) -> list[Point]:
+    model = project.map
+    points: list[Point] = []
+    if model.terrain.grid_origin is not None:
+        points.append(model.terrain.grid_origin)
+    points.extend(peak.center for peak in model.terrain.peaks)
+    points.extend(base.position for base in model.bases)
+    points.extend(drone.position for drone in model.drones)
+    points.extend(waypoint.point for drone in model.drones for waypoint in drone.waypoints)
+    points.extend(task.position for task in model.tasks)
+    for obstacle in model.obstacles:
+        points.extend(_rect_corners(obstacle.bounds))
+        points.extend(obstacle.points)
+    for zone in model.no_fly_zones:
+        points.extend(_rect_corners(zone.bounds))
+        points.extend(zone.points)
+    for area in model.search_areas:
+        points.extend(_rect_corners(area.bounds))
+        points.extend(area.points)
+        points.extend(point for hole in area.holes for point in hole)
+    return points
+
+
+def _data_sources(project: ProjectModel, issues: list[str]) -> None:
+    ids = [source.id for source in project.data_sources]
+    if len(ids) != len(set(ids)):
+        issues.append("data source IDs must be unique")
+
+
+def _rect_corners(rect: Rect) -> list[Point]:
+    bounds = rect.normalized
+    return [
+        Point(bounds.x, bounds.y),
+        Point(bounds.x + bounds.width, bounds.y),
+        Point(bounds.x + bounds.width, bounds.y + bounds.height),
+        Point(bounds.x, bounds.y + bounds.height),
+    ]

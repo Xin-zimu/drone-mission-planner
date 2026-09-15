@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from drone_mission_planner.domain.data_source import (
+    DataSourceKind,
+    DataSourceMetadata,
+    DataSourceValidationStatus,
+)
 from drone_mission_planner.domain.enums import WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.georeference import (
+    GeoCoordinate,
+    GeoreferenceValidationStatus,
+    HeightDatum,
+    HeightReference,
+    ProjectGeoreference,
+)
 from drone_mission_planner.domain.models import (
     BaseStation,
     Drone,
@@ -17,11 +30,14 @@ from drone_mission_planner.domain.models import (
 from drone_mission_planner.domain.terrain import TerrainPeak, generate_mountain_terrain
 from drone_mission_planner.domain.waypoint import Waypoint
 from drone_mission_planner.persistence.route_export import (
+    PX4_QGC_MULTIROTOR_PROFILE,
     RouteExportError,
     export_route_csv,
     export_route_json,
+    export_route_package,
     export_route_qgc_plan,
     export_route_wpl,
+    validate_route_export,
 )
 
 
@@ -45,7 +61,7 @@ def _export_model() -> tuple[MapModel, Drone]:
         remaining_battery=500.0,
         communication_range=1000.0,
         waypoints=[
-            Waypoint(40.0, 40.0, altitude=60.0, speed=8.0),
+            Waypoint(40.0, 40.0, altitude=60.0),
             Waypoint(
                 250.0,
                 200.0,
@@ -111,6 +127,56 @@ def test_qgc_plan_uses_mavlink_commands_and_marks_not_flyable(tmp_path: Path) ->
     assert items[1]["params"][6] == pytest.approx(120.0)
 
 
+def test_qgc_plan_uses_real_coordinates_when_georeference_is_ready(tmp_path: Path) -> None:
+    model, drone = _export_model()
+    georeference = ProjectGeoreference.georeferenced(
+        origin=GeoCoordinate(31.2304, 121.4737, 10.0),
+        height_reference=HeightReference(HeightDatum.ELLIPSOID, source="rtk"),
+        validation_status=GeoreferenceValidationStatus.VALIDATED,
+    )
+
+    saved = export_route_qgc_plan(model, drone, tmp_path / "route.plan", georeference=georeference)
+    document = json.loads(saved.read_text(encoding="utf-8"))
+
+    assert document["flyable"] is True
+    assert document["coordinateReference"] == "wgs84_geographic_3d:ellipsoid"
+    items = document["mission"]["items"]
+    assert items[0]["params"][4] == pytest.approx(31.2307607671, abs=1e-7)
+    assert items[0]["params"][5] == pytest.approx(121.4741197846, abs=1e-7)
+    assert document["validationReport"]["passed"] is True
+    assert document["targetProfile"]["id"] == PX4_QGC_MULTIROTOR_PROFILE.id
+
+
+def test_real_coordinate_export_rejects_unknown_height_when_required(tmp_path: Path) -> None:
+    model, drone = _export_model()
+    georeference = ProjectGeoreference.georeferenced(
+        origin=GeoCoordinate(31.2304, 121.4737, 10.0),
+        height_reference=HeightReference(),
+    )
+
+    with pytest.raises(RouteExportError, match="height datum is unknown"):
+        export_route_qgc_plan(
+            model,
+            drone,
+            tmp_path / "route.plan",
+            georeference=georeference,
+            require_real_coordinates=True,
+        )
+
+
+def test_real_coordinate_export_rejects_local_only_projects_when_required(tmp_path: Path) -> None:
+    model, drone = _export_model()
+
+    with pytest.raises(RouteExportError, match="local-only"):
+        export_route_wpl(
+            model,
+            drone,
+            tmp_path / "route.waypoints",
+            georeference=ProjectGeoreference.local_only(),
+            require_real_coordinates=True,
+        )
+
+
 def test_wpl_export_starts_with_header_and_command_rows(tmp_path: Path) -> None:
     model, drone = _export_model()
 
@@ -156,3 +222,96 @@ def test_export_rejects_insufficient_battery(tmp_path: Path) -> None:
 
     with pytest.raises(RouteExportError, match="battery"):
         export_route_json(model, drone, tmp_path / "route.json")
+
+
+def test_validation_report_blocks_unsupported_target_action() -> None:
+    model, drone = _export_model()
+    drone.waypoints[1].action = WaypointAction.SCAN
+    report = validate_route_export(
+        model,
+        drone,
+        georeference=_ready_georeference(),
+        require_real_coordinates=True,
+    )
+
+    assert not report.passed
+    assert any(issue.code == "unsupported_action" for issue in report.issues)
+
+
+def test_real_qgc_export_rejects_unsupported_speed_command(tmp_path: Path) -> None:
+    model, drone = _export_model()
+    drone.waypoints[0].speed = 7.0
+    profile = replace(PX4_QGC_MULTIROTOR_PROFILE, supports_per_waypoint_speed=False)
+
+    with pytest.raises(RouteExportError, match="speed-command"):
+        export_route_qgc_plan(
+            model,
+            drone,
+            tmp_path / "route.plan",
+            georeference=_ready_georeference(),
+            profile=profile,
+            require_real_coordinates=True,
+        )
+
+
+def test_real_qgc_export_rejects_unenforceable_schedule_constraints(tmp_path: Path) -> None:
+    model, drone = _export_model()
+    task = model.tasks[0]
+    task.earliest_start = 60.0
+    task.predecessor_ids = ["T-00"]
+
+    with pytest.raises(RouteExportError, match="time windows"):
+        export_route_qgc_plan(
+            model,
+            drone,
+            tmp_path / "route.plan",
+            georeference=_ready_georeference(),
+            require_real_coordinates=True,
+        )
+
+
+def test_real_qgc_export_rejects_missing_dem_resource(tmp_path: Path) -> None:
+    model, drone = _export_model()
+    model.terrain.source_data_id = "geotiff_dem:missing"
+    source = DataSourceMetadata(
+        id="geotiff_dem:missing",
+        kind=DataSourceKind.GEOTIFF_DEM,
+        source_path=str(tmp_path / "missing.tif"),
+        validation_status=DataSourceValidationStatus.VALIDATED,
+    )
+
+    with pytest.raises(RouteExportError, match="terrain source file is missing"):
+        export_route_qgc_plan(
+            model,
+            drone,
+            tmp_path / "route.plan",
+            georeference=_ready_georeference(),
+            data_sources=[source],
+            require_real_coordinates=True,
+        )
+
+
+def test_route_package_writes_manifest_and_hashes(tmp_path: Path) -> None:
+    model, drone = _export_model()
+
+    manifest_path = export_route_package(
+        model,
+        [drone],
+        tmp_path / "pkg",
+        georeference=_ready_georeference(),
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["package_passed"] is True
+    assert manifest["target_profile"]["id"] == PX4_QGC_MULTIROTOR_PROFILE.id
+    assert manifest["files"][0]["path"] == "D-01.plan"
+    assert manifest["files"][0]["sha256"]
+    assert manifest["validation_reports"][0]["passed"] is True
+
+
+def _ready_georeference() -> ProjectGeoreference:
+    return ProjectGeoreference.georeferenced(
+        origin=GeoCoordinate(31.2304, 121.4737, 10.0),
+        height_reference=HeightReference(HeightDatum.ELLIPSOID, source="rtk"),
+        validation_status=GeoreferenceValidationStatus.VALIDATED,
+    )

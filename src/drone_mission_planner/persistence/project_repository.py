@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from drone_mission_planner.domain.basemap import BasemapModel
+from drone_mission_planner.domain.data_source import (
+    DataSourceKind,
+    DataSourceMetadata,
+    DataSourceValidationStatus,
+    SourceBounds,
+)
 from drone_mission_planner.domain.enums import (
     AltitudeMode,
     DeadlinePolicy,
@@ -18,6 +24,19 @@ from drone_mission_planner.domain.enums import (
     WaypointAction,
 )
 from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.georeference import (
+    CalibrationControlPoint,
+    EnuCoordinate,
+    GeoCoordinate,
+    Geofence,
+    GeofenceKind,
+    GeoreferenceValidationStatus,
+    HeightDatum,
+    HeightReference,
+    ProjectGeoreference,
+    ProjectGeoreferenceMode,
+    SpatialBounds,
+)
 from drone_mission_planner.domain.models import (
     BaseStation,
     Drone,
@@ -55,6 +74,8 @@ def _json_ready(value: Any) -> Any:
         return {key: _json_ready(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_json_ready(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_ready(item) for item in value]
     return value
 
 
@@ -76,6 +97,204 @@ def _wind(data: Any) -> WindModel:
         speed=speed,
         gust_factor=float(data.get("gust_factor", 0.0)),
         enabled=bool(data.get("enabled", speed > 0.0)),
+    )
+
+
+def _georeference(data: Any) -> ProjectGeoreference:
+    if not isinstance(data, dict):
+        return ProjectGeoreference.local_only()
+
+    origin_data = data.get("origin")
+    origin = (
+        GeoCoordinate(
+            latitude_deg=float(origin_data["latitude_deg"]),
+            longitude_deg=float(origin_data["longitude_deg"]),
+            height_m=float(origin_data.get("height_m", 0.0)),
+        )
+        if isinstance(origin_data, dict)
+        else None
+    )
+    height_data = data.get("height_reference")
+    height_reference = (
+        HeightReference(
+            datum=HeightDatum(height_data.get("datum", HeightDatum.UNKNOWN)),
+            source=str(height_data.get("source", "")),
+            geoid_model=(
+                str(height_data["geoid_model"])
+                if height_data.get("geoid_model") is not None
+                else None
+            ),
+            home_altitude_m=(
+                float(height_data["home_altitude_m"])
+                if height_data.get("home_altitude_m") is not None
+                else None
+            ),
+        )
+        if isinstance(height_data, dict)
+        else HeightReference()
+    )
+    bounds_data = data.get("spatial_bounds")
+    spatial_bounds = (
+        SpatialBounds(
+            min_east_m=float(bounds_data["min_east_m"]),
+            min_north_m=float(bounds_data["min_north_m"]),
+            max_east_m=float(bounds_data["max_east_m"]),
+            max_north_m=float(bounds_data["max_north_m"]),
+            min_up_m=(
+                float(bounds_data["min_up_m"])
+                if bounds_data.get("min_up_m") is not None
+                else None
+            ),
+            max_up_m=(
+                float(bounds_data["max_up_m"])
+                if bounds_data.get("max_up_m") is not None
+                else None
+            ),
+        )
+        if isinstance(bounds_data, dict)
+        else None
+    )
+    return ProjectGeoreference(
+        mode=ProjectGeoreferenceMode(data.get("mode", ProjectGeoreferenceMode.LOCAL_ONLY)),
+        origin=origin,
+        horizontal_crs=str(data.get("horizontal_crs", "EPSG:4326")),
+        height_reference=height_reference,
+        valid_radius_m=(
+            float(data["valid_radius_m"]) if data.get("valid_radius_m") is not None else None
+        ),
+        control_points=tuple(
+            _control_point(item)
+            for item in data.get("control_points", [])
+            if isinstance(item, dict)
+        ),
+        spatial_bounds=spatial_bounds,
+        geofences=tuple(
+            _geofence(item) for item in data.get("geofences", []) if isinstance(item, dict)
+        ),
+        validation_status=GeoreferenceValidationStatus(
+            data.get("validation_status", GeoreferenceValidationStatus.UNKNOWN)
+        ),
+        revision=str(data.get("revision", "0")),
+    )
+
+
+def _data_source(data: dict[str, Any]) -> DataSourceMetadata:
+    bounds_data = data.get("source_bounds")
+    local_bounds_data = data.get("local_bounds")
+    height_data = data.get("height_reference")
+    height_reference = (
+        HeightReference(
+            datum=HeightDatum(height_data.get("datum", HeightDatum.UNKNOWN)),
+            source=str(height_data.get("source", "")),
+            geoid_model=(
+                str(height_data["geoid_model"])
+                if height_data.get("geoid_model") is not None
+                else None
+            ),
+            home_altitude_m=(
+                float(height_data["home_altitude_m"])
+                if height_data.get("home_altitude_m") is not None
+                else None
+            ),
+        )
+        if isinstance(height_data, dict)
+        else HeightReference()
+    )
+    return DataSourceMetadata(
+        id=str(data["id"]),
+        kind=DataSourceKind(data["kind"]),
+        source_path=str(data["source_path"]),
+        source_crs=str(data.get("source_crs", "unknown")),
+        source_bounds=(
+            SourceBounds(
+                min_x=float(bounds_data["min_x"]),
+                min_y=float(bounds_data["min_y"]),
+                max_x=float(bounds_data["max_x"]),
+                max_y=float(bounds_data["max_y"]),
+                min_z=float(bounds_data["min_z"]) if bounds_data.get("min_z") is not None else None,
+                max_z=float(bounds_data["max_z"]) if bounds_data.get("max_z") is not None else None,
+            )
+            if isinstance(bounds_data, dict)
+            else None
+        ),
+        local_bounds=(
+            SpatialBounds(
+                min_east_m=float(local_bounds_data["min_east_m"]),
+                min_north_m=float(local_bounds_data["min_north_m"]),
+                max_east_m=float(local_bounds_data["max_east_m"]),
+                max_north_m=float(local_bounds_data["max_north_m"]),
+                min_up_m=(
+                    float(local_bounds_data["min_up_m"])
+                    if local_bounds_data.get("min_up_m") is not None
+                    else None
+                ),
+                max_up_m=(
+                    float(local_bounds_data["max_up_m"])
+                    if local_bounds_data.get("max_up_m") is not None
+                    else None
+                ),
+            )
+            if isinstance(local_bounds_data, dict)
+            else None
+        ),
+        horizontal_units=str(data.get("horizontal_units", "unknown")),
+        vertical_units=str(data.get("vertical_units", "unknown")),
+        horizontal_accuracy_m=_optional_float(data.get("horizontal_accuracy_m")),
+        vertical_accuracy_m=_optional_float(data.get("vertical_accuracy_m")),
+        native_resolution_x=_optional_float(data.get("native_resolution_x")),
+        native_resolution_y=_optional_float(data.get("native_resolution_y")),
+        resolution_x_m=_optional_float(data.get("resolution_x_m")),
+        resolution_y_m=_optional_float(data.get("resolution_y_m")),
+        height_reference=height_reference,
+        object_count=int(data.get("object_count", 0)),
+        elevation_min_m=_optional_float(data.get("elevation_min_m")),
+        elevation_max_m=_optional_float(data.get("elevation_max_m")),
+        sha256=str(data.get("sha256", "")),
+        revision=str(data.get("revision", "")),
+        validation_status=DataSourceValidationStatus(
+            data.get("validation_status", DataSourceValidationStatus.PREVIEWED)
+        ),
+        warnings=tuple(str(warning) for warning in data.get("warnings", [])),
+    )
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _enu(data: dict[str, Any]) -> EnuCoordinate:
+    return EnuCoordinate(
+        east_m=float(data["east_m"]),
+        north_m=float(data["north_m"]),
+        up_m=float(data.get("up_m", 0.0)),
+    )
+
+
+def _control_point(data: dict[str, Any]) -> CalibrationControlPoint:
+    observed_data = data["observed"]
+    return CalibrationControlPoint(
+        id=str(data["id"]),
+        name=str(data.get("name", data["id"])),
+        local=_enu(data["local"]),
+        observed=GeoCoordinate(
+            latitude_deg=float(observed_data["latitude_deg"]),
+            longitude_deg=float(observed_data["longitude_deg"]),
+            height_m=float(observed_data.get("height_m", 0.0)),
+        ),
+    )
+
+
+def _geofence(data: dict[str, Any]) -> Geofence:
+    center_data = data.get("center")
+    return Geofence(
+        id=str(data["id"]),
+        name=str(data.get("name", data["id"])),
+        kind=GeofenceKind(data.get("kind", GeofenceKind.INCLUSION)),
+        polygon=tuple(_point(point) for point in data.get("polygon", []) if isinstance(point, dict)),
+        center=_point(center_data) if isinstance(center_data, dict) else None,
+        radius_m=float(data["radius_m"]) if data.get("radius_m") is not None else None,
+        floor_m=float(data["floor_m"]) if data.get("floor_m") is not None else None,
+        ceiling_m=float(data["ceiling_m"]) if data.get("ceiling_m") is not None else None,
     )
 
 
@@ -301,6 +520,12 @@ class ProjectRepository:
             name=str(raw.get("name", "Untitled mission")),
             version=CURRENT_VERSION,
             equipment=decode_equipment(raw.get("equipment")),
+            georeference=_georeference(raw.get("georeference")),
+            data_sources=[
+                _data_source(item)
+                for item in raw.get("data_sources", [])
+                if isinstance(item, dict)
+            ],
             map=map_model,
             planning_settings=dict(raw.get("planning_settings", {})),
             simulation_settings=dict(raw.get("simulation_settings", {})),

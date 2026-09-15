@@ -388,7 +388,7 @@ def greedy_routes(problem: AssignmentProblem) -> tuple[tuple[str, tuple[str, ...
 class ORToolsAssignmentSolver:
     """Heterogeneous VRPTW over the directed cost matrix (plan §11.2/§11.5)."""
 
-    supported_constraints = SUPPORTED_CONSTRAINTS
+    supported_constraints: tuple[str, ...] = SUPPORTED_CONSTRAINTS
 
     def solve(
         self,
@@ -634,6 +634,22 @@ def solve_with_baseline(
     never replaces the baseline (plan §11.9).
     """
 
+    chosen, kept_baseline, _optimised = solve_with_baseline_details(
+        problem,
+        solver=solver,
+        cancel=cancel,
+    )
+    return chosen, kept_baseline
+
+
+def solve_with_baseline_details(
+    problem: AssignmentProblem,
+    *,
+    solver: AssignmentSolver | None = None,
+    cancel: Callable[[], bool] | None = None,
+) -> tuple[AssignmentOutcome, bool, AssignmentOutcome]:
+    """Return the chosen plan plus the optimizer outcome that caused any fallback."""
+
     active = solver or ORToolsAssignmentSolver()
     baseline = evaluate_routes(problem, greedy_routes(problem))
     optimised = verify_outcome(problem, active.solve(problem, cancel=cancel))
@@ -642,8 +658,8 @@ def solve_with_baseline(
         and baseline.status is SolverStatus.FEASIBLE
         and optimised.makespan < baseline.makespan - 1e-9
     ):
-        return optimised, False
-    return baseline, True
+        return optimised, False, optimised
+    return baseline, True, optimised
 
 
 def _dependency_cycle(tasks: Sequence[SolverTask]) -> tuple[str, ...]:

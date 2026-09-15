@@ -7,7 +7,7 @@ from .altitude_validator import (
     validate_altitude_path,
     validate_model_altitudes,
 )
-from .assignment import AssignmentResult, GreedyAssignmentPlanner
+from .assignment import AssignmentResult, GreedyAssignmentPlanner, OptimizedAssignmentPlanner
 from .astar import AStarPlanner
 from .collision import ConflictDetector, MotionState, PredictedConflict
 from .coverage import CoveragePlanner, CoveragePlanResult, CoverageStrip
@@ -28,6 +28,7 @@ __all__ = [
     "GreedyAssignmentPlanner",
     "GridMap",
     "MotionState",
+    "OptimizedAssignmentPlanner",
     "PathResult",
     "PredictedConflict",
     "RoutePlanner",

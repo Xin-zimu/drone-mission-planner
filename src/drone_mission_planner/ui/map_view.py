@@ -88,7 +88,7 @@ class MapView(QGraphicsView):
         self._space_down = False
         self._panning = False
         self._pan_start = QPoint()
-        self._drag_origin: QPointF | None = None
+        self._drag_origin: Point | None = None
         self._preview: QGraphicsRectItem | None = None
         self._coverage_progress: dict[str, float] = {}
         self._coverage_cells: dict[str, tuple[tuple[Point, int], ...]] = {}
@@ -230,7 +230,7 @@ class MapView(QGraphicsView):
     def world_to_scene(self, point: Point) -> QPointF:
         if self._render_mode == RenderMode.TERRAIN_25D:
             return self._project(point, self._terrain_altitude(point))
-        return QPointF(point.x, point.y)
+        return QPointF(point.x, self._model.height - point.y)
 
     def scene_to_world(self, point: QPointF) -> Point:
         if self._render_mode == RenderMode.TERRAIN_25D:
@@ -239,10 +239,23 @@ class MapView(QGraphicsView):
             x_plus_y = sy / ISO_SIN
             x_minus_y = sx / ISO_COS
             return Point((x_plus_y + x_minus_y) / 2.0, (x_plus_y - x_minus_y) / 2.0)
-        return Point(point.x(), point.y())
+        return Point(point.x(), self._model.height - point.y())
 
     def screen_to_world(self, point: QPoint) -> Point:
         return self.scene_to_world(self.mapToScene(point))
+
+    def _scene_rect(self, rect: Rect) -> QRectF:
+        bounds = rect.normalized
+        top_left = self.world_to_scene(Point(bounds.x, bounds.y + bounds.height))
+        return QRectF(top_left.x(), top_left.y(), bounds.width, bounds.height)
+
+    def _scene_path(self, points: list[Point]) -> QPainterPath:
+        if not points:
+            return QPainterPath()
+        path = QPainterPath(self.world_to_scene(points[0]))
+        for point in points[1:]:
+            path.lineTo(self.world_to_scene(point))
+        return path
 
     def drawBackground(self, painter: QPainter, rect: QRectF | QRect) -> None:
         view_rect = QRectF(rect)
@@ -310,9 +323,9 @@ class MapView(QGraphicsView):
                 event.accept()
                 return
             if self._mode in {ToolMode.OBSTACLE, ToolMode.NO_FLY, ToolMode.SEARCH_AREA}:
-                self._drag_origin = QPointF(world.x, world.y)
+                self._drag_origin = world
                 self._preview = self._scene.addRect(
-                    QRectF(self._drag_origin, self._drag_origin),
+                    QRectF(self.world_to_scene(world), self.world_to_scene(world)),
                     QPen(QColor("#ffb54d"), 2, Qt.PenStyle.DashLine),
                     QBrush(QColor(255, 181, 77, 45)),
                 )
@@ -339,7 +352,13 @@ class MapView(QGraphicsView):
             event.accept()
             return
         if self._drag_origin is not None and self._preview is not None:
-            self._preview.setRect(QRectF(self._drag_origin, QPointF(world.x, world.y)).normalized())
+            rect = Rect(
+                min(self._drag_origin.x, world.x),
+                min(self._drag_origin.y, world.y),
+                abs(world.x - self._drag_origin.x),
+                abs(world.y - self._drag_origin.y),
+            )
+            self._preview.setRect(self._scene_rect(rect))
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -354,14 +373,19 @@ class MapView(QGraphicsView):
             return
         if self._drag_origin is not None and event.button() == Qt.MouseButton.LeftButton:
             world = self.screen_to_world(event.position().toPoint())
-            rect = QRectF(self._drag_origin, QPointF(world.x, world.y)).normalized()
+            rect = Rect(
+                min(self._drag_origin.x, world.x),
+                min(self._drag_origin.y, world.y),
+                abs(world.x - self._drag_origin.x),
+                abs(world.y - self._drag_origin.y),
+            )
             if self._preview is not None:
                 self._scene.removeItem(self._preview)
             self._preview = None
             self._drag_origin = None
-            if rect.width() >= 5 and rect.height() >= 5:
+            if rect.width >= 5 and rect.height >= 5:
                 self.create_rect_requested.emit(
-                    self._mode.value, rect.x(), rect.y(), rect.width(), rect.height()
+                    self._mode.value, rect.x, rect.y, rect.width, rect.height
                 )
             event.accept()
             return
@@ -416,7 +440,10 @@ class MapView(QGraphicsView):
         transform.rotate(basemap.rotation_deg)
         scale_y = -basemap.meters_per_pixel if basemap.flip_y else basemap.meters_per_pixel
         transform.scale(basemap.meters_per_pixel, scale_y)
-        item.setTransform(transform)
+        world_to_scene = QTransform()
+        world_to_scene.translate(0.0, self._model.height)
+        world_to_scene.scale(1.0, -1.0)
+        item.setTransform(transform * world_to_scene)
         item.setOpacity(max(0.05, min(1.0, basemap.opacity)))
         item.setZValue(-100)
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not basemap.locked)
@@ -427,9 +454,10 @@ class MapView(QGraphicsView):
             return
         point, _altitude = highlighted
         radius = 9.0
+        center = self.world_to_scene(point)
         item = self._scene.addEllipse(
-            point.x - radius,
-            point.y - radius,
+            center.x() - radius,
+            center.y() - radius,
             radius * 2.0,
             radius * 2.0,
             QPen(QColor("#f9ca5b"), 2.2),
@@ -912,8 +940,7 @@ class MapView(QGraphicsView):
                 path.lineTo(self._project(end, self._flight_altitude(drone, end)))
                 z_value = 9.0
             else:
-                path = QPainterPath(QPointF(start.x, start.y))
-                path.lineTo(end.x, end.y)
+                path = self._scene_path([start, end])
                 z_value = 2.0
             item = QGraphicsPathItem(path)
             item.setPen(
@@ -1072,8 +1099,9 @@ class MapView(QGraphicsView):
         self._scene.addItem(label)
 
     def _add_base_item(self, base: BaseStation) -> None:
+        center = self.world_to_scene(base.position)
         ring = QGraphicsEllipseItem(-16, -16, 32, 32)
-        ring.setPos(base.position.x, base.position.y)
+        ring.setPos(center)
         ring.setPen(
             QPen(
                 QColor("#ffffff") if self._is_selected(base.id) else QColor("#55d6be"),
@@ -1086,9 +1114,10 @@ class MapView(QGraphicsView):
         inner = QGraphicsRectItem(-6, -6, 12, 12, ring)
         inner.setPen(QPen(QColor("#a7fff0"), 1.5))
         inner.setBrush(QColor("#46bba6"))
-        self._add_label(base.id, base.position.x + 19, base.position.y - 11, "#86efdc")
+        self._add_label(base.id, center.x() + 19, center.y() - 11, "#86efdc")
 
     def _add_drone_item(self, drone: Drone) -> None:
+        center = self.world_to_scene(drone.position)
         path = QPainterPath()
         path.moveTo(0, -13)
         path.lineTo(11, 10)
@@ -1096,7 +1125,7 @@ class MapView(QGraphicsView):
         path.lineTo(-11, 10)
         path.closeSubpath()
         item = QGraphicsPathItem(path)
-        item.setPos(drone.position.x, drone.position.y)
+        item.setPos(center)
         failed = drone.status.value in {"failed", "emergency"}
         item.setPen(
             QPen(
@@ -1115,14 +1144,15 @@ class MapView(QGraphicsView):
         label = f"{drone.id}  FAILED" if failed else drone.id
         self._add_label(
             label,
-            drone.position.x + 16,
-            drone.position.y - 12,
+            center.x() + 16,
+            center.y() - 12,
             "#ff9aa6" if failed else "#a9c5ff",
         )
 
     def _add_task_item(self, task: MissionTask) -> None:
+        center = self.world_to_scene(task.position)
         outer = QGraphicsEllipseItem(-10, -10, 20, 20)
-        outer.setPos(task.position.x, task.position.y)
+        outer.setPos(center)
         outer.setPen(
             QPen(
                 QColor("#ffffff") if self._is_selected(task.id) else QColor("#f9ca5b"),
@@ -1135,11 +1165,11 @@ class MapView(QGraphicsView):
         dot = QGraphicsEllipseItem(-3, -3, 6, 6, outer)
         dot.setPen(Qt.PenStyle.NoPen)
         dot.setBrush(QColor("#ffe396"))
-        self._add_label(task.id, task.position.x + 13, task.position.y - 11, "#ffe396")
+        self._add_label(task.id, center.x() + 13, center.y() - 11, "#ffe396")
 
     def _add_obstacle_item(self, obstacle: Obstacle) -> None:
         bounds = obstacle.bounds.normalized
-        item = QGraphicsRectItem(bounds.x, bounds.y, bounds.width, bounds.height)
+        item = QGraphicsRectItem(self._scene_rect(bounds))
         item.setPen(
             QPen(
                 QColor("#ffffff") if self._is_selected(obstacle.id) else QColor("#ef6a79"),
@@ -1149,11 +1179,12 @@ class MapView(QGraphicsView):
         item.setBrush(QColor(134, 40, 55, 150))
         self._tag(item, obstacle.id)
         self._scene.addItem(item)
-        self._add_label(obstacle.id, bounds.x + 6, bounds.y + 5, "#ff9aa6")
+        label = self.world_to_scene(Point(bounds.x, bounds.y + bounds.height))
+        self._add_label(obstacle.id, label.x() + 6, label.y() + 5, "#ff9aa6")
 
     def _add_no_fly_item(self, zone: NoFlyZone) -> None:
         bounds = zone.bounds.normalized
-        item = QGraphicsRectItem(bounds.x, bounds.y, bounds.width, bounds.height)
+        item = QGraphicsRectItem(self._scene_rect(bounds))
         item.setPen(
             QPen(
                 QColor("#ffffff") if self._is_selected(zone.id) else QColor("#c77dff"),
@@ -1164,15 +1195,14 @@ class MapView(QGraphicsView):
         item.setBrush(QColor(100, 45, 135, 100))
         self._tag(item, zone.id)
         self._scene.addItem(item)
-        self._add_label(zone.id, bounds.x + 6, bounds.y + 5, "#dda8ff")
+        label = self.world_to_scene(Point(bounds.x, bounds.y + bounds.height))
+        self._add_label(zone.id, label.x() + 6, label.y() + 5, "#dda8ff")
 
     def _add_search_area_item(self, area: SearchArea) -> None:
         polygon = area.polygon()
         if not polygon:
             return
-        path = QPainterPath(QPointF(polygon[0].x, polygon[0].y))
-        for point in polygon[1:]:
-            path.lineTo(point.x, point.y)
+        path = self._scene_path(polygon)
         path.closeSubpath()
         item = QGraphicsPathItem(path)
         item.setPen(
@@ -1187,11 +1217,12 @@ class MapView(QGraphicsView):
         self._tag(item, area.id)
         self._scene.addItem(item)
         anchor = min(polygon, key=lambda point: (point.y, point.x))
+        anchor_scene = self.world_to_scene(anchor)
         progress = self._coverage_progress.get(area.id, 0.0)
         self._add_label(
             f"{area.id}  •  {progress:.1%} covered",
-            anchor.x + 7,
-            anchor.y + 7,
+            anchor_scene.x() + 7,
+            anchor_scene.y() + 7,
             "#78f1e5",
         )
 
@@ -1202,9 +1233,10 @@ class MapView(QGraphicsView):
                 continue
             size = resolution * 0.55
             for center in uncovered_centers:
+                scene_center = self.world_to_scene(center)
                 item = QGraphicsRectItem(
-                    center.x - size / 2,
-                    center.y - size / 2,
+                    scene_center.x() - size / 2,
+                    scene_center.y() - size / 2,
                     size,
                     size,
                 )
@@ -1220,9 +1252,10 @@ class MapView(QGraphicsView):
                 continue
             size = resolution * 0.82
             for center, visit_count in visited_cells:
+                scene_center = self.world_to_scene(center)
                 item = QGraphicsRectItem(
-                    center.x - size / 2,
-                    center.y - size / 2,
+                    scene_center.x() - size / 2,
+                    scene_center.y() - size / 2,
                     size,
                     size,
                 )
@@ -1237,8 +1270,7 @@ class MapView(QGraphicsView):
 
     def _add_communication_links(self) -> None:
         for start, end in self._communication_links:
-            path = QPainterPath(QPointF(start.x, start.y))
-            path.lineTo(end.x, end.y)
+            path = self._scene_path([start, end])
             item = QGraphicsPathItem(path)
             item.setPen(QPen(QColor(85, 214, 190, 105), 1.5, Qt.PenStyle.DashLine))
             item.setZValue(-3)
@@ -1250,9 +1282,7 @@ class MapView(QGraphicsView):
         colors = ["#4d8df7", "#55d6be", "#f9ca5b", "#c77dff", "#ff7a90"]
         selected = self._route_selected(drone)
         risks = self._route_risks(drone)
-        route = QPainterPath(QPointF(drone.planned_path[0].x, drone.planned_path[0].y))
-        for point in drone.planned_path[1:]:
-            route.lineTo(point.x, point.y)
+        route = self._scene_path(drone.planned_path)
         halo = QGraphicsPathItem(route)
         halo.setPen(
             QPen(

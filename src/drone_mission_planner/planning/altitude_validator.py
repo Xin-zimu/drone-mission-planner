@@ -202,6 +202,23 @@ def _add_terrain_risk(
     point: Point,
     flight_altitude: float,
 ) -> None:
+    terrain_sample = map_model.terrain.sample_at(point.x, point.y)
+    if not terrain_sample.valid or terrain_sample.elevation_m is None:
+        _append_once(
+            risks,
+            seen,
+            AltitudeRisk(
+                drone.id,
+                segment_index,
+                AltitudeRiskKind.TERRAIN_CLEARANCE,
+                AltitudeRiskSeverity.CRITICAL,
+                point,
+                flight_altitude + drone.min_clearance,
+                flight_altitude,
+                message=f"terrain elevation is unknown: {terrain_sample.reason}",
+            ),
+        )
+        return
     terrain_altitude = map_model.terrain.altitude_at(point.x, point.y)
     required = terrain_altitude + drone.min_clearance
     if flight_altitude + 1e-9 >= required:

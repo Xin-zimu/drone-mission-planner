@@ -17,6 +17,7 @@ dependencies = [
   "networkx>=3.4,<4",
   "pyqtgraph>=0.13.7,<1",
   "ortools>=9.12,<10",
+  "pyproj>=3.7,<4",
 ]
 
 [project.optional-dependencies]

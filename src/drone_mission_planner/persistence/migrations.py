@@ -15,7 +15,7 @@ from typing import Any
 
 from drone_mission_planner.persistence.terrain_codec import terrain_from_data
 
-CURRENT_PROJECT_VERSION = "1.9"
+CURRENT_PROJECT_VERSION = "1.11"
 
 _COORDINATE_TOLERANCE = 1e-6
 
@@ -306,6 +306,48 @@ def _migrate_1_8_to_1_9(
     return migrated
 
 
+def _migrate_1_9_to_1_10(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
+    """Add project-level georeferencing metadata without assuming legacy x/y are lat/lon."""
+
+    migrated = deepcopy(raw)
+    georeference = migrated.setdefault("georeference", {})
+    if not isinstance(georeference, dict):
+        georeference = {}
+        migrated["georeference"] = georeference
+    georeference.setdefault("mode", "local_only")
+    georeference.setdefault("origin", None)
+    georeference.setdefault("horizontal_crs", "EPSG:4326")
+    height_reference = georeference.setdefault("height_reference", {})
+    if not isinstance(height_reference, dict):
+        height_reference = {}
+        georeference["height_reference"] = height_reference
+    height_reference.setdefault("datum", "unknown")
+    height_reference.setdefault("source", "")
+    height_reference.setdefault("geoid_model", None)
+    height_reference.setdefault("home_altitude_m", None)
+    georeference.setdefault("valid_radius_m", None)
+    georeference.setdefault("control_points", [])
+    georeference.setdefault("spatial_bounds", None)
+    georeference.setdefault("geofences", [])
+    georeference.setdefault("validation_status", "unknown")
+    georeference.setdefault("revision", "0")
+    migrated["version"] = "1.10"
+    return migrated
+
+
+def _migrate_1_10_to_1_11(
+    raw: dict[str, Any], report: MigrationReport | None = None
+) -> dict[str, Any]:
+    """Add traceable GIS/DEM data-source metadata without importing resources."""
+
+    migrated = deepcopy(raw)
+    migrated.setdefault("data_sources", [])
+    migrated["version"] = "1.11"
+    return migrated
+
+
 def _points(data: Any) -> list[tuple[float, float]]:
     """Normalise a persisted point list to ``(x, y)`` float pairs.
 
@@ -348,4 +390,6 @@ _MIGRATION_STEPS: dict[str, Callable[[dict[str, Any], MigrationReport | None], d
     "1.6": _migrate_1_6_to_1_7,
     "1.7": _migrate_1_7_to_1_8,
     "1.8": _migrate_1_8_to_1_9,
+    "1.9": _migrate_1_9_to_1_10,
+    "1.10": _migrate_1_10_to_1_11,
 }

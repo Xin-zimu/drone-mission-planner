@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from drone_mission_planner.domain.enums import TaskStatus
+from drone_mission_planner.domain.georeference import GeoreferenceValidationStatus
 from drone_mission_planner.domain.models import Drone, MapModel, MissionTask
 from drone_mission_planner.domain.validation import validate_project
 from drone_mission_planner.persistence.project_repository import ProjectRepository
+from drone_mission_planner.persistence.route_export import export_route_qgc_plan
 from drone_mission_planner.planning.assignment import GreedyAssignmentPlanner
 from drone_mission_planner.planning.coverage import CoveragePlanner
 from drone_mission_planner.simulation.engine import SimulationEngine
@@ -90,6 +93,36 @@ def test_regional_emergency_example_exercises_advanced_features() -> None:
     coverage = CoveragePlanner().plan(model, primary)
     assert coverage.drone_paths
     assert any(coverage.drone_paths.values())
+
+
+def test_georeferenced_shanghai_example_exports_real_coordinates(tmp_path: Path) -> None:
+    project = ProjectRepository().load(EXAMPLES / "georeferenced_shanghai_demo.dmproj")
+    validate_project(project)
+    georeference = project.georeference
+
+    assert georeference.validation_status == GeoreferenceValidationStatus.VALIDATED
+    assert georeference.can_export_real_coordinates
+    assert georeference.control_points
+    assert georeference.geofences
+    assert georeference.calibration_report().within_tolerance
+    assert len(project.map.obstacles) >= 5
+    assert project.map.no_fly_zones
+    assert max(obstacle.height for obstacle in project.map.obstacles) >= 60.0
+
+    export_path = export_route_qgc_plan(
+        project.map,
+        project.map.drones[0],
+        tmp_path / "georeferenced.plan",
+        georeference=georeference,
+        require_real_coordinates=True,
+    )
+    payload = json.loads(export_path.read_text(encoding="utf-8"))
+    first_item = payload["mission"]["items"][0]
+
+    assert payload["flyable"] is True
+    assert payload["coordinateReference"] == "wgs84_geographic_3d:ellipsoid"
+    assert 31.22 < first_item["params"][4] < 31.24
+    assert 121.46 < first_item["params"][5] < 121.49
 
 
 def _apply_incremental_coverage_replan(

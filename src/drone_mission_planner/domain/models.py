@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .basemap import BasemapModel
+from .data_source import DataSourceMetadata
 from .enums import DeadlinePolicy, DroneStatus, ObstacleShape, TaskStatus, TaskType
 from .equipment import EquipmentLibrary
 from .geometry import Point, Rect
+from .georeference import ProjectGeoreference
 from .terrain import TerrainModel
 from .waypoint import Waypoint
 from .wind import WindModel
@@ -183,8 +185,10 @@ class MapModel:
 @dataclass(slots=True)
 class ProjectModel:
     name: str = "Untitled mission"
-    version: str = "1.6"
+    version: str = "1.11"
     equipment: EquipmentLibrary = field(default_factory=EquipmentLibrary.default)
+    georeference: ProjectGeoreference = field(default_factory=ProjectGeoreference.local_only)
+    data_sources: list[DataSourceMetadata] = field(default_factory=list)
     map: MapModel = field(default_factory=MapModel)
     planning_settings: dict[str, float | int | bool | str] = field(default_factory=dict)
     simulation_settings: dict[str, float | int | bool | str] = field(

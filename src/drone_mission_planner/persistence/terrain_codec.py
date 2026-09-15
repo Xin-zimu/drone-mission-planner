@@ -46,6 +46,10 @@ def terrain_from_data(data: Any, fallback_resolution: float) -> TerrainModel:
         grid_width=int(data.get("grid_width", len(grid_altitudes[0]) if grid_altitudes else 0)),
         grid_height=int(data.get("grid_height", len(grid_altitudes))),
         grid_altitudes=grid_altitudes,
+        grid_valid_mask=_terrain_grid_valid_mask(data.get("grid_valid_mask", [])),
+        source_data_id=(
+            str(data["source_data_id"]) if data.get("source_data_id") is not None else None
+        ),
     )
 
 
@@ -81,4 +85,17 @@ def _terrain_grid_altitudes(data: Any) -> list[list[float]]:
         if not isinstance(row, list):
             raise ValueError("terrain grid altitude rows must be lists")
         rows.append([float(value) for value in row])
+    return rows
+
+
+def _terrain_grid_valid_mask(data: Any) -> list[list[bool]]:
+    if data is None or data == []:
+        return []
+    if not isinstance(data, list):
+        raise ValueError("terrain grid valid mask must be a list")
+    rows: list[list[bool]] = []
+    for row in data:
+        if not isinstance(row, list):
+            raise ValueError("terrain grid valid mask rows must be lists")
+        rows.append([bool(value) for value in row])
     return rows

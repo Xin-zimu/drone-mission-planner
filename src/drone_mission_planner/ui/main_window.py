@@ -51,6 +51,13 @@ from drone_mission_planner.app.workspace_state import UserPreferences, Workspace
 from drone_mission_planner.domain.basemap import derive_calibration
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.georeference import (
+    GeoCoordinate,
+    GeoreferenceValidationStatus,
+    HeightDatum,
+    HeightReference,
+    ProjectGeoreference,
+)
 from drone_mission_planner.domain.models import Drone, MapObject, MissionTask, SearchArea
 from drone_mission_planner.domain.terrain import (
     TerrainModel,
@@ -82,16 +89,19 @@ from drone_mission_planner.planning.altitude_validator import (
     validate_altitude_path,
 )
 from drone_mission_planner.planning.assignment import (
+    AssignmentFailure,
     AssignmentResult,
     AssignmentWeights,
     GreedyAssignmentPlanner,
+    OptimizedAssignmentPlanner,
     TaskExplanation,
     build_assignment_suggestions,
     explain_assignments,
 )
 from drone_mission_planner.planning.coverage import CoveragePlanner, CoveragePlanResult
-from drone_mission_planner.planning.deconfliction import apply_deconfliction
+from drone_mission_planner.planning.deconfliction import apply_deconfliction_closed_loop
 from drone_mission_planner.planning.energy import estimate_segment_energy
+from drone_mission_planner.planning.optimization import SolverSettings
 from drone_mission_planner.planning.risk_assessment import assess_route_risk
 from drone_mission_planner.planning.route_planner import RoutePlanner
 from drone_mission_planner.planning.scheduling import ScheduleResult
@@ -265,9 +275,11 @@ class MainWindow(QMainWindow):
         self.export_route_action.setShortcut("Ctrl+Shift+E")
         self.import_mission_action = QAction("Import mission data…", self)
         self.export_replay_action = QAction("Export replay…", self)
+        self.assignment_planning_action = QAction("Assignment planning…", self)
         self.weights_action = QAction("Assignment weights…", self)
         self.import_basemap_action = QAction("Import basemap…", self)
         self.basemap_settings_action = QAction("Basemap settings…", self)
+        self.georeference_action = QAction("Georeference…", self)
         self.equipment_action = QAction("Equipment library…", self)
         self.settings_action = QAction("Settings…", self)
         self.validation_action = QAction("Validation center…", self)
@@ -326,11 +338,13 @@ class MainWindow(QMainWindow):
         map_menu.addAction(self.generate_environment_action)
         map_menu.addAction(self.import_basemap_action)
         map_menu.addAction(self.basemap_settings_action)
+        map_menu.addAction(self.georeference_action)
         planning_menu = self.menuBar().addMenu("Planning")
         planning_menu.addAction(self.plan_route_action)
         planning_menu.addAction(self.auto_assign_action)
         planning_menu.addAction(self.plan_coverage_action)
         planning_menu.addAction(self.plan_all_coverage_action)
+        planning_menu.addAction(self.assignment_planning_action)
         planning_menu.addAction(self.weights_action)
         planning_menu.addAction(self.equipment_action)
         tools_menu = self.menuBar().addMenu("Tools")
@@ -610,8 +624,10 @@ class MainWindow(QMainWindow):
         self.cancel_task_action.triggered.connect(self.cancel_selected_task)
         self.export_report_action.triggered.connect(self.export_simulation_report)
         self.export_route_action.triggered.connect(self.export_selected_route)
+        self.georeference_action.triggered.connect(self.edit_georeference)
         self.import_mission_action.triggered.connect(self.import_mission_data)
         self.export_replay_action.triggered.connect(self.export_replay_json)
+        self.assignment_planning_action.triggered.connect(self.edit_assignment_planning)
         self.weights_action.triggered.connect(self.edit_assignment_weights)
         self.equipment_action.triggered.connect(self.edit_equipment_library)
         self.import_basemap_action.triggered.connect(self.import_basemap)
@@ -1362,6 +1378,108 @@ class MainWindow(QMainWindow):
             return
         self._refresh_all()
         self.statusBar().showMessage("Basemap settings applied", 5000)
+
+    def edit_georeference(self) -> None:
+        georeference = self.service.project.georeference
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Project georeference")
+        form = QFormLayout(dialog)
+        mode = QComboBox()
+        mode.addItems(["local_only", "georeferenced"])
+        mode.setCurrentText(georeference.mode.value)
+        latitude = QDoubleSpinBox()
+        latitude.setRange(-90.0, 90.0)
+        latitude.setDecimals(8)
+        longitude = QDoubleSpinBox()
+        longitude.setRange(-180.0, 180.0)
+        longitude.setDecimals(8)
+        height = QDoubleSpinBox()
+        height.setRange(-10000.0, 10000.0)
+        height.setDecimals(3)
+        if georeference.origin is not None:
+            latitude.setValue(georeference.origin.latitude_deg)
+            longitude.setValue(georeference.origin.longitude_deg)
+            height.setValue(georeference.origin.height_m)
+        datum = QComboBox()
+        datum.addItems([item.value for item in HeightDatum])
+        datum.setCurrentText(georeference.height_reference.datum.value)
+        valid_radius = QDoubleSpinBox()
+        valid_radius.setRange(0.0, 1_000_000.0)
+        valid_radius.setDecimals(1)
+        valid_radius.setSpecialValueText("disabled")
+        valid_radius.setValue(georeference.valid_radius_m or 0.0)
+        validation = QComboBox()
+        validation.addItems([item.value for item in GeoreferenceValidationStatus])
+        validation.setCurrentText(georeference.validation_status.value)
+        form.addRow("Mode", mode)
+        form.addRow("Origin latitude", latitude)
+        form.addRow("Origin longitude", longitude)
+        form.addRow("Origin height (m)", height)
+        form.addRow("Height datum", datum)
+        form.addRow("Valid radius (m)", valid_radius)
+        form.addRow("Validation", validation)
+        report = None
+        if georeference.is_georeferenced:
+            try:
+                report = georeference.calibration_report()
+            except ValueError:
+                report = None
+        if report is not None:
+            summary = (
+                f"{len(report.residuals)} control point(s), "
+                f"horizontal RMSE {report.horizontal_rmse_m:.2f} m, "
+                f"vertical RMSE {report.vertical_rmse_m:.2f} m"
+            )
+            form.addRow("Calibration", QLabel(summary))
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            if mode.currentText() == "local_only":
+                self.service.update_georeference(ProjectGeoreference.local_only())
+            else:
+                origin = GeoCoordinate(latitude.value(), longitude.value(), height.value())
+                height_reference = HeightReference(
+                    HeightDatum(datum.currentText()),
+                    source=georeference.height_reference.source,
+                    geoid_model=georeference.height_reference.geoid_model,
+                    home_altitude_m=georeference.height_reference.home_altitude_m,
+                )
+                valid_radius_m = valid_radius.value() if valid_radius.value() > 0.0 else None
+                source_georeference = georeference
+                validation_status = GeoreferenceValidationStatus(validation.currentText())
+                revision = georeference.revision
+                if georeference.origin is not None and origin != georeference.origin:
+                    self.service.reanchor_georeference_origin(origin)
+                    source_georeference = self.service.project.georeference
+                    validation_status = source_georeference.validation_status
+                    revision = source_georeference.revision
+                next_georeference = ProjectGeoreference.georeferenced(
+                    origin=origin,
+                    height_reference=height_reference,
+                    horizontal_crs=source_georeference.horizontal_crs,
+                    valid_radius_m=valid_radius_m,
+                    control_points=source_georeference.control_points,
+                    spatial_bounds=source_georeference.spatial_bounds,
+                    geofences=source_georeference.geofences,
+                    validation_status=validation_status,
+                    revision=revision,
+                )
+                self.service.update_georeference(next_georeference)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Georeference rejected", str(exc))
+            return
+        self._discard_simulation()
+        self.coverage_results.clear()
+        self._refresh_all()
+        self.statusBar().showMessage("Project georeference updated", 6000)
+
     def import_mission_data(self) -> None:
         selected_file, _ = QFileDialog.getOpenFileName(
             self,
@@ -1375,10 +1493,17 @@ class MainWindow(QMainWindow):
         try:
             if suffix in {".geojson", ".json"}:
                 preview = load_geojson(
-                    self.service.project.map, selected_file, default_kind="search_area"
+                    self.service.project.map,
+                    selected_file,
+                    default_kind="search_area",
+                    georeference=self.service.project.georeference,
                 )
             elif suffix == ".kml":
-                preview = load_kml(self.service.project.map, selected_file)
+                preview = load_kml(
+                    self.service.project.map,
+                    selected_file,
+                    georeference=self.service.project.georeference,
+                )
             elif suffix == ".csv":
                 preview = load_waypoint_csv(self.service.project.map, selected_file)
             else:
@@ -1516,13 +1641,33 @@ class MainWindow(QMainWindow):
         suffix = Path(selected_path).suffix.lower()
         try:
             if suffix == ".json":
-                saved = export_route_json(map_model, drone, selected_path)
+                saved = export_route_json(
+                    map_model,
+                    drone,
+                    selected_path,
+                    georeference=self.service.project.georeference,
+                )
             elif suffix == ".csv":
-                saved = export_route_csv(map_model, drone, selected_path)
+                saved = export_route_csv(
+                    map_model,
+                    drone,
+                    selected_path,
+                    georeference=self.service.project.georeference,
+                )
             elif suffix == ".plan":
-                saved = export_route_qgc_plan(map_model, drone, selected_path)
+                saved = export_route_qgc_plan(
+                    map_model,
+                    drone,
+                    selected_path,
+                    georeference=self.service.project.georeference,
+                )
             elif suffix in {".waypoints", ".txt"}:
-                saved = export_route_wpl(map_model, drone, selected_path)
+                saved = export_route_wpl(
+                    map_model,
+                    drone,
+                    selected_path,
+                    georeference=self.service.project.georeference,
+                )
             else:
                 QMessageBox.warning(
                     self,
@@ -1539,8 +1684,13 @@ class MainWindow(QMainWindow):
             LOGGER.error("Route export failed: %s", exc)
             return
         LOGGER.info("Route for %s exported to %s", drone.id, saved)
+        coordinate_status = (
+            "real coordinates, flyable"
+            if self.service.project.georeference.can_export_real_coordinates
+            else "local coordinates, not flyable"
+        )
         self.statusBar().showMessage(
-            f"Route exported: {saved.name} (local coordinates, not flyable)", 8000
+            f"Route exported: {saved.name} ({coordinate_status})", 8000
         )
 
     def auto_assign_tasks(self) -> None:
@@ -1551,31 +1701,74 @@ class MainWindow(QMainWindow):
                 "Add at least one drone and one mission before automatic assignment.",
             )
             return
+        mode = str(self.service.project.planning_settings.get("assignment_solver_mode", "greedy"))
+        time_budget = float(
+            self.service.project.planning_settings.get("assignment_time_budget_seconds", 5.0)
+        )
+        repair_rounds = int(self.service.project.planning_settings.get("assignment_repair_rounds", 3))
         LOGGER.info(
-            "Starting greedy assignment for %d drones and %d missions",
+            "Starting %s assignment for %d drones and %d missions",
+            mode,
             len(self.service.project.map.drones),
             len(self.service.project.map.tasks),
         )
         weights = self._assignment_weights()
-        self.assignment_planner.weights = weights
-        result = self.assignment_planner.assign(self.service.project.map)
+        if mode == "global":
+            planner = OptimizedAssignmentPlanner(
+                self.route_planner,
+                settings=SolverSettings(
+                    time_limit_seconds=time_budget,
+                    max_repair_rounds=repair_rounds,
+                ),
+                weights=weights,
+            )
+            result = planner.assign(self.service.project.map)
+        else:
+            self.assignment_planner.weights = weights
+            result = self.assignment_planner.assign(self.service.project.map)
         self._assignment_explanations = explain_assignments(
             self.service.project.map,
             route_planner=self.route_planner,
             weights=weights,
         )
-        deconfliction = apply_deconfliction(self.service.project.map, result)
+        deconfliction = apply_deconfliction_closed_loop(
+            self.service.project.map,
+            result,
+            max_repair_rounds=repair_rounds,
+            total_time_budget_seconds=time_budget,
+        )
         suggestions = build_assignment_suggestions(self._assignment_explanations)
+        solver_notes: tuple[str, ...] = ()
+        if result.solver_status:
+            kept = "kept verified baseline" if result.kept_baseline else "used optimizer candidate"
+            solver_notes = (
+                f"global optimization {kept}; solver status {result.solver_status}: "
+                f"{result.solver_message or 'no details'}",
+            )
         self._assignment_notes = tuple(
             f"{decision.task_id} -> {decision.drone_id} (cost {decision.cost:.0f})"
             for decision in result.decisions
-        ) + tuple(deconfliction.notes()) + tuple(
+        ) + solver_notes + tuple(deconfliction.notes()) + tuple(
             f"{task_id}: suggestions - {'; '.join(tips)}"
             for task_id, tips in sorted(suggestions.items())
         )
+        if not deconfliction.feasible:
+            result.failures.append(
+                AssignmentFailure(
+                    "post-check",
+                    {"deconfliction": list(deconfliction.notes())},
+                )
+            )
+            self._render_assignment_table(result)
+            self.statusBar().showMessage(
+                "Assignment rejected after conflict repair: " + "; ".join(deconfliction.notes()),
+                10000,
+            )
+            return
         self._discard_simulation()
         with self.service.change("Auto assign missions"):
             self.service.project.planning_settings["mission_mode"] = "point_tasks"
+            self.service.project.planning_settings["assignment_solver_mode"] = mode
             self.coverage_results.clear()
             self._apply_assignment_result(result)
         self._render_assignment_table(result)
@@ -1584,7 +1777,7 @@ class MainWindow(QMainWindow):
         self._render_map_if_visible()
         self._update_title()
         self.statusBar().showMessage(
-            f"Assigned {result.assigned_count}/{len(self.service.project.map.tasks)} missions; "
+            f"{mode.title()} assigned {result.assigned_count}/{len(self.service.project.map.tasks)} missions; "
             f"{len(result.failures)} unresolved",
             8000,
         )
@@ -1600,6 +1793,45 @@ class MainWindow(QMainWindow):
             task_load=float(settings.get("assignment_weight_task_load", 120.0)),
             deadline=float(settings.get("assignment_weight_deadline", 1.0)),
         )
+
+    def edit_assignment_planning(self) -> None:
+        settings = self.service.project.planning_settings
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Assignment planning")
+        form = QFormLayout(dialog)
+
+        mode_combo = QComboBox()
+        mode_combo.addItem("Greedy baseline", "greedy")
+        mode_combo.addItem("Global optimization", "global")
+        current_mode = str(settings.get("assignment_solver_mode", "greedy"))
+        mode_combo.setCurrentIndex(1 if current_mode == "global" else 0)
+        form.addRow("Mode", mode_combo)
+
+        budget = QDoubleSpinBox()
+        budget.setRange(0.1, 120.0)
+        budget.setDecimals(1)
+        budget.setValue(float(settings.get("assignment_time_budget_seconds", 5.0)))
+        budget.setSuffix(" s")
+        form.addRow("Time Budget", budget)
+
+        repairs = QSpinBox()
+        repairs.setRange(0, 25)
+        repairs.setValue(int(settings.get("assignment_repair_rounds", 3)))
+        form.addRow("Repair Rounds", repairs)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        with self.service.change("Edit assignment planning"):
+            settings["assignment_solver_mode"] = str(mode_combo.currentData())
+            settings["assignment_time_budget_seconds"] = budget.value()
+            settings["assignment_repair_rounds"] = repairs.value()
+        self.statusBar().showMessage("Assignment planning settings saved", 7000)
 
     def edit_equipment_library(self) -> None:
         library = self.service.project.equipment
@@ -2410,12 +2642,19 @@ class MainWindow(QMainWindow):
             )
         else:
             terrain = "flat terrain"
+        georeference = self.service.project.georeference
+        if georeference.can_export_real_coordinates:
+            geo = f"georeferenced ({georeference.height_reference.datum.value})"
+        elif georeference.is_georeferenced:
+            geo = "georeferenced (height unknown)"
+        else:
+            geo = "local-only coordinates"
         self.object_summary.setText(
             f"{map_model.width} x {map_model.height} m map     •     "
             f"{len(map_model.drones)} drones     •     {len(map_model.tasks)} missions     •     "
             f"{len(map_model.obstacles)} obstacles     •     "
             f"{len(map_model.no_fly_zones)} no-fly zones     •     "
-            f"{len(map_model.search_areas)} search areas     •     {terrain}     •     {wind}"
+            f"{len(map_model.search_areas)} search areas     •     {terrain}     •     {wind}     •     {geo}"
         )
 
     def _configure_autosave_timer(self) -> None:

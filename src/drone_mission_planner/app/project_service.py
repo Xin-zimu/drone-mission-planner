@@ -3,14 +3,21 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from math import isfinite
 from pathlib import Path
 from typing import Any
 
 from drone_mission_planner.domain.basemap import BasemapModel
+from drone_mission_planner.domain.data_source import DataSourceMetadata
 from drone_mission_planner.domain.enums import AltitudeMode, TaskStatus, WaypointAction
 from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.georeference import (
+    CalibrationReport,
+    EnuCoordinate,
+    GeoCoordinate,
+    ProjectGeoreference,
+)
 from drone_mission_planner.domain.models import (
     BaseStation,
     Drone,
@@ -267,6 +274,57 @@ class ProjectService:
                 self.project.map.wind = previous_wind
                 raise
 
+    def update_georeference(self, georeference: ProjectGeoreference) -> ProjectGeoreference:
+        with self.change("Update georeference"):
+            previous = self.project.georeference
+            self.project.georeference = georeference
+            try:
+                validate_project(self.project)
+            except ValueError:
+                self.project.georeference = previous
+                raise
+            self.coverage_results_invalidated()
+        return self.project.georeference
+
+    def add_data_source(self, metadata: DataSourceMetadata) -> DataSourceMetadata:
+        """Record traceable metadata for a previewed or applied GIS/DEM resource."""
+
+        with self.change("Record data source"):
+            self.project.data_sources = [
+                source for source in self.project.data_sources if source.id != metadata.id
+            ]
+            self.project.data_sources.append(metadata)
+            validate_project(self.project)
+        return metadata
+
+    def georeference_calibration_report(
+        self,
+        *,
+        horizontal_tolerance_m: float = 1.0,
+        vertical_tolerance_m: float = 2.0,
+    ) -> CalibrationReport:
+        return self.project.georeference.calibration_report(
+            horizontal_tolerance_m=horizontal_tolerance_m,
+            vertical_tolerance_m=vertical_tolerance_m,
+        )
+
+    def reanchor_georeference_origin(self, new_origin: GeoCoordinate) -> ProjectGeoreference:
+        georeference = self.project.georeference
+        georeference.local_adapter()
+        with self.change("Change georeference origin"):
+            self._reanchor_project_coordinates(new_origin)
+            self.project.georeference = georeference.with_origin(new_origin)
+            validate_project(self.project)
+            self.coverage_results_invalidated()
+        return self.project.georeference
+
+    def coverage_results_invalidated(self) -> None:
+        self.planning_settings_revision_bump()
+
+    def planning_settings_revision_bump(self) -> None:
+        current = int(self.project.planning_settings.get("georeference_revision_counter", 0))
+        self.project.planning_settings["georeference_revision_counter"] = current + 1
+
     def update_property(self, object_id: str, name: str, value: Any) -> MapObject:
         item = self.project.map.find(object_id)
         if item is None:
@@ -289,6 +347,55 @@ class ProjectService:
                     setattr(item, name, previous)
                 raise
         return item
+
+    def _reanchor_project_coordinates(self, new_origin: GeoCoordinate) -> None:
+        georeference = self.project.georeference
+
+        def point(value: Point) -> Point:
+            return georeference.reanchor_coordinate(EnuCoordinate(value.x, value.y), new_origin).point
+
+        def rect(value: Rect) -> Rect:
+            bounds = value.normalized
+            corners = [
+                point(Point(bounds.x, bounds.y)),
+                point(Point(bounds.x + bounds.width, bounds.y)),
+                point(Point(bounds.x + bounds.width, bounds.y + bounds.height)),
+                point(Point(bounds.x, bounds.y + bounds.height)),
+            ]
+            xs = [corner.x for corner in corners]
+            ys = [corner.y for corner in corners]
+            return Rect(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+
+        map_model = self.project.map
+        if map_model.terrain.grid_origin is not None:
+            map_model.terrain.grid_origin = point(map_model.terrain.grid_origin)
+        map_model.terrain.peaks = [
+            replace(peak, center=point(peak.center)) for peak in map_model.terrain.peaks
+        ]
+        if map_model.basemap is not None:
+            origin = point(Point(map_model.basemap.origin_x, map_model.basemap.origin_y))
+            map_model.basemap.origin_x = origin.x
+            map_model.basemap.origin_y = origin.y
+        for base in map_model.bases:
+            base.position = point(base.position)
+        for drone in map_model.drones:
+            drone.position = point(drone.position)
+            for waypoint in drone.waypoints:
+                transformed = point(waypoint.point)
+                waypoint.x = transformed.x
+                waypoint.y = transformed.y
+        for obstacle in map_model.obstacles:
+            obstacle.bounds = rect(obstacle.bounds)
+            obstacle.points = [point(value) for value in obstacle.points]
+        for zone in map_model.no_fly_zones:
+            zone.bounds = rect(zone.bounds)
+            zone.points = [point(value) for value in zone.points]
+        for task in map_model.tasks:
+            task.position = point(task.position)
+        for area in map_model.search_areas:
+            area.bounds = rect(area.bounds)
+            area.points = [point(value) for value in area.points]
+            area.holes = [[point(value) for value in hole] for hole in area.holes]
 
     def assign_task_route(
         self,

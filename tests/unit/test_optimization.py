@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from itertools import permutations, product
 
 import pytest
@@ -11,8 +12,10 @@ from drone_mission_planner.domain.models import BaseStation, Drone, MapModel
 from drone_mission_planner.domain.wind import WindModel
 from drone_mission_planner.planning import optimization as opt
 from drone_mission_planner.planning.optimization import (
+    AssignmentOutcome,
     AssignmentProblem,
     ORToolsAssignmentSolver,
+    RouteAssignment,
     SolverSettings,
     SolverStatus,
     SolverTask,
@@ -20,6 +23,7 @@ from drone_mission_planner.planning.optimization import (
     evaluate_routes,
     greedy_routes,
     solve_with_baseline,
+    solve_with_baseline_details,
     ticks_down,
     ticks_up,
 )
@@ -188,6 +192,60 @@ def test_baseline_is_never_replaced_by_a_worse_candidate() -> None:
         assert chosen.makespan == pytest.approx(greedy.makespan)
     else:
         assert chosen.makespan < greedy.makespan - 1e-9
+
+
+def test_fixed_greedy_inferior_case_keeps_the_verified_optimizer_candidate() -> None:
+    problem = AssignmentProblem(
+        node_count=4,
+        travel_ticks=[
+            [0, 1, 1, 50],
+            [1, 0, 100, 1],
+            [1, 1, 0, 1],
+            [50, 1, 1, 0],
+        ],
+        vehicles=(SolverVehicle("D-01", 0, 0, capacity=10.0),),
+        tasks=(
+            SolverTask("T-01", 1),
+            SolverTask("T-02", 2),
+            SolverTask("T-03", 3),
+        ),
+        settings=SolverSettings(time_limit_seconds=2.0, tick_seconds=1.0),
+    )
+    greedy = evaluate_routes(problem, greedy_routes(problem))
+
+    class BetterSolver:
+        supported_constraints: tuple[str, ...] = ()
+
+        def solve(
+            self,
+            problem: AssignmentProblem,
+            *,
+            cancel: Callable[[], bool] | None = None,
+        ) -> AssignmentOutcome:
+            return AssignmentOutcome(
+                SolverStatus.FEASIBLE,
+                routes=(
+                    RouteAssignment(
+                        "D-01",
+                        ("T-02", "T-03", "T-01"),
+                        (1.0, 2.0, 3.0),
+                        (1.0, 2.0, 3.0),
+                        (1.0, 2.0, 3.0),
+                    ),
+                ),
+                makespan=4.0,
+            )
+
+    chosen, kept_baseline, solver_outcome = solve_with_baseline_details(
+        problem,
+        solver=BetterSolver(),
+    )
+
+    assert greedy.status is SolverStatus.FEASIBLE
+    assert greedy.makespan == 152.0
+    assert solver_outcome.status is SolverStatus.FEASIBLE
+    assert not kept_baseline
+    assert chosen.makespan == 4.0
 
 
 def test_rounding_is_conservative_for_time_and_deadlines() -> None:

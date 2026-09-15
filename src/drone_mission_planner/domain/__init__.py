@@ -1,5 +1,12 @@
 """Domain models independent from the UI toolkit."""
 
+from .data_source import (
+    DataSourceError,
+    DataSourceKind,
+    DataSourceMetadata,
+    DataSourceValidationStatus,
+    SourceBounds,
+)
 from .enums import (
     AltitudeMode,
     DroneStatus,
@@ -9,8 +16,29 @@ from .enums import (
     WaypointAction,
 )
 from .geometry import Point, Rect
+from .georeference import (
+    CalibrationControlPoint,
+    CalibrationReport,
+    ControlPointResidual,
+    CrsCoordinateAdapter,
+    EcefCoordinate,
+    EnuCoordinate,
+    GeoCoordinate,
+    Geofence,
+    GeofenceKind,
+    GeoreferenceError,
+    GeoreferenceValidationStatus,
+    HeightDatum,
+    HeightReference,
+    LocalTangentPlaneAdapter,
+    ProjectedCoordinate,
+    ProjectGeoreference,
+    ProjectGeoreferenceMode,
+    SpatialBounds,
+    SpatialConstraintViolation,
+)
 from .models import BaseStation, Drone, MapModel, MissionTask, Obstacle, ProjectModel, SearchArea
-from .terrain import TerrainModel, TerrainPeak, grid_terrain
+from .terrain import TerrainModel, TerrainPeak, TerrainSample, grid_terrain
 from .validation import ProjectValidationError, validate_project
 from .waypoint import Waypoint, path_from_waypoints, waypoint_msl_altitude, waypoints_from_path
 from .wind import WindModel
@@ -18,21 +46,46 @@ from .wind import WindModel
 __all__ = [
     "AltitudeMode",
     "BaseStation",
+    "CalibrationControlPoint",
+    "CalibrationReport",
+    "ControlPointResidual",
+    "CrsCoordinateAdapter",
+    "DataSourceError",
+    "DataSourceKind",
+    "DataSourceMetadata",
+    "DataSourceValidationStatus",
     "Drone",
     "DroneStatus",
+    "EcefCoordinate",
+    "EnuCoordinate",
+    "GeoCoordinate",
+    "Geofence",
+    "GeofenceKind",
+    "GeoreferenceError",
+    "GeoreferenceValidationStatus",
+    "HeightDatum",
+    "HeightReference",
+    "LocalTangentPlaneAdapter",
     "MapModel",
     "MissionTask",
     "Obstacle",
     "ObstacleShape",
     "Point",
+    "ProjectGeoreference",
+    "ProjectGeoreferenceMode",
     "ProjectModel",
     "ProjectValidationError",
+    "ProjectedCoordinate",
     "Rect",
     "SearchArea",
+    "SourceBounds",
+    "SpatialBounds",
+    "SpatialConstraintViolation",
     "TaskStatus",
     "TaskType",
     "TerrainModel",
     "TerrainPeak",
+    "TerrainSample",
     "Waypoint",
     "WaypointAction",
     "WindModel",

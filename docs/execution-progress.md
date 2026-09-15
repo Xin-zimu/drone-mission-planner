@@ -1,6 +1,233 @@
 # Execution Progress
 
-Last updated: 2026-09-06
+Last updated: 2026-09-11
+
+## v1.2 F6 checkpoint — target export validation, QGC/WPL capability gates and mission package manifest (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §14 EXP-01 through EXP-05 first automated slice.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Target profile | Added an explicit PX4/QGroundControl multirotor export profile with command/action whitelist, altitude-mode support, waypoint limits, target metadata and evidence scope. |
+| Validation report | Added automated L0-L3 export checks: L0 structure, L1 georeference/resource semantics, L2 route safety and L3 target semantics. Reports carry severity, level, code, drone id, waypoint index and task id. |
+| Export gates | QGC/WPL real-coordinate exports now run target validation before writing flyable files. Unsupported actions, unsupported speed commands, unsupported AGL mode, missing DEM resource files, unverifiable terrain/airspace/battery risks and unenforceable time/dependency constraints block executable export. |
+| Payload metadata | JSON payloads and QGC plans include validation reports; QGC plans also include target profile metadata. WPL inspection output appends validation comments when not flyable. |
+| Mission package | Added `export_route_package()` to write per-drone QGC plans plus `manifest.json` containing file hashes, target profile, coordinate reference, data-source summaries and validation reports. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| QGC plan carries target profile and validation report | `test_qgc_plan_uses_real_coordinates_when_georeference_is_ready` |
+| Unsupported action is reported | `test_validation_report_blocks_unsupported_target_action` |
+| Unsupported speed command blocks executable export | `test_real_qgc_export_rejects_unsupported_speed_command` |
+| Unenforceable scheduling constraints block executable export | `test_real_qgc_export_rejects_unenforceable_schedule_constraints` |
+| Missing DEM resource blocks executable export | `test_real_qgc_export_rejects_missing_dem_resource` |
+| Package manifest records file hash and validation reports | `test_route_package_writes_manifest_and_hashes` |
+| DEM NoData remains export-blocking | `test_dem_nodata_blocks_route_export` |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `python -m pytest D:/dmp/tests/unit/test_route_export.py D:/dmp/tests/integration/test_examples.py --basetemp=D:/dmp/.pytest-tmp-f6-export5` | **25 passed** |
+| `python -m pytest D:/dmp/tests/unit/test_route_export.py D:/dmp/tests/unit/test_terrain_import.py D:/dmp/tests/unit/test_georeference.py D:/dmp/tests/unit/test_validation.py D:/dmp/tests/integration/test_examples.py D:/dmp/tests/integration/test_ui_smoke.py --basetemp=D:/dmp/.pytest-tmp-f6-focused2` | **85 passed**, 3 warnings |
+| Full inventory, per-file isolated as described in `handoff.md` | Covered all current test files with **424 passed**: `test_examples.py` contributed 9 passed in the stable focused rerun; the remaining 53 test files passed with **415 passed**. One earlier isolated `test_examples.py` run hit the known Windows native access violation before rerun. |
+| `python -m ruff check D:/dmp/src D:/dmp/tests D:/dmp/scripts` | All checks passed |
+| `python -m mypy --config-file D:/dmp/pyproject.toml D:/dmp/src D:/dmp/tests` | Success: no issues found in 123 source files |
+
+Remaining after F6: real ground-station import evidence and SITL log evidence (plan L2/L3 external evidence), richer target profiles beyond the initial PX4/QGroundControl multirotor profile, UI validation report display and F7 packaging/release documentation.
+
+## v1.2 F5-c checkpoint — GeoTIFF DEM application, NoData validity and DEM import transactions (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §13.5, §13.6, §13.7 and §13.9 IMP-06, IMP-08, IMP-09 DEM slice.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Terrain validity | `TerrainModel` now exposes `sample_at()` with a validity flag, source id and reason while keeping `altitude_at()` backward-compatible for existing UI/simulation callers. DEM NoData and DEM coverage misses are represented as invalid samples, not zero elevation. |
+| DEM application | Added `load_geotiff_dem()` to convert supported GeoTIFF DEMs into local ENU grid terrain through F4 CRS adapters. Application requires a georeferenced project, known CRS, known height datum, affine geotransform, non-rotated grid and near-square local pixels. |
+| NoData mask | Applied DEM grids persist `grid_valid_mask` and `source_data_id`; min/max elevation are computed from valid samples only. Save/load restores the mask and data source relationship. |
+| Transactional apply | `apply_geotiff_dem_import()` applies terrain and records the GeoTIFF data source in one `ProjectService.change("Import DEM")` transaction. Validation failures roll back terrain, data sources, dirty state and undo history. |
+| Export safety | Altitude validation treats invalid terrain samples as critical terrain risks, so routes through DEM NoData or outside DEM coverage are not exported as verified safe routes. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| GeoTIFF DEM apply creates ENU grid and NoData mask | `test_load_geotiff_dem_applies_grid_with_nodata_mask` |
+| Apply records metadata and survives save/load | `test_apply_geotiff_dem_records_metadata_and_round_trips` |
+| Apply failure is transactional | `test_apply_geotiff_dem_failure_is_transactional` |
+| Unknown height datum blocks DEM application | `test_load_geotiff_dem_rejects_unknown_height_datum` |
+| NoData blocks route export | `test_dem_nodata_blocks_route_export` |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `pytest D:/dmp/tests/unit/test_terrain_import.py --basetemp=D:/dmp/.pytest-tmp-f5c-terrain3` | **13 passed** |
+| Terrain/export/persistence focused subset | **58 passed** |
+| Full test inventory by isolated pytest file processes | **419 passed** across 54 test files |
+| `ruff check D:/dmp/src D:/dmp/tests D:/dmp/scripts` | All checks passed |
+| `mypy --config-file D:/dmp/pyproject.toml D:/dmp/src D:/dmp/tests` | Success, 123 source files |
+
+Remaining after F5-c: user-facing DEM import UI, explicit missing-resource audit/reporting, resource packaging/copy policy, windowed reads for large/rotated rasters, richer DEM resampling for non-square pixels and the F6 target export validation chain.
+
+## v1.2 F5-b checkpoint — GIS vector intermediate model, topology checks and transactional apply (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §13.2, §13.4 and §13.9 IMP-01, IMP-02, IMP-03, IMP-05 and IMP-09 vector slice.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Vector model | GeoJSON/KML parsing now normalizes supported geometry into traceable import parts instead of flattening coordinates. Imported objects keep `source_feature_id`, `part_index`, properties, source bounds, local ENU bounds, conversion config and per-part preview issues. |
+| Geometry coverage | GeoJSON supports Point/MultiPoint, LineString/MultiLineString, Polygon with all holes, MultiPolygon and GeometryCollection members. KML supports Point, LineString, Polygon outer/inner rings and MultiGeometry-style placemarks through the same intermediate model. |
+| Holes and parts | Polygon holes are applied into `SearchArea.holes` and survive save/load. MultiPolygon parts are split into separate areas with the same source feature id and distinct part indexes. MultiLineString parts stay independent route candidates and are never connected end-to-start. |
+| Topology validation | Preview records blocking issues for unclosed rings, insufficient/zero-area rings, self-intersection, holes outside the outer ring and overlapping/crossing holes; consecutive duplicate vertices are reported as warnings. |
+| Transactional apply | `apply_import` now rejects blocking topology issues before mutation and wraps successful imports in one `ProjectService.change("Import mission data")` transaction. Apply failures do not create objects, record data sources, dirty the project or add undo history. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Polygon holes apply and persist | `test_geojson_polygon_holes_apply_and_round_trip`, `test_kml_polygon_preserves_inner_boundaries` |
+| MultiPolygon keeps source/part identity | `test_geojson_multipolygon_preserves_source_id_and_part_indexes` |
+| MultiLineString is not connected | `test_geojson_multiline_keeps_independent_route_parts` |
+| Focused topology checks and strict apply block | `test_geojson_topology_issues_block_apply_transactionally` |
+| Existing F5-a import/georeference behavior retained | `tests/unit/test_mission_import.py` |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `pytest D:/dmp/tests/unit/test_mission_import.py --basetemp=D:/dmp/.pytest-tmp-f5b-import2` | **18 passed** |
+| Full test inventory by isolated pytest file processes | **414 passed** across 54 test files |
+| `ruff check D:/dmp/src/drone_mission_planner/persistence/mission_import.py D:/dmp/tests/unit/test_mission_import.py` | All checks passed |
+| `ruff check D:/dmp/src D:/dmp/tests D:/dmp/scripts` | All checks passed |
+| `mypy --config-file D:/dmp/pyproject.toml D:/dmp/src D:/dmp/tests` | Success, 123 source files |
+
+Remaining after F5-b: full field/time/dependency mapping UI, skip-invalid user policy with persistent skipped-source report, richer topology repair previews, DEM application/resource packaging/windowed raster reads and the F6 target export validation chain.
+
+## v1.2 F5-a checkpoint — GIS/DEM source metadata and preview validation (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §13.1, §13.2, §13.5 and §13.7 first slice.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Domain | Added `domain/data_source.py` with traceable GIS/DEM source metadata: source path, format, CRS, source bounds, local ENU bounds, units, optional accuracy/resolution, height reference, object/elevation counts, SHA-256 hash, revision, validation status and preview warnings. |
+| Format | Project format `1.11` persists top-level `data_sources`; loading 1.10 projects adds an empty list without importing or reinterpreting external resources. |
+| GeoJSON/KML preview | GeoJSON and KML previews now attach data-source metadata, object counts, source bounds, converted ENU bounds and georeference constraint warnings. Explicit `local_only` projects reject lon/lat import instead of treating geographic coordinates as metres; legacy local-metre test callers can still omit `georeference`. GeoJSON CRS is validated as EPSG:4326 for this slice. |
+| GeoTIFF DEM preview | Added a pure-Python F5-a GeoTIFF DEM preview reader for single-band uncompressed classic TIFF: size, dtype, band count, CRS GeoKey, bounds, native and ENU pixel resolution, NoData-filtered elevation range, rotation flag, SHA-256/revision and unknown-height warnings. It does not apply terrain to the project. |
+| Spatial validation | Previewed vector and DEM corner coordinates are checked against F4 `valid_radius_m`, `spatial_bounds` and geofences after CRS/ENU conversion. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Source metadata preview and apply recording | `test_geojson_imports_areas_zone_task_and_route`, `test_kml_import_converts_lon_lat_in_georeferenced_projects` |
+| Local-only projects do not reinterpret lon/lat as metres | `test_explicit_local_only_project_does_not_treat_kml_lon_lat_as_metres` |
+| Bad CRS and illegal geographic coordinates rejected | `test_geojson_preview_rejects_unsupported_crs`, `test_geojson_preview_rejects_illegal_geographic_coordinates` |
+| Out-of-range import data reported | `test_geojson_preview_reports_georeference_range_violations`, `test_load_geotiff_dem_preview_reports_georeference_range_violation` |
+| GeoTIFF DEM preview metadata and unknown height datum | `test_load_geotiff_dem_preview_reports_metadata_and_unknown_height` |
+| Save/load restores import resource metadata | `test_georeference_round_trip_is_persisted` |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| F5-a focused pytest subset | **60 passed** |
+| Full test inventory by isolated pytest groups | **409 passed** |
+| Single-process full pytest | Aborted in Windows native OR-Tools `pywrapcp.SolveWithParameters`, matching the F4 known instability; the implicated optimization file passed in its own process. |
+| `-m ruff check D:/dmp/src D:/dmp/tests D:/dmp/scripts` | All checks passed |
+| `-m mypy --config-file D:/dmp/pyproject.toml D:/dmp/src D:/dmp/tests` | Success, 123 source files |
+
+## v1.2 F4 checkpoint — georeferencing project mode, CRS adapters and guarded real export (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §12, GEO-01...GEO-08.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Domain | Added `domain/georeference.py` with `local_only` / `georeferenced` project modes, WGS84 geodetic coordinates, ECEF coordinates, ENU coordinates (`x/east`, `y/north`, `z/up`), project origin metadata, height reference datums (`unknown`, `ellipsoid`, `orthometric`, `agl`, `relative_home`), control points, residual summaries, valid radii, spatial bounds, geofences, validation status and revision fingerprints. |
+| CRS conversion | Added `pyproj` / PROJ as the CRS engine; geodetic, projected, ECEF and local topocentric ENU transforms now go through `pyproj` instead of fixed degree-to-metre scale factors. |
+| Axis model | `MapView` now keeps domain ENU north-up and maps it explicitly to Qt's downward-positive y axis at `world_to_scene` / `scene_to_world` boundaries. Existing 2D drawing paths, selection, route drawing, basemap calibration and drag previews use the same transform helpers. |
+| Calibration and re-anchoring | `ProjectService.reanchor_georeference_origin()` preserves true geodetic positions by converting every local project coordinate through the old origin and back through the new origin. Control points, spatial constraints and geofences are reprojected with the georeference object, old validation becomes `stale`, and planning/coverage revision state is invalidated. |
+| Spatial constraints | Project validation checks ENU mission objects against georeference valid radius, rectangular bounds and inclusion/exclusion geofences, and reports concrete violations instead of silently accepting out-of-range projects. |
+| Import/export | GeoJSON and KML coordinates are converted from real lon/lat/height into local ENU when the project is georeferenced, while legacy local-only imports retain the previous metre interpretation. JSON/CSV/QGC/WPL export can emit real WGS84 coordinates only for validated georeferenced projects with a known height datum; local-only, unknown-height, unvalidated and stale projects are marked or rejected as not flyable for real execution. |
+| UI | Added Map -> Georeference... for project mode, origin, height datum and valid-radius editing; the status bar and summary surface whether the current project can export real flyable coordinates. |
+| Format | Project format `1.10` persists top-level `georeference`; loading 1.9 files adds `mode: local_only`, empty control points/geofences, `validation_status: unknown` and no origin, so legacy metre coordinates are never reinterpreted as latitude/longitude. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Origin maps to ENU zero | `test_origin_maps_to_zero_enu` |
+| East/north axes are correct | `test_enu_axes_are_east_north_up` |
+| Geodetic/ENU and ECEF round trips | `test_geodetic_enu_round_trip_is_stable_for_fixed_reference_data`, `test_ecef_round_trip_is_stable_for_fixed_reference_data` |
+| Invalid latitude/longitude/CRS and bad spatial data rejected | `test_invalid_coordinates_and_crs_are_rejected`, `test_spatial_constraints_report_radius_bounds_and_geofence_violations` |
+| Control point residuals and tolerance warnings are queryable | `test_control_point_residuals_are_queryable`, `test_control_point_report_warns_when_residual_exceeds_tolerance` |
+| Unknown height and unvalidated projects block real export | `test_project_georeference_blocks_real_export_until_height_is_known`, `test_real_coordinate_export_rejects_unknown_height_when_required` |
+| Validated projects export real WGS84 coordinates | `test_qgc_plan_uses_real_coordinates_when_georeference_is_ready` |
+| Project validation rejects out-of-range coordinates | `test_rejects_points_outside_georeference_constraints` |
+| Re-anchoring preserves real positions and invalidates validation | `test_reanchoring_changes_local_coordinates_but_preserves_real_positions`, `test_reanchor_georeference_preserves_real_positions_and_invalidates_validation` |
+| GeoJSON/KML import uses the georeference adapter | `test_kml_import_converts_lon_lat_in_georeferenced_projects` |
+| Qt screen coordinates keep ENU y north | `test_coordinate_conversion_is_stable` |
+| Legacy projects stay local-only | `test_v19_migration_keeps_legacy_coordinates_local_only` |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `-m ruff check src tests` | All checks passed |
+| `-m mypy src tests` | Success, 122 source files |
+| F4-focused pytest subset | **74 passed** |
+| Full test suite by isolated groups | **402 passed** |
+
+Note: two single-process full-suite runs aborted inside Windows native extension boundaries, first in OR-Tools (`0xc0000374` during `pywrapcp.SolveWithParameters`) and then with an access violation while running the existing coverage simulation test. The individually implicated tests and the complete suite split into independent pytest processes passed, so the F4 result is validated against the full test inventory while avoiding the known native-process instability.
+
+## v1.2 F3-c checkpoint — conflict repair loop and global-optimization UI (this pass)
+
+Plan: [follow-up-development-plan.md](follow-up-development-plan.md) §11, items OPT-06 and OPT-07, with the remaining OPT-08 evidence closed by a fixed greedy-inferior case.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| Conflict repair loop | `planning/deconfliction.py` now exposes `apply_deconfliction_closed_loop`: it applies bounded wait insertion, reports unresolved conflicts when the repair round budget is exhausted, then re-checks the repaired waypoint plan before it can be applied. |
+| Post-repair verifier | The post-check recomputes route task start/finish times from the repaired waypoints and rejects deadline, predecessor, battery/reserve and return-energy regressions with concrete reasons. A conflict wait can no longer be silently accepted if it makes a hard schedule or energy constraint false. |
+| Global assignment adapter | `planning/assignment.py` gained `OptimizedAssignmentPlanner`, which builds the abstract optimization problem from `MapModel`, runs the verified optimizer-versus-baseline comparison, records fallback status, and realizes the selected task order with the existing safe `RoutePlanner` and waypoint model. |
+| UI and degradation | Planning → Assignment planning… now selects `Greedy baseline` or `Global optimization`, with time budget and repair-round controls. Auto assign uses the selected mode; global mode records solver status, cancellation/degradation/fallback text and rejects post-repair failures without writing the candidate into the project. |
+| OPT-08 evidence | Added a fixed abstract instance where deterministic greedy takes 152.0 s while a solver candidate returns a verified 4.0 s route, proving the comparison path can keep a strictly better optimizer answer. |
+
+### Acceptance evidence
+
+| Check | Result |
+|---|---|
+| Repair budget exhaustion is explicit | `test_unresolved_conflict_is_reported_when_repair_budget_is_zero` reports `D-02` still conflicting on leg 2 after the repair budget |
+| Conflict waits are rechecked against deadlines | `test_deconfliction_wait_is_rechecked_against_deadlines` rejects a route that slips past a 22.0 s deadline after the inserted wait |
+| Conflict waits are rechecked against energy | `test_deconfliction_wait_is_rechecked_against_energy` rejects a wait-inflated route against remaining battery |
+| Greedy-inferior benchmark | `test_fixed_greedy_inferior_case_keeps_the_verified_optimizer_candidate`: greedy 152.0 s, optimizer 4.0 s, baseline not kept |
+| UI mode and settings | `test_assignment_planning_dialog_persists_solver_settings`, `test_global_assignment_mode_runs_from_the_auto_assign_action` |
+| Related regression suite | `tests/unit/test_deconfliction.py`, `tests/unit/test_optimization.py`, `tests/unit/test_optimization_constraints.py`, `tests/integration/test_ui_smoke.py` — **66 passed** |
+
+### Validation evidence
+
+| Check | Result |
+|---|---|
+| `-m ruff check src tests scripts` | All checks passed |
+| `-m mypy src tests` | Success, 120 source files |
+| `pytest D:/dmp/tests --basetemp=D:/dmp/.pytest-tmp-f3c-full4` | **382 passed** |
+
+Note: two earlier full-suite attempts in this pass hit non-deterministic Windows/Python native failures outside the edited modules (`SimulationEngine`/coverage monitor stacks). The failing delivery-example single test passed immediately afterwards, and the final full-suite rerun passed.
+
+Remaining after F3: F4 georeferencing, F5 GIS/DEM, F6 target export validation and F7 integration/release. Still intentionally deferred: Gantt drag-rescheduling, cross-aircraft online coordination/synchronised launch semantics, and the migration-report UI dialog.
 
 ## v1.2 F3-b checkpoint — hard constraints and cross-area coverage blocks (this pass)
 

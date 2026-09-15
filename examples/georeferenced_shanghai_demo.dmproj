@@ -1,0 +1,621 @@
+{
+  "equipment": {
+    "batteries": [
+      {
+        "aging_factor": 0.9,
+        "capacity": 100.0,
+        "name": "LiIon 4S 10Ah",
+        "safety_margin": 0.15,
+        "usable_ratio": 0.85,
+        "voltage": 14.8
+      },
+      {
+        "aging_factor": 0.9,
+        "capacity": 220.0,
+        "name": "LiPo 6S 22Ah",
+        "safety_margin": 0.15,
+        "usable_ratio": 0.85,
+        "voltage": 22.2
+      },
+      {
+        "aging_factor": 0.9,
+        "capacity": 440.0,
+        "name": "LiPo 6S 44Ah",
+        "safety_margin": 0.15,
+        "usable_ratio": 0.85,
+        "voltage": 22.2
+      }
+    ],
+    "drone_models": [
+      {
+        "air_speed": 15.0,
+        "climb_power": 140.0,
+        "climb_rate": 3.0,
+        "communication_range": 180.0,
+        "cruise_altitude": 100.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.08,
+        "horizontal_power": 110.0,
+        "hover_power": 90.0,
+        "max_speed": 15.0,
+        "min_clearance": 30.0,
+        "name": "Quad Scout",
+        "payload_capacity": 2.0
+      },
+      {
+        "air_speed": 12.0,
+        "climb_power": 220.0,
+        "climb_rate": 3.0,
+        "communication_range": 260.0,
+        "cruise_altitude": 120.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.12,
+        "horizontal_power": 180.0,
+        "hover_power": 150.0,
+        "max_speed": 12.0,
+        "min_clearance": 30.0,
+        "name": "Heavy Lifter",
+        "payload_capacity": 8.0
+      },
+      {
+        "air_speed": 25.0,
+        "climb_power": 120.0,
+        "climb_rate": 3.0,
+        "communication_range": 400.0,
+        "cruise_altitude": 150.0,
+        "descent_power": 25.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.04,
+        "horizontal_power": 60.0,
+        "hover_power": 40.0,
+        "max_speed": 25.0,
+        "min_clearance": 30.0,
+        "name": "Long Range Fixed Wing",
+        "payload_capacity": 1.5
+      }
+    ],
+    "mission_templates": [
+      {
+        "description": "Perimeter and structure inspection",
+        "name": "inspection",
+        "settings": {
+          "default_target_altitude": 120.0,
+          "mission_mode": "point_tasks"
+        }
+      },
+      {
+        "description": "Coverage sweep with high target coverage",
+        "name": "search_and_rescue",
+        "settings": {
+          "mission_mode": "coverage",
+          "scan_spacing": 30.0,
+          "target_coverage": 0.98
+        }
+      },
+      {
+        "description": "Payload delivery with energy reserve",
+        "name": "delivery",
+        "settings": {
+          "default_target_altitude": 80.0,
+          "mission_mode": "point_tasks"
+        }
+      },
+      {
+        "description": "Photogrammetry coverage",
+        "name": "mapping",
+        "settings": {
+          "mission_mode": "coverage",
+          "scan_spacing": 20.0,
+          "target_coverage": 0.95
+        }
+      }
+    ],
+    "payloads": [
+      {
+        "name": "EO camera",
+        "power_draw": 6.0,
+        "weight": 0.4
+      },
+      {
+        "name": "Cargo box",
+        "power_draw": 0.0,
+        "weight": 2.5
+      },
+      {
+        "name": "Air quality sensor",
+        "power_draw": 8.0,
+        "weight": 0.3
+      }
+    ]
+  },
+  "georeference": {
+    "control_points": [
+      {
+        "id": "CP-ORIGIN",
+        "local": {
+          "east_m": 0.0,
+          "north_m": 0.0,
+          "up_m": 0.0
+        },
+        "name": "Origin survey nail",
+        "observed": {
+          "height_m": 10.0,
+          "latitude_deg": 31.2304,
+          "longitude_deg": 121.4737
+        }
+      },
+      {
+        "id": "CP-EAST",
+        "local": {
+          "east_m": 240.0,
+          "north_m": 0.0,
+          "up_m": 0.0
+        },
+        "name": "East gate check point",
+        "observed": {
+          "height_m": 10.004511355422437,
+          "latitude_deg": 31.23039997532826,
+          "longitude_deg": 121.47621904981416
+        }
+      },
+      {
+        "id": "CP-NORTH",
+        "local": {
+          "east_m": 0.0,
+          "north_m": 220.0,
+          "up_m": 0.0
+        },
+        "name": "North roof check point",
+        "observed": {
+          "height_m": 10.003809471614659,
+          "latitude_deg": 31.23238424107863,
+          "longitude_deg": 121.4737
+        }
+      }
+    ],
+    "geofences": [
+      {
+        "ceiling_m": 150.0,
+        "center": null,
+        "floor_m": 0.0,
+        "id": "GF-ALLOW-01",
+        "kind": "inclusion",
+        "name": "Shanghai campus operating envelope",
+        "polygon": [
+          {
+            "x": 0.0,
+            "y": 0.0
+          },
+          {
+            "x": 700.0,
+            "y": 0.0
+          },
+          {
+            "x": 700.0,
+            "y": 500.0
+          },
+          {
+            "x": 0.0,
+            "y": 500.0
+          }
+        ],
+        "radius_m": null
+      },
+      {
+        "ceiling_m": 150.0,
+        "center": {
+          "x": 565.0,
+          "y": 400.0
+        },
+        "floor_m": 0.0,
+        "id": "GF-EXCL-01",
+        "kind": "exclusion",
+        "name": "Survey crane standoff",
+        "polygon": [],
+        "radius_m": 45.0
+      }
+    ],
+    "height_reference": {
+      "datum": "ellipsoid",
+      "geoid_model": null,
+      "home_altitude_m": 10.0,
+      "source": "demo RTK survey"
+    },
+    "horizontal_crs": "EPSG:4326",
+    "mode": "georeferenced",
+    "origin": {
+      "height_m": 10.0,
+      "latitude_deg": 31.2304,
+      "longitude_deg": 121.4737
+    },
+    "revision": "0",
+    "spatial_bounds": {
+      "max_east_m": 700.0,
+      "max_north_m": 500.0,
+      "max_up_m": 150.0,
+      "min_east_m": 0.0,
+      "min_north_m": 0.0,
+      "min_up_m": 0.0
+    },
+    "valid_radius_m": 900.0,
+    "validation_status": "validated"
+  },
+  "map": {
+    "basemap": null,
+    "bases": [
+      {
+        "communication_range": 650.0,
+        "id": "B-01",
+        "name": "Shanghai RTK Home",
+        "position": {
+          "x": 60.0,
+          "y": 70.0
+        }
+      }
+    ],
+    "drones": [
+      {
+        "air_speed": 0.0,
+        "assigned_tasks": [
+          "T-01",
+          "T-02"
+        ],
+        "battery_capacity": 220.0,
+        "climb_power": 140.0,
+        "climb_rate": 3.0,
+        "communication_range": 650.0,
+        "cruise_altitude": 85.0,
+        "current_payload": 0.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.05,
+        "ground_idle_power": 5.0,
+        "home_base_id": "B-01",
+        "horizontal_power": 110.0,
+        "hover_power": 90.0,
+        "id": "D-01",
+        "max_speed": 14.0,
+        "min_clearance": 25.0,
+        "name": "Survey Alpha",
+        "payload_capacity": 3.0,
+        "position": {
+          "x": 60.0,
+          "y": 70.0
+        },
+        "remaining_battery": 220.0,
+        "role": "mission",
+        "safety_radius": 8.0,
+        "status": "idle",
+        "waypoints": [
+          {
+            "action": "fly_to",
+            "altitude": 85.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 0.0,
+            "speed": 10.0,
+            "task_id": null,
+            "x": 60.0,
+            "y": 70.0
+          },
+          {
+            "action": "take_photo",
+            "altitude": 80.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 2.0,
+            "speed": 8.0,
+            "task_id": "T-01",
+            "x": 260.0,
+            "y": 140.0
+          },
+          {
+            "action": "take_photo",
+            "altitude": 82.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 2.0,
+            "speed": 8.0,
+            "task_id": "T-02",
+            "x": 420.0,
+            "y": 250.0
+          },
+          {
+            "action": "return_to_launch",
+            "altitude": 85.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 0.0,
+            "speed": 10.0,
+            "task_id": null,
+            "x": 60.0,
+            "y": 70.0
+          }
+        ]
+      },
+      {
+        "air_speed": 0.0,
+        "assigned_tasks": [
+          "T-03"
+        ],
+        "battery_capacity": 180.0,
+        "climb_power": 140.0,
+        "climb_rate": 3.0,
+        "communication_range": 650.0,
+        "cruise_altitude": 75.0,
+        "current_payload": 0.0,
+        "descent_power": 35.0,
+        "descent_rate": 2.5,
+        "energy_per_meter": 0.055,
+        "ground_idle_power": 5.0,
+        "home_base_id": "B-01",
+        "horizontal_power": 110.0,
+        "hover_power": 90.0,
+        "id": "D-02",
+        "max_speed": 12.0,
+        "min_clearance": 25.0,
+        "name": "Survey Bravo",
+        "payload_capacity": 3.0,
+        "position": {
+          "x": 80.0,
+          "y": 95.0
+        },
+        "remaining_battery": 180.0,
+        "role": "mission",
+        "safety_radius": 8.0,
+        "status": "idle",
+        "waypoints": [
+          {
+            "action": "fly_to",
+            "altitude": 75.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 0.0,
+            "speed": 9.0,
+            "task_id": null,
+            "x": 80.0,
+            "y": 95.0
+          },
+          {
+            "action": "scan",
+            "altitude": 60.0,
+            "altitude_mode": "agl",
+            "hold_seconds": 6.0,
+            "speed": 7.5,
+            "task_id": "T-03",
+            "x": 160.0,
+            "y": 330.0
+          },
+          {
+            "action": "return_to_launch",
+            "altitude": 75.0,
+            "altitude_mode": "msl",
+            "hold_seconds": 0.0,
+            "speed": 9.0,
+            "task_id": null,
+            "x": 80.0,
+            "y": 95.0
+          }
+        ]
+      }
+    ],
+    "grid_size": 25.0,
+    "height": 500,
+    "no_fly_zones": [
+      {
+        "bounds": {
+          "height": 90.0,
+          "width": 90.0,
+          "x": 520.0,
+          "y": 355.0
+        },
+        "ceiling_altitude": 120.0,
+        "id": "N-01",
+        "name": "Tower crane exclusion",
+        "points": [],
+        "shape": "circle",
+        "temporary": false
+      }
+    ],
+    "obstacles": [
+      {
+        "bounds": {
+          "height": 55.0,
+          "width": 95.0,
+          "x": 130.0,
+          "y": 20.0
+        },
+        "height": 42.0,
+        "id": "O-01",
+        "name": "Operations hall",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 75.0,
+          "width": 100.0,
+          "x": 305.0,
+          "y": 45.0
+        },
+        "height": 58.0,
+        "id": "O-02",
+        "name": "East lab block",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 75.0,
+          "width": 105.0,
+          "x": 365.0,
+          "y": 315.0
+        },
+        "height": 38.0,
+        "id": "O-03",
+        "name": "North warehouse",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 45.0,
+          "width": 75.0,
+          "x": 190.0,
+          "y": 410.0
+        },
+        "height": 28.0,
+        "id": "O-04",
+        "name": "Riverside pump house",
+        "points": [],
+        "radius": 0.0,
+        "shape": "rectangle"
+      },
+      {
+        "bounds": {
+          "height": 55.0,
+          "width": 55.0,
+          "x": 485.0,
+          "y": 175.0
+        },
+        "height": 70.0,
+        "id": "O-05",
+        "name": "Utility tower",
+        "points": [],
+        "radius": 27.5,
+        "shape": "circle"
+      }
+    ],
+    "search_areas": [
+      {
+        "boundary_margin": 8.0,
+        "bounds": {
+          "height": 115.0,
+          "width": 180.0,
+          "x": 105.0,
+          "y": 275.0
+        },
+        "holes": [],
+        "id": "S-01",
+        "name": "Riverside verified ENU sector",
+        "points": [
+          {
+            "x": 105.0,
+            "y": 275.0
+          },
+          {
+            "x": 285.0,
+            "y": 285.0
+          },
+          {
+            "x": 260.0,
+            "y": 390.0
+          },
+          {
+            "x": 120.0,
+            "y": 380.0
+          }
+        ],
+        "priority": 7,
+        "scan_direction": "horizontal",
+        "scan_spacing": 35.0,
+        "target_coverage": 0.9
+      }
+    ],
+    "tasks": [
+      {
+        "assigned_drone_id": "D-01",
+        "deadline": null,
+        "deadline_policy": "hard",
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-01",
+        "min_lag_seconds": 0.0,
+        "name": "East facade photo",
+        "position": {
+          "x": 260.0,
+          "y": 140.0
+        },
+        "predecessor_ids": [],
+        "priority": 8,
+        "required_payload": 0.0,
+        "status": "assigned",
+        "target_altitude": 80.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": "D-01",
+        "deadline": null,
+        "deadline_policy": "hard",
+        "earliest_start": null,
+        "execution_duration": 4.0,
+        "id": "T-02",
+        "min_lag_seconds": 10.0,
+        "name": "North roof antenna check",
+        "position": {
+          "x": 420.0,
+          "y": 250.0
+        },
+        "predecessor_ids": [
+          "T-01"
+        ],
+        "priority": 7,
+        "required_payload": 0.0,
+        "status": "assigned",
+        "target_altitude": 82.0,
+        "task_type": "inspection"
+      },
+      {
+        "assigned_drone_id": "D-02",
+        "deadline": null,
+        "deadline_policy": "hard",
+        "earliest_start": null,
+        "execution_duration": 6.0,
+        "id": "T-03",
+        "min_lag_seconds": 0.0,
+        "name": "Riverside thermal sweep",
+        "position": {
+          "x": 160.0,
+          "y": 330.0
+        },
+        "predecessor_ids": [],
+        "priority": 6,
+        "required_payload": 0.0,
+        "status": "assigned",
+        "target_altitude": 68.0,
+        "task_type": "area_search"
+      }
+    ],
+    "terrain": {
+      "base_altitude": 8.0,
+      "grid_altitudes": [],
+      "grid_height": 0,
+      "grid_origin": null,
+      "grid_width": 0,
+      "max_altitude": 8.0,
+      "min_altitude": 8.0,
+      "peaks": [],
+      "resolution": 25.0,
+      "terrain_type": "flat"
+    },
+    "width": 700,
+    "wind": {
+      "direction_to_deg": 65.0,
+      "enabled": true,
+      "gust_factor": 0.15,
+      "speed": 3.5
+    }
+  },
+  "name": "Georeferenced Shanghai Campus Demo",
+  "planning_settings": {
+    "assignment_mode": "global",
+    "georeference_revision_counter": 0
+  },
+  "simulation_settings": {
+    "communication_grace": 5.0,
+    "communication_policy": "log_only",
+    "fixed_dt": 0.05,
+    "random_seed": 4242
+  },
+  "version": "1.10"
+}

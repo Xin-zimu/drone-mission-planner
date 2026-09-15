@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from drone_mission_planner.domain.enums import (
     DeadlinePolicy,
     DroneStatus,
     TaskStatus,
+    TaskType,
     WaypointAction,
 )
 from drone_mission_planner.domain.geometry import Point
@@ -13,6 +15,22 @@ from drone_mission_planner.domain.models import Drone, MapModel, MissionTask
 from drone_mission_planner.domain.waypoint import Waypoint
 
 from .energy import EnergyEstimate, estimate_energy
+from .energy_ledger import DEFAULT_RESERVE_RATIO
+from .optimization import (
+    AssignmentOutcome,
+    AssignmentProblem,
+    AssignmentSolver,
+    ORToolsAssignmentSolver,
+    RouteAssignment,
+    SolverSettings,
+    SolverStatus,
+    SolverTask,
+    SolverVehicle,
+    evaluate_routes,
+    greedy_routes,
+    solve_with_baseline_details,
+    ticks_up,
+)
 from .result import PathResult
 from .route_planner import RoutePlanner
 from .scheduling import (
@@ -21,6 +39,7 @@ from .scheduling import (
     resolve_start,
     validate_dependencies,
 )
+from .travel_costs import TravelCostProvider, environment_revision
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +131,10 @@ class AssignmentResult:
     drone_paths: dict[str, list[Point]] = field(default_factory=dict)
     drone_waypoints: dict[str, list[Waypoint]] = field(default_factory=dict)
     schedule: ScheduleResult | None = None
+    planner_mode: str = "greedy"
+    solver_status: str = ""
+    solver_message: str = ""
+    kept_baseline: bool = False
 
     @property
     def assigned_count(self) -> int:
@@ -340,6 +363,358 @@ class GreedyAssignmentPlanner:
             assignments=assignments,
         )
         return result
+
+
+class OptimizedAssignmentPlanner:
+    """MapModel adapter for the global assignment solver.
+
+    The OR-Tools layer works on a compact node matrix; the desktop application
+    needs concrete safe routes and waypoints. This adapter keeps those concerns
+    separate: build the abstract problem, choose a verified solver/baseline
+    sequence, then realize that sequence with the existing RoutePlanner.
+    """
+
+    def __init__(
+        self,
+        route_planner: RoutePlanner | None = None,
+        *,
+        settings: SolverSettings | None = None,
+        weights: AssignmentWeights | None = None,
+        solver: AssignmentSolver | None = None,
+    ) -> None:
+        self.route_planner = route_planner or RoutePlanner()
+        self.costs = TravelCostProvider(self.route_planner)
+        self.settings = settings or SolverSettings()
+        self.weights = weights or AssignmentWeights()
+        self.solver = solver or ORToolsAssignmentSolver()
+
+    def assign(
+        self,
+        map_model: MapModel,
+        *,
+        cancel: Callable[[], bool] | None = None,
+    ) -> AssignmentResult:
+        if cancel is not None and cancel():
+            return _empty_assignment_result(
+                map_model,
+                mode="global",
+                status=SolverStatus.CANCELLED,
+                message="cancelled before matrix build",
+            )
+        built = _build_optimization_problem(
+            map_model,
+            self.route_planner,
+            self.costs,
+            self.settings,
+        )
+        if isinstance(built, AssignmentResult):
+            built.planner_mode = "global"
+            return built
+        problem, task_lookup = built
+        chosen, kept_baseline, solver_outcome = solve_with_baseline_details(
+            problem,
+            solver=self.solver,
+            cancel=cancel,
+        )
+        if cancel is not None and cancel():
+            return _empty_assignment_result(
+                map_model,
+                mode="global",
+                status=SolverStatus.CANCELLED,
+                message="cancelled before applying solver output",
+            )
+        if chosen.status is not SolverStatus.FEASIBLE:
+            result = _empty_assignment_result(
+                map_model,
+                mode="global",
+                status=chosen.status,
+                message=chosen.message,
+            )
+            result.failures.extend(
+                AssignmentFailure(task_id, {"solver": [reason]})
+                for task_id, reason in chosen.unassigned
+            )
+            return result
+        result = _realize_solver_outcome(map_model, chosen, task_lookup, self.route_planner, self.weights)
+        result.planner_mode = "global"
+        result.solver_status = solver_outcome.status.value
+        result.solver_message = solver_outcome.message
+        result.kept_baseline = kept_baseline
+        return result
+
+
+def _empty_assignment_result(
+    map_model: MapModel,
+    *,
+    mode: str,
+    status: SolverStatus,
+    message: str,
+) -> AssignmentResult:
+    return AssignmentResult(
+        drone_paths={drone.id: [] for drone in map_model.drones},
+        drone_waypoints={drone.id: [] for drone in map_model.drones},
+        planner_mode=mode,
+        solver_status=status.value,
+        solver_message=message,
+    )
+
+
+def _build_optimization_problem(
+    map_model: MapModel,
+    route_planner: RoutePlanner,
+    costs: TravelCostProvider,
+    settings: SolverSettings,
+) -> tuple[AssignmentProblem, dict[str, MissionTask]] | AssignmentResult:
+    pending = {
+        task.id: task
+        for task in map_model.tasks
+        if task.status in {TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS}
+    }
+    active_drones = [
+        drone
+        for drone in map_model.drones
+        if drone.status not in {DroneStatus.FAILED, DroneStatus.EMERGENCY}
+        and drone.role != "relay"
+        and any(base.id == drone.home_base_id for base in map_model.bases)
+    ]
+    if not pending or not active_drones:
+        result = _empty_assignment_result(
+            map_model,
+            mode="global",
+            status=SolverStatus.INFEASIBLE,
+            message="no active mission drones or pending tasks are available",
+        )
+        for task_id in pending:
+            result.failures.append(AssignmentFailure(task_id, {"solver": ["no active mission drone"]}))
+        return result
+
+    node_points: list[Point] = []
+
+    def node_for(point: Point) -> int:
+        for index, existing in enumerate(node_points):
+            if existing.distance_to(point) <= 1e-6:
+                return index
+        node_points.append(point)
+        return len(node_points) - 1
+
+    for drone in active_drones:
+        node_for(drone.position)
+        home = next(base for base in map_model.bases if base.id == drone.home_base_id)
+        node_for(home.position)
+    for task in pending.values():
+        node_for(task.position)
+
+    revision = environment_revision(map_model)
+    matrix: list[list[int]] = []
+    for origin in node_points:
+        row: list[int] = []
+        for destination in node_points:
+            if origin.distance_to(destination) <= 1e-6:
+                row.append(0)
+                continue
+            candidates = [
+                costs.leg(map_model, drone, origin, destination, environment=revision)
+                for drone in active_drones
+            ]
+            reachable = [candidate for candidate in candidates if candidate.reachable]
+            if not reachable:
+                row.append(10**12)
+            else:
+                row.append(ticks_up(min(candidate.time for candidate in reachable), settings.tick_seconds))
+        matrix.append(row)
+
+    vehicles = []
+    for drone in active_drones:
+        home = next(base for base in map_model.bases if base.id == drone.home_base_id)
+        air_speed = drone.air_speed if drone.air_speed > 0 else drone.max_speed
+        vehicles.append(
+            SolverVehicle(
+                drone.id,
+                node_for(drone.position),
+                node_for(home.position),
+                capacity=max(0.0, drone.payload_capacity - drone.current_payload),
+                energy_capacity=drone.remaining_battery,
+                reserve_energy=drone.battery_capacity * DEFAULT_RESERVE_RATIO,
+                energy_per_tick=air_speed * drone.energy_per_meter,
+                hover_energy_per_second=drone.hover_power / 3600.0,
+            )
+        )
+    tasks = tuple(
+        SolverTask(
+            task.id,
+            node_for(task.position),
+            demand=task.required_payload,
+            earliest_start=task.earliest_start,
+            deadline=task.deadline,
+            service_seconds=task.execution_duration,
+            predecessor_ids=tuple(task.predecessor_ids),
+            min_lag_seconds=task.min_lag_seconds,
+            energy_demand=0.0,
+        )
+        for task in pending.values()
+    )
+    problem = AssignmentProblem(
+        node_count=len(node_points),
+        travel_ticks=matrix,
+        vehicles=tuple(vehicles),
+        tasks=tasks,
+        settings=settings,
+    )
+    baseline = evaluate_routes(problem, greedy_routes(problem))
+    if baseline.status is not SolverStatus.FEASIBLE:
+        result = _empty_assignment_result(
+            map_model,
+            mode="global",
+            status=baseline.status,
+            message=baseline.message or "baseline route is infeasible under the optimization model",
+        )
+        result.failures.extend(
+            AssignmentFailure(task_id, {"solver": [reason]})
+            for task_id, reason in baseline.unassigned
+        )
+        return result
+    return problem, pending
+
+
+def _realize_solver_outcome(
+    map_model: MapModel,
+    outcome: AssignmentOutcome,
+    tasks: dict[str, MissionTask],
+    route_planner: RoutePlanner,
+    weights: AssignmentWeights,
+) -> AssignmentResult:
+    result = AssignmentResult(
+        drone_paths={drone.id: [] for drone in map_model.drones},
+        drone_waypoints={drone.id: [] for drone in map_model.drones},
+    )
+    drones = {drone.id: drone for drone in map_model.drones}
+    positions = {drone.id: drone.position for drone in map_model.drones}
+    assignments: dict[str, str] = {}
+    travel_times: dict[str, float] = {}
+    for route in outcome.routes:
+        _realize_route(
+            map_model,
+            route,
+            tasks,
+            drones,
+            positions,
+            route_planner,
+            weights,
+            result,
+            travel_times,
+        )
+        for task_id in route.task_ids:
+            if task_id in tasks:
+                assignments[task_id] = route.drone_id
+    result.schedule = evaluate_schedule(
+        list(tasks.values()),
+        travel_seconds=travel_times,
+        assignments=assignments,
+    )
+    return result
+
+
+def _realize_route(
+    map_model: MapModel,
+    route: RouteAssignment,
+    tasks: dict[str, MissionTask],
+    drones: dict[str, Drone],
+    positions: dict[str, Point],
+    route_planner: RoutePlanner,
+    weights: AssignmentWeights,
+    result: AssignmentResult,
+    travel_times: dict[str, float],
+) -> None:
+    drone = drones.get(route.drone_id)
+    if drone is None:
+        return
+    route_path = result.drone_paths[drone.id]
+    route_waypoints = result.drone_waypoints[drone.id]
+    for route_index, task_id in enumerate(route.task_ids):
+        task = tasks.get(task_id)
+        if task is None:
+            continue
+        candidate = replace(drone, position=positions[drone.id])
+        leg = route_planner.plan(map_model, candidate, task.position)
+        if not leg.success:
+            result.failures.append(
+                AssignmentFailure(task.id, {drone.id: [leg.failure_reason or "task is unreachable"]})
+            )
+            continue
+        home = next((base for base in map_model.bases if base.id == drone.home_base_id), None)
+        return_leg = (
+            route_planner.plan(map_model, replace(drone, position=task.position), home.position)
+            if home is not None
+            else PathResult.failure("home base is missing")
+        )
+        if not return_leg.success:
+            result.failures.append(
+                AssignmentFailure(task.id, {drone.id: [return_leg.failure_reason or "no safe return path"]})
+            )
+            continue
+        if leg.flight_waypoints:
+            leg.flight_waypoints[-1].task_id = task.id
+            leg.flight_waypoints[-1].action = _assignment_task_action(task)
+            leg.flight_waypoints[-1].hold_seconds = task.execution_duration
+        energy = estimate_energy(
+            drone,
+            mission_path=leg.waypoints,
+            return_path=return_leg.waypoints,
+            terrain=map_model.terrain,
+            wind=map_model.wind,
+            mission_end_altitude=task.target_altitude,
+            payload=task.required_payload + drone.current_payload,
+            hover_seconds=task.execution_duration,
+        )
+        cost = weights.cost(
+            energy.mission_energy,
+            leg.total_distance,
+            energy.total_required / max(drone.remaining_battery, 1e-9),
+            len(result.drone_waypoints[drone.id]),
+            0.0,
+        )
+        result.decisions.append(
+            AssignmentDecision(
+                task.id,
+                drone.id,
+                cost,
+                leg,
+                energy,
+                arrival_time=route.arrival_times[route_index]
+                if route_index < len(route.arrival_times)
+                else 0.0,
+                start_time=route.start_times[route_index]
+                if route_index < len(route.start_times)
+                else 0.0,
+                finish_time=route.finish_times[route_index]
+                if route_index < len(route.finish_times)
+                else 0.0,
+            )
+        )
+        travel_times[task.id] = leg.estimated_time
+        route_path.extend(leg.waypoints if not route_path else leg.waypoints[1:])
+        route_waypoints.extend(leg.flight_waypoints if not route_waypoints else leg.flight_waypoints[1:])
+        positions[drone.id] = task.position
+    home = next((base for base in map_model.bases if base.id == drone.home_base_id), None)
+    if route_path and home is not None:
+        return_leg = route_planner.plan(map_model, replace(drone, position=positions[drone.id]), home.position)
+        if return_leg.success:
+            route_path.extend(return_leg.waypoints[1:])
+            for waypoint in return_leg.flight_waypoints[1:]:
+                waypoint.action = WaypointAction.RETURN_TO_LAUNCH
+            route_waypoints.extend(return_leg.flight_waypoints[1:])
+
+
+def _assignment_task_action(task: MissionTask) -> WaypointAction:
+    if task.task_type == TaskType.AREA_SEARCH:
+        return WaypointAction.SCAN
+    if task.task_type == TaskType.INSPECTION:
+        return WaypointAction.TAKE_PHOTO
+    if task.task_type == TaskType.RETURN_HOME:
+        return WaypointAction.RETURN_TO_LAUNCH
+    if task.execution_duration > 0:
+        return WaypointAction.HOVER
+    return WaypointAction.FLY_TO
 
 
 def explain_assignments(

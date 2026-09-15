@@ -4,6 +4,13 @@ import pytest
 
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.georeference import (
+    GeoCoordinate,
+    Geofence,
+    HeightDatum,
+    HeightReference,
+    ProjectGeoreference,
+)
 from drone_mission_planner.domain.models import (
     BaseStation,
     Drone,
@@ -147,3 +154,16 @@ def test_rejects_invalid_role_and_coverage_metadata() -> None:
     assert "role must be mission or relay" in message
     assert "scan direction" in message
     assert "hole 1 must contain at least three points" in message
+
+
+def test_rejects_points_outside_georeference_constraints() -> None:
+    project = ProjectModel()
+    project.georeference = ProjectGeoreference.georeferenced(
+        origin=GeoCoordinate(31.2304, 121.4737, 10.0),
+        height_reference=HeightReference(HeightDatum.ELLIPSOID, source="rtk"),
+        geofences=(Geofence("GF-01", "allowed", center=Point(0.0, 0.0), radius_m=20.0),),
+    )
+    project.map.tasks.append(MissionTask("T-01", "Task", Point(50.0, 50.0)))
+
+    with pytest.raises(ProjectValidationError, match="outside every inclusion geofence"):
+        validate_project(project)

@@ -12,6 +12,7 @@ from drone_mission_planner.planning.assignment import (
 from drone_mission_planner.planning.deconfliction import (
     SpacetimeReservationTable,
     apply_deconfliction,
+    apply_deconfliction_closed_loop,
 )
 from drone_mission_planner.simulation.engine import SimulationEngine
 
@@ -64,6 +65,67 @@ def test_crossing_routes_receive_a_wait_point() -> None:
     assert waypoints[index].hold_seconds == pytest.approx(wait)
     # The hold must delay the crossing leg, not happen after it.
     assert index == 1
+
+
+def test_unresolved_conflict_is_reported_when_repair_budget_is_zero() -> None:
+    model = MapModel(width=400, height=400, grid_size=10.0)
+    model.bases.append(BaseStation("B-01", "Base", Point(10, 10)))
+    model.drones.extend([_drone("D-01", Point(100.0, 150.0)), _drone("D-02", Point(200.0, 50.0))])
+    result = _result_for(
+        {
+            "D-01": [Point(100.0, 150.0), Point(300.0, 150.0)],
+            "D-02": [Point(200.0, 50.0), Point(200.0, 100.0), Point(200.0, 250.0)],
+        }
+    )
+
+    report = apply_deconfliction_closed_loop(model, result, max_repair_rounds=0)
+
+    assert not report.feasible
+    assert report.unresolved == [("D-02", 2, "D-01")]
+    assert "repair budget" in report.notes()[0]
+
+
+def test_deconfliction_wait_is_rechecked_against_deadlines() -> None:
+    model = MapModel(width=400, height=400, grid_size=10.0)
+    model.bases.append(BaseStation("B-01", "Base", Point(10, 10)))
+    model.drones.extend([_drone("D-01", Point(100.0, 150.0)), _drone("D-02", Point(200.0, 50.0))])
+    task = MissionTask("T-D-02", "T-D-02", Point(200.0, 250.0), deadline=22.0, execution_duration=0.0)
+    model.tasks.append(task)
+    result = _result_for(
+        {
+            "D-01": [Point(100.0, 150.0), Point(300.0, 150.0)],
+            "D-02": [Point(200.0, 50.0), Point(200.0, 100.0), Point(200.0, 250.0)],
+        }
+    )
+    result.drone_waypoints["D-02"][-1].task_id = task.id
+
+    report = apply_deconfliction_closed_loop(model, result, max_repair_rounds=1)
+
+    assert report.waits
+    assert not report.feasible
+    assert any("after deadline 22.0 s" in reason for reason in report.postcheck_failures)
+
+
+def test_deconfliction_wait_is_rechecked_against_energy() -> None:
+    model = MapModel(width=400, height=400, grid_size=10.0)
+    model.bases.append(BaseStation("B-01", "Base", Point(10, 10)))
+    first = _drone("D-01", Point(100.0, 150.0))
+    second = _drone("D-02", Point(200.0, 50.0))
+    second.battery_capacity = 20.0
+    second.remaining_battery = 19.05
+    model.drones.extend([first, second])
+    result = _result_for(
+        {
+            "D-01": [Point(100.0, 150.0), Point(300.0, 150.0)],
+            "D-02": [Point(200.0, 50.0), Point(200.0, 100.0), Point(200.0, 250.0)],
+        }
+    )
+
+    report = apply_deconfliction_closed_loop(model, result, max_repair_rounds=1)
+
+    assert report.waits
+    assert not report.feasible
+    assert any("energy against remaining 19.1" in reason for reason in report.postcheck_failures)
 
 
 def test_non_crossing_routes_get_no_waits() -> None:

@@ -7,6 +7,15 @@ import pytest
 from drone_mission_planner.app.project_service import ProjectService
 from drone_mission_planner.domain.enums import TaskStatus
 from drone_mission_planner.domain.geometry import Point, Rect
+from drone_mission_planner.domain.georeference import (
+    EnuCoordinate,
+    GeoCoordinate,
+    GeoreferenceValidationStatus,
+    HeightDatum,
+    HeightReference,
+    LocalTangentPlaneAdapter,
+    ProjectGeoreference,
+)
 from drone_mission_planner.domain.terrain import (
     TerrainModel,
     TerrainPeak,
@@ -124,3 +133,33 @@ def test_editing_task_assignment_synchronizes_both_sides() -> None:
 
     assert task.status.value == "pending"
     assert task.id not in second.assigned_tasks
+
+
+def test_reanchor_georeference_preserves_real_positions_and_invalidates_validation() -> None:
+    service = ProjectService()
+    origin = GeoCoordinate(31.2304, 121.4737, 10.0)
+    service.update_georeference(
+        ProjectGeoreference.georeferenced(
+            origin=origin,
+            height_reference=HeightReference(HeightDatum.ELLIPSOID, source="rtk"),
+            validation_status=GeoreferenceValidationStatus.VALIDATED,
+        )
+    )
+    assert service.project.planning_settings["georeference_revision_counter"] == 1
+    base = service.add_base(Point(100.0, 80.0))
+    drone = service.add_drone(Point(110.0, 80.0))
+    task = service.add_task(Point(200.0, 120.0))
+    drone.waypoints = [Waypoint(110.0, 80.0, 50.0), Waypoint(200.0, 120.0, 60.0)]
+    before_geo = service.project.georeference.local_to_geodetic(task.position)
+    new_origin = LocalTangentPlaneAdapter(origin).enu_to_geodetic(EnuCoordinate(30.0, 10.0))
+
+    service.reanchor_georeference_origin(new_origin)
+
+    after_geo = service.project.georeference.local_to_geodetic(task.position)
+    assert service.project.planning_settings["georeference_revision_counter"] == 2
+    assert service.project.georeference.validation_status == GeoreferenceValidationStatus.STALE
+    assert task.position != Point(200.0, 120.0)
+    assert base.position != Point(100.0, 80.0)
+    assert drone.waypoints[1].point == task.position
+    assert after_geo.latitude_deg == pytest.approx(before_geo.latitude_deg, abs=1e-9)
+    assert after_geo.longitude_deg == pytest.approx(before_geo.longitude_deg, abs=1e-9)

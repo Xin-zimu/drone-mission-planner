@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QDialog, QDoubleSpinBox, QMessageBox
 
 from drone_mission_planner.app.project_service import ProjectService
@@ -40,10 +39,15 @@ def test_main_window_renders_project(qtbot: object) -> None:
 def test_coordinate_conversion_is_stable(qtbot: object) -> None:
     window = MainWindow()
     qtbot.addWidget(window)  # type: ignore[attr-defined]
-    world = window.map_view.screen_to_world(QPoint(20, 20))
+    world = Point(20.0, 20.0)
     scene = window.map_view.world_to_scene(world)
-    assert scene.x() == world.x
-    assert scene.y() == world.y
+    restored = window.map_view.scene_to_world(scene)
+    north = window.map_view.world_to_scene(Point(world.x, world.y + 10.0))
+    assert restored.x == pytest.approx(world.x)
+    assert restored.y == pytest.approx(world.y)
+    assert scene.x() == pytest.approx(world.x)
+    assert scene.y() == pytest.approx(window.service.project.map.height - world.y)
+    assert north.y() < scene.y()
 
 
 def test_terrain_view_renders_without_enabling_edit_tools(qtbot: object) -> None:
@@ -524,6 +528,47 @@ def test_assignment_weights_dialog_applies_without_key_error(
 
     assert "assignment_weight_energy" in window.service.project.planning_settings
     assert window.service.undo_label == "Edit assignment weights"
+    window.service.dirty = False
+
+
+def test_assignment_planning_dialog_persists_solver_settings(
+    qtbot: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "drone_mission_planner.ui.main_window.QDialog.exec",
+        lambda _dialog: QDialog.DialogCode.Accepted,
+    )
+
+    window.edit_assignment_planning()
+
+    settings = window.service.project.planning_settings
+    assert settings["assignment_solver_mode"] == "greedy"
+    assert settings["assignment_time_budget_seconds"] == 5.0
+    assert settings["assignment_repair_rounds"] == 3
+    assert window.service.undo_label == "Edit assignment planning"
+    window.service.dirty = False
+
+
+def test_global_assignment_mode_runs_from_the_auto_assign_action(qtbot: object) -> None:
+    service = ProjectService()
+    service.add_base(Point(20.0, 20.0))
+    service.add_drone(Point(20.0, 20.0))
+    service.add_task(Point(120.0, 20.0))
+    service.project.planning_settings["assignment_solver_mode"] = "global"
+    service.project.planning_settings["assignment_time_budget_seconds"] = 1.0
+    service.project.planning_settings["assignment_repair_rounds"] = 1
+    service.dirty = False
+    window = MainWindow(service)
+    qtbot.addWidget(window)  # type: ignore[attr-defined]
+
+    window.auto_assign_tasks()
+
+    assert window.assignment_table.rowCount() == 1
+    assert service.project.map.tasks[0].assigned_drone_id == service.project.map.drones[0].id
+    assert "Global assigned 1/1 missions" in window.statusBar().currentMessage()
+    assert any("global optimization" in note for note in window._assignment_notes)
     window.service.dirty = False
 
 

@@ -19,7 +19,7 @@
 | 3D waypoints | Every planned route also produces `x/y/altitude` waypoints with MSL/AGL mode, per-waypoint speed, actions (fly/hover/photo/scan/land/RTL), hold times, and task links; the Waypoints tab edits altitude/mode/speed/action/hold and re-computes risks and energy |
 | 3D mission view | Read-only software-rendered 3D scene with terrain mesh, 3D routes, obstacle/no-fly volumes, coverage cells, risk segments, wind arrow, orbit camera, layer toggles, camera presets, and cross-view selection sync |
 | Assignment | Priority-first multi-drone allocation with payload, terrain/wind-aware energy, safe return, reserve, and per-drone rejection reasons; scoring uses the cumulative schedule (aircraft clock, time window, predecessor departures) and honours `hard`/`soft` deadlines |
-| Global optimisation | Optional OR-Tools heterogeneous VRPTW over directed, aircraft-specific leg costs (0.1 s ticks, conservative rounding); explicit outcome status, an independently re-checked greedy baseline, and a degradation path when OR-Tools is absent |
+| Global optimisation | Planning → Assignment planning… can switch Auto assign between the greedy baseline and optional OR-Tools global optimisation; solver results are independently re-checked, conflict repairs are bounded, and fallback/cancellation/degradation reasons are reported |
 | Cooperative search | Vertical strip partitioning, obstacle-safe lawnmower passes, incremental supplemental sweeps, return to base, live covered/uncovered-cell overlays, and repeat-coverage metrics |
 | Dynamic simulation | Fixed 0.05 s logic steps, 0.5x–10x playback, 3D state machine (climb/descent/hover/scan/landing, waypoint speed caps, photo and landing events), altitude/energy/distance/task integration, pause/step/reset |
 | Environment | Editable procedural terrain peaks, CSV elevation-grid import, base elevation, global wind vectors, climb/descent/hover power parameters, and a read-only 2.5D terrain view |
@@ -27,9 +27,9 @@
 | Safety | Time–space conflict prediction, priority yielding, combined safety radii, direct/multi-hop base connectivity, loss grace and auto-return |
 | Reporting | Per-aircraft and system statistics, completion/coverage charts, altitude risks, environment summary, plan-versus-actual mission times with deviations, event history, and HTML/JSON/CSV export |
 | Schedule | Read-only Gantt tab: one row per aircraft with a planned lane and an actual lane (waiting/travel/service in different colours); clicking a mission bar selects it on the map and in the inspector |
-| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.9, a single authoritative `waypoints` route (the 2D path is derived), scheduling fields with migration reports for rebuilt/conflicting routes and legacy deadlines, and clear corrupt/incompatible-file errors |
+| Persistence | Human-readable `.dmproj` JSON, schema migration through 1.10, project-level `local_only`/`georeferenced` metadata with CRS, height datum, control points, geofences and validation status, a single authoritative `waypoints` route (the 2D path is derived), scheduling fields with migration reports for rebuilt/conflicting routes and legacy deadlines, and clear corrupt/incompatible-file errors |
 | Local basemap | Map → Import basemap… overlays a local PNG/JPG under the mission grid with opacity/lock and two-point metre calibration persisted in the project |
-| Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation and explicit not-flyable local-coordinate marking |
+| Route export | File → Export route… writes one drone's 3D waypoints as internal JSON, inspection CSV, QGroundControl `.plan`, or ArduPilot WPL with pre-export risk/energy validation; validated georeferenced projects export real WGS84 latitude/longitude/height, while local-only, unknown-height, stale, or unvalidated projects stay explicitly not flyable |
 | Project safety | Undo/redo for common edits and planning operations; atomic saves; timed crash-recovery snapshots; recent projects; local settings; and a project validation center |
 
 ## Windows application
@@ -77,6 +77,7 @@ Press `F1` inside the application for the quick-start guide.
 | `examples/3d_inspection_demo.dmproj` | Two-drone mountain inspection with target altitudes, hover/photo task actions, and 3D simulation |
 | `examples/altitude_risk_demo.dmproj` | A low cruise route into a tall obstacle, showing critical altitude risks in reports and export validation |
 | `examples/waypoint_edit_demo.dmproj` | Waypoints-tab showcase: AGL/MSL modes, per-waypoint speed, hover/photo/land actions |
+| `examples/georeferenced_shanghai_demo.dmproj` | F4 georeferencing showcase: validated WGS84 origin, ENU planning, height datum, control points, visible building obstacles, a crane no-fly zone, geofences, and flyable real-coordinate QGC export |
 | `examples/regional_emergency_demo.dmproj` | Full-scale regional disaster response: three bases, eight heterogeneous aircraft, relays, 13 mixed missions, terrain/wind, layered hazards, and priority coverage sectors with holes |
 
 ## Controls
@@ -93,6 +94,7 @@ Press `F1` inside the application for the quick-start guide.
 | Edit terrain/wind | Workspace → Environment tab |
 | Import elevation CSV | Workspace → Environment tab → Import elevation CSV |
 | Point mission planning | `Ctrl+Shift+P` |
+| Assignment mode/settings | Planning → Assignment planning… |
 | Cooperative coverage | `Ctrl+Shift+C` |
 | 3D view | Toolbar or View menu; left-drag orbit, right-drag pan, wheel zoom; click to select |
 | Play / step | `Ctrl+Space` / `.` |
