@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from asyncio import wait_for
+from asyncio import sleep, wait_for
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,14 +27,20 @@ class MissionExecutionResult:
     command_log: tuple[str, ...]
     final_state: BridgeExecutionState
     events: tuple[dict[str, Any], ...] = ()
+    samples: tuple[dict[str, Any], ...] = ()
     status: str = "completed"
     failure_code: str | None = None
     failure_message: str | None = None
+    planned_duration_s: float = 0.0
+    actual_duration_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionSafetyPolicy:
     pose_stale_timeout_s: float = 0.5
+    waypoint_acceptance_radius_m: float = 0.15
+    max_tracking_error_m: float = 0.35
+    mission_timeout_s: float = 600.0
     takeoff_timeout_s: float = 5.0
     waypoint_timeout_margin_s: float = 1.0
     land_timeout_s: float = 5.0
@@ -49,10 +55,12 @@ class MissionExecutor:
     safety_policy: ExecutionSafetyPolicy = field(default_factory=ExecutionSafetyPolicy)
     settle_s: float = 0.0
     _events: list[dict[str, Any]] = field(default_factory=list)
+    _samples: list[dict[str, Any]] = field(default_factory=list)
     _abort_reason: str | None = None
     _emergency_reason: str | None = None
     _bridge_connected: bool = True
     _active: bool = False
+    _planned_elapsed_s: float = 0.0
 
     async def execute(self, mission: dict[str, Any]) -> MissionExecutionResult:
         if self._active:
@@ -66,11 +74,13 @@ class MissionExecutor:
         status = "completed"
         failure_code: str | None = None
         failure_message: str | None = None
+        actual_duration_s: float | None = None
         self._active = True
         try:
             self.adapter.connect()
             await self._check_safety(mission_id, "connect")
             first = _waypoint(waypoints[0])
+            takeoff_duration_s = max(first["duration_s"], 0.5)
             await self._transition(
                 mission_id,
                 BridgeExecutionState.TAKING_OFF,
@@ -78,11 +88,13 @@ class MissionExecutor:
             )
             await self._check_safety(mission_id, "takeoff_start")
             await self._command_with_timeout(
-                self.adapter.takeoff(first["z_m"], max(first["duration_s"], 0.5)),
+                self.adapter.takeoff(first["z_m"], takeoff_duration_s),
                 self.safety_policy.takeoff_timeout_s,
                 mission_id,
                 "takeoff_timeout",
             )
+            self._advance_elapsed(takeoff_duration_s, mission_id, "takeoff")
+            self._record_sample(mission_id, BridgeExecutionState.TAKING_OFF.value, first)
             await self._check_safety(mission_id, "takeoff_complete")
             await self._transition(mission_id, BridgeExecutionState.HOVERING, reason="takeoff_complete")
             await self._check_safety(mission_id, "hover")
@@ -95,6 +107,12 @@ class MissionExecutor:
                     mission_id=mission_id,
                     waypoint_index=waypoint["index"],
                     state="commanded",
+                )
+                self._event(
+                    "waypoint_state",
+                    mission_id=mission_id,
+                    waypoint_index=waypoint["index"],
+                    state="in_progress",
                 )
                 if waypoint["action"] == "land":
                     await self._transition(
@@ -109,7 +127,16 @@ class MissionExecutor:
                         mission_id,
                         "land_timeout",
                     )
+                    self._advance_elapsed(waypoint["duration_s"], mission_id, "land")
+                    self._record_sample(mission_id, BridgeExecutionState.LANDING.value, waypoint)
+                    self._verify_waypoint_acceptance(mission_id, waypoint)
                 else:
+                    if waypoint["action"] == "return_to_launch":
+                        await self._transition(
+                            mission_id,
+                            BridgeExecutionState.RETURNING,
+                            reason=f"waypoint_{waypoint['index']}_return_to_launch",
+                        )
                     await self._command_with_timeout(
                         self.adapter.go_to(
                             waypoint["x_m"],
@@ -122,8 +149,28 @@ class MissionExecutor:
                         mission_id,
                         "waypoint_timeout",
                     )
+                    self._advance_elapsed(waypoint["duration_s"], mission_id, "waypoint")
+                    self._record_sample(mission_id, BridgeExecutionState.EXECUTING.value, waypoint)
+                    self._verify_waypoint_acceptance(mission_id, waypoint)
+                    if waypoint["hold_s"] > 0.0:
+                        self._event(
+                            "waypoint_state",
+                            mission_id=mission_id,
+                            waypoint_index=waypoint["index"],
+                            state="holding",
+                            hold_s=waypoint["hold_s"],
+                        )
+                        await sleep(0)
+                        self._advance_elapsed(waypoint["hold_s"], mission_id, "hold")
+                        self._record_sample(mission_id, BridgeExecutionState.HOVERING.value, waypoint)
                 completed += 1
                 await self._check_safety(mission_id, f"waypoint_{waypoint['index']}_complete")
+                self._event(
+                    "waypoint_state",
+                    mission_id=mission_id,
+                    waypoint_index=waypoint["index"],
+                    state="settled",
+                )
                 self._event(
                     "waypoint_state",
                     mission_id=mission_id,
@@ -131,6 +178,7 @@ class MissionExecutor:
                     state="reached",
                 )
             await self._transition(mission_id, BridgeExecutionState.LANDED, reason="mission_complete")
+            actual_duration_s = self._planned_elapsed_s
         except MissionEmergencyStop as exc:
             status = "emergency"
             failure_code = "emergency_stop"
@@ -159,9 +207,12 @@ class MissionExecutor:
             command_log=command_log,
             final_state=final_state,
             events=tuple(self._events),
+            samples=tuple(self._samples),
             status=status,
             failure_code=failure_code,
             failure_message=failure_message,
+            planned_duration_s=_planned_duration_s(waypoints),
+            actual_duration_s=actual_duration_s if status == "completed" else self._planned_elapsed_s,
         )
 
     def request_abort(self, reason: str = "operator_abort") -> None:
@@ -207,6 +258,59 @@ class MissionExecutor:
         if pose.pose_age_s > self.safety_policy.pose_stale_timeout_s:
             self._abort_reason = "pose_stale"
             raise MissionAbortRequested(f"pose stale during {phase}")
+
+    def _advance_elapsed(self, duration_s: float, mission_id: str, phase: str) -> None:
+        self._planned_elapsed_s += duration_s
+        if self._planned_elapsed_s > self.safety_policy.mission_timeout_s:
+            self._abort_reason = "mission_timeout"
+            raise MissionAbortRequested(f"mission timeout during {phase} for {mission_id}")
+
+    def _record_sample(
+        self,
+        mission_id: str,
+        state: str,
+        waypoint: dict[str, Any] | None,
+    ) -> None:
+        pose = self.adapter.latest_state()
+        tracking_error_m = _tracking_error_m(pose, waypoint) if waypoint is not None else None
+        self._samples.append(
+            {
+                "mission_id": mission_id,
+                "monotonic_s": self._planned_elapsed_s,
+                "robot_id": pose.robot_id,
+                "x_m": pose.x_m,
+                "y_m": pose.y_m,
+                "z_m": pose.z_m,
+                "yaw_rad": pose.yaw_rad,
+                "battery_voltage": pose.battery_voltage,
+                "state": state,
+                "waypoint_index": waypoint["index"] if waypoint is not None else None,
+                "tracking_error_m": tracking_error_m,
+            }
+        )
+
+    def _verify_waypoint_acceptance(self, mission_id: str, waypoint: dict[str, Any]) -> None:
+        pose = self.adapter.latest_state()
+        tracking_error_m = _tracking_error_m(pose, waypoint)
+        accepted = tracking_error_m <= self.safety_policy.waypoint_acceptance_radius_m
+        self._event(
+            "pose_acceptance",
+            mission_id=mission_id,
+            waypoint_index=waypoint["index"],
+            tracking_error_m=tracking_error_m,
+            acceptance_radius_m=self.safety_policy.waypoint_acceptance_radius_m,
+            accepted=accepted,
+        )
+        if tracking_error_m > self.safety_policy.max_tracking_error_m:
+            self._abort_reason = "tracking_error"
+            raise MissionAbortRequested(
+                f"tracking error {tracking_error_m:.3f} m exceeds limit at waypoint {waypoint['index']}"
+            )
+        if not accepted:
+            self._abort_reason = "pose_acceptance_failed"
+            raise MissionAbortRequested(
+                f"waypoint {waypoint['index']} pose acceptance failed by {tracking_error_m:.3f} m"
+            )
 
     async def _command_with_timeout(
         self,
@@ -282,4 +386,25 @@ def _waypoint(payload: Any) -> dict[str, Any]:
         raise ValueError("mission waypoint contains non-finite values")
     if waypoint["duration_s"] <= 0.0:
         raise ValueError("mission waypoint duration must be positive")
+    hold_s = payload.get("hold_s", 0.0)
+    if not isinstance(hold_s, (int, float)) or not math.isfinite(float(hold_s)) or float(hold_s) < 0.0:
+        raise ValueError("mission waypoint hold_s must be a non-negative finite number")
+    waypoint["hold_s"] = float(hold_s)
     return waypoint
+
+
+def _tracking_error_m(pose: Any, waypoint: dict[str, Any]) -> float:
+    if waypoint["action"] == "land":
+        return abs(pose.z_m - waypoint["z_m"])
+    return math.dist(
+        (pose.x_m, pose.y_m, pose.z_m),
+        (waypoint["x_m"], waypoint["y_m"], waypoint["z_m"]),
+    )
+
+
+def _planned_duration_s(raw_waypoints: list[Any]) -> float:
+    waypoints = [_waypoint(item) for item in raw_waypoints]
+    if not waypoints:
+        return 0.0
+    takeoff_duration_s = max(waypoints[0]["duration_s"], 0.5)
+    return takeoff_duration_s + sum(item["duration_s"] + item["hold_s"] for item in waypoints)

@@ -37,6 +37,7 @@ class SimCrazyflieAdapter:
     fail_on_command: str | None = None
     disconnect_on_command: str | None = None
     pose_age_s: float = 0.0
+    tracking_error_offset_m: float = 0.0
     _command_active: bool = False
 
     def connect(self) -> None:
@@ -58,7 +59,7 @@ class SimCrazyflieAdapter:
     def latest_state(self) -> RobotState:
         return RobotState(
             self.state.robot_id,
-            self.state.x_m,
+            self.state.x_m + self.tracking_error_offset_m,
             self.state.y_m,
             self.state.z_m,
             self.state.yaw_rad,

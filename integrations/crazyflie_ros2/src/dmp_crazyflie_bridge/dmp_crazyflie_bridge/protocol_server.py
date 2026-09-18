@@ -281,6 +281,9 @@ class BridgeProtocolServer:
             "command_log": list(result.command_log),
             "status": result.status,
             "events": list(result.events),
+            "samples": list(result.samples),
+            "planned_duration_s": result.planned_duration_s,
+            "actual_duration_s": result.actual_duration_s,
         }
         if result.failure_code is not None:
             response["failure_code"] = result.failure_code
