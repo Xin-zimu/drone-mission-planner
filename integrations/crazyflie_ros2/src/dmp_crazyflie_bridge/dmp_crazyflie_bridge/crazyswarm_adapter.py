@@ -5,8 +5,15 @@ import math
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
+from .capability_probe import (
+    CAPABILITY_SOURCE_CFLIB,
+    CAPABILITY_SOURCE_ROS,
+    default_snapshot_path,
+    load_capability_snapshot,
+)
 from .protocol_models import BridgeRobot
 from .telemetry import (
     DEFAULT_BATTERY_CRITICAL_V,
@@ -143,6 +150,9 @@ class Crazyswarm2Adapter:
     pose_stale_timeout_s: float = DEFAULT_POSE_STALE_TIMEOUT_S
     battery_critical_voltage: float = DEFAULT_BATTERY_CRITICAL_V
     crazyflie_server_node: str = "/crazyflie_server"
+    robot_uri: str | None = None
+    capability_snapshot_path: Path | None = None
+    capability_snapshot_max_age_s: float = 3600.0
     _collector: TelemetryCollector = field(init=False)
     _diagnostics: list[str] = field(default_factory=list)
     _connected: bool = False
@@ -155,6 +165,8 @@ class Crazyswarm2Adapter:
     _last_capability_read_s: float = 0.0
     _capability_read_interval_s: float = 2.0
     _capability_diagnostics: tuple[str, ...] = ()
+    _capability_source: str | None = None
+    _capability_captured_at: str | None = None
 
     def __post_init__(self) -> None:
         self._collector = TelemetryCollector(
@@ -238,6 +250,8 @@ class Crazyswarm2Adapter:
             y_m=None if pose is None else pose.y_m,
             z_m=None if pose is None else pose.z_m,
             positioning_evidence=snapshot.positioning.evidence,
+            capability_source=self._capability_source,
+            capability_captured_at=self._capability_captured_at,
             diagnostics=_dedupe(snapshot.diagnostics + snapshot.positioning.diagnostics),
         )
 
@@ -337,6 +351,8 @@ class Crazyswarm2Adapter:
                 for full_name, value in zip(names, parameter_values, strict=True)
             }
             self._collector.set_positioning(positioning_from_deck_params(values))
+            self._capability_source = CAPABILITY_SOURCE_ROS
+            self._capability_captured_at = None
             self._capability_diagnostics = ()
         except Exception as exc:
             self._set_unknown_positioning(f"deck parameter read failed: {type(exc).__name__}: {exc}")
@@ -369,7 +385,20 @@ class Crazyswarm2Adapter:
         return bool(future.done())
 
     def _set_unknown_positioning(self, diagnostic: str) -> None:
-        self._capability_diagnostics = (diagnostic,)
+        snapshot = self._load_snapshot_capabilities()
+        if snapshot.valid and snapshot.snapshot is not None:
+            self._collector.set_positioning(positioning_from_deck_params(snapshot.snapshot.deck_values))
+            self._capability_source = CAPABILITY_SOURCE_CFLIB
+            self._capability_captured_at = snapshot.snapshot.captured_at_utc
+            self._capability_diagnostics = (diagnostic,)
+            self._collector.set_diagnostics(self._combined_diagnostics())
+            return
+        diagnostics = (diagnostic,)
+        if snapshot.diagnostic is not None:
+            diagnostics += (snapshot.diagnostic,)
+        self._capability_source = None
+        self._capability_captured_at = None
+        self._capability_diagnostics = diagnostics
         self._collector.set_positioning(
             PositioningCapabilities(
                 mode=UNKNOWN_POSITIONING.mode,
@@ -377,10 +406,19 @@ class Crazyswarm2Adapter:
                 z_available=UNKNOWN_POSITIONING.z_available,
                 pose_available=UNKNOWN_POSITIONING.pose_available,
                 relative=UNKNOWN_POSITIONING.relative,
-                diagnostics=UNKNOWN_POSITIONING.diagnostics + self._capability_diagnostics,
+                diagnostics=UNKNOWN_POSITIONING.diagnostics + diagnostics,
             )
         )
         self._collector.set_diagnostics(self._combined_diagnostics())
+
+    def _load_snapshot_capabilities(self) -> Any:
+        path = self.capability_snapshot_path or default_snapshot_path(self.robot_id)
+        return load_capability_snapshot(
+            path,
+            robot_id=self.robot_id,
+            uri=self.robot_uri,
+            max_age_s=self.capability_snapshot_max_age_s,
+        )
 
     def _combined_diagnostics(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys((*self._diagnostics, *self._capability_diagnostics)))

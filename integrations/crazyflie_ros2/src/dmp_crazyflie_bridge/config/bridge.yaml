@@ -2,6 +2,9 @@ bind: 127.0.0.1
 port: 8765
 backend: sim
 robot_id: cf231
+robot_uri: radio://0/80/2M/E7E7E7E705
 crazyflie_server_node: /crazyflie_server
+capability_snapshot_path: integrations/crazyflie_ros2/src/dmp_crazyflie_bridge/runtime/cf231_capabilities.json
+capability_snapshot_max_age_s: 3600
 link_loss_policy: controlled_land
 max_message_bytes: 65536

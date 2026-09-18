@@ -46,6 +46,21 @@ The default hardware robot id is configured in `config/bridge.yaml`:
 robot_id: cf231
 ```
 
+Read-only hardware capability probe:
+
+```bash
+export PYTHONPATH="$PWD/src/dmp_crazyflie_bridge:${PYTHONPATH:-}"
+python -m dmp_crazyflie_bridge.capability_probe \
+  --robot-id cf231 \
+  --uri radio://0/80/2M/E7E7E7E705
+```
+
+The capability probe only connects through cflib, reads selected firmware deck
+parameters, writes a runtime JSON snapshot, and disconnects. It does not set
+firmware parameters, start commanders, arm, take off, land, or send motor
+commands. Run it only while Crazyswarm2 is stopped so cflib and the C++ backend
+do not compete for Crazyradio.
+
 Non-flight environment probe:
 
 ```bash
@@ -69,6 +84,9 @@ Do not switch to hardware execution until all of the following are true:
 
 - ROS 2 and Crazyswarm2 are installed and importable in the bridge environment.
 - The Crazyflie is connected through Crazyradio and visible to Crazyswarm2.
+- If Crazyswarm2 deck ROS parameters are listed but unset, Crazyswarm2 is
+  stopped, the read-only cflib capability probe has generated a fresh snapshot,
+  and the snapshot robot id and URI match the bridge configuration.
 - Battery, deck/status and pose telemetry are streaming at the required rate.
 - Flow Deck V2, Lighthouse or equivalent XY positioning is verified stable.
 - The local execution frame origin and yaw calibration have been reviewed.
@@ -81,13 +99,25 @@ Do not switch to hardware execution until all of the following are true:
   not firmware SIL or real flight evidence.
 - The checked-in hardware adapter is read-only for CF7. It does not send real
   `takeoff`, `go_to`, `land` or emergency commands.
-- Deck capability detection first attempts Crazyswarm2/ROS parameter reads. If
-  those parameters are unavailable, the bridge reports unknown positioning with
-  diagnostics rather than guessing readiness.
-- Some Crazyswarm2 runs list `cf231.params.deck.*` descriptors but return no
-  parameter values at runtime. Treat that as a blocked positioning gate unless
-  a separate read-only deck check confirms the hardware.
+- Deck capability detection first attempts reliable Crazyswarm2/ROS parameter
+  values. Some Crazyswarm2 C++ backend runs list `cf231.params.deck.*`
+  descriptors but return no parameter values because
+  `firmware_params.query_all_values_on_connect` is disabled. In that case the
+  bridge may consume a fresh, URI-matched read-only cflib capability snapshot;
+  otherwise it reports unknown positioning with diagnostics rather than guessing
+  readiness.
 - Real waypoint execution remains blocked until the positioning gate is passed.
 - Full Windows `pytest tests` can hit a pre-existing native `0xc000001d`
   illegal-instruction crash in `tests/integration/test_examples.py` on this
   host; the Crazyflie-focused and non-example suites pass.
+
+## CF7 Hardware Startup Order
+
+1. Attach Crazyradio to WSL.
+2. Ensure Crazyswarm2 is not running.
+3. Run the read-only cflib capability probe.
+4. Verify the generated snapshot in `runtime/`.
+5. Start Crazyswarm2 C++ with `gui:=False mocap:=False teleop:=False`.
+6. Start the DMP bridge hardware backend.
+7. Verify status, pose, capability source, preflight and frame origin.
+8. Remain within CF7 only: no flight commands.

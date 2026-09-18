@@ -58,6 +58,9 @@ class BridgeProtocolServer:
         if robot_id is None:
             robot_id = _config_string(config, "robot_id")
         crazyflie_server_node = _config_string(config, "crazyflie_server_node") or "/crazyflie_server"
+        robot_uri = _config_string(config, "robot_uri")
+        snapshot_path = _config_path(config, "capability_snapshot_path")
+        snapshot_max_age_s = _config_float(config, "capability_snapshot_max_age_s", 3600.0)
         self.host = host
         self.port = port
         self.state = BridgeSessionState(backend=backend)
@@ -70,6 +73,9 @@ class BridgeProtocolServer:
             self._hardware_adapter = Crazyswarm2Adapter(
                 robot_id=robot_id or "cf231",
                 crazyflie_server_node=crazyflie_server_node,
+                robot_uri=robot_uri,
+                capability_snapshot_path=snapshot_path,
+                capability_snapshot_max_age_s=snapshot_max_age_s,
             )
             self._hardware_adapter.connect()
             self._refresh_hardware_robot()
@@ -524,6 +530,23 @@ def _load_config(config_path: str | None) -> dict[str, str]:
 def _config_string(config: dict[str, str], key: str) -> str | None:
     value = config.get(key)
     return value or None
+
+
+def _config_path(config: dict[str, str], key: str) -> Path | None:
+    value = _config_string(config, key)
+    if value is None:
+        return None
+    return Path(value)
+
+
+def _config_float(config: dict[str, str], key: str, default: float) -> float:
+    value = _config_string(config, key)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 if __name__ == "__main__":

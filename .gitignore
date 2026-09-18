@@ -21,3 +21,4 @@ reports/*.json
 !reports/final-simulation-report.json
 crazyflies.local.yaml
 **/crazyflies.local.yaml
+integrations/crazyflie_ros2/src/dmp_crazyflie_bridge/runtime/

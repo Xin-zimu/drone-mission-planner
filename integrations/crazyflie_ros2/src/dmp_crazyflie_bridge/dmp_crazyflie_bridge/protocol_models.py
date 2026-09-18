@@ -42,6 +42,8 @@ class BridgeRobot:
     y_m: float | None = None
     z_m: float | None = None
     positioning_evidence: tuple[str, ...] = ()
+    capability_source: str | None = None
+    capability_captured_at: str | None = None
     diagnostics: tuple[str, ...] = ()
     target_profile_id: str | None = "crazyflie-crazyswarm2-single-v1"
 
@@ -69,6 +71,8 @@ class BridgeRobot:
             "z_m": self.z_m,
             "positioning_evidence": list(self.positioning_evidence),
             "capability_evidence": list(self.positioning_evidence),
+            "capability_source": self.capability_source,
+            "capability_captured_at": self.capability_captured_at,
             "diagnostics": list(self.diagnostics),
             "target_profile_id": self.target_profile_id,
         }

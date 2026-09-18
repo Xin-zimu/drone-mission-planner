@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib
 import sys
+import types
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ sys.path.insert(0, str(BRIDGE_SRC))
 telemetry = importlib.import_module("dmp_crazyflie_bridge.telemetry")
 protocol_server = importlib.import_module("dmp_crazyflie_bridge.protocol_server")
 crazyswarm_adapter = importlib.import_module("dmp_crazyflie_bridge.crazyswarm_adapter")
+capability_probe = importlib.import_module("dmp_crazyflie_bridge.capability_probe")
 
 
 def test_status_pose_mapping_and_stale_reconnect() -> None:
@@ -165,6 +168,157 @@ def test_deck_parameter_reader_uses_cf231_runtime_names_with_namespace() -> None
         "swarm.cf231.params.deck.bcLoco",
         "swarm.cf231.params.deck.bcDWM1000",
     )
+
+
+def test_capability_source_priority_prefers_live_ros_over_snapshot(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "cf231_capabilities.json"
+    _write_snapshot(snapshot_path, flow2=True, zranger2=True)
+    adapter = _adapter_with_client(
+        FakeParameterClient(values={}),
+        snapshot_path=snapshot_path,
+        robot_uri=CF231_URI,
+    )
+
+    robot = adapter.capabilities()
+
+    assert robot.positioning_mode == "none"
+    assert robot.capability_source == "ros_runtime_parameter"
+    assert robot.xy_positioning_available is False
+
+
+def test_deck_parameter_reader_uses_fresh_cflib_snapshot_when_ros_unset(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "cf231_capabilities.json"
+    _write_snapshot(snapshot_path, flow2=True, zranger2=True)
+    adapter = _adapter_with_client(
+        FakeParameterClient(unset_names={"deck.bcFlow2"}),
+        snapshot_path=snapshot_path,
+        robot_uri=CF231_URI,
+    )
+
+    robot = adapter.capabilities()
+
+    assert robot.positioning_mode == "flow"
+    assert robot.xy_positioning_available is True
+    assert robot.z_positioning_available is True
+    assert robot.capability_source == "cflib_firmware_parameter_probe"
+    assert robot.capability_captured_at is not None
+    assert "deck.bcFlow2=1" in robot.positioning_evidence
+
+
+def test_cflib_snapshot_rejects_robot_uri_stale_and_missing(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "cf231_capabilities.json"
+    _write_snapshot(snapshot_path, flow2=True, zranger2=True)
+
+    mismatch_robot = capability_probe.load_capability_snapshot(
+        snapshot_path,
+        robot_id="cf999",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert not mismatch_robot.valid
+    assert "robot mismatch" in mismatch_robot.diagnostic
+
+    mismatch_uri = capability_probe.load_capability_snapshot(
+        snapshot_path,
+        robot_id="cf231",
+        uri="radio://0/1/2M/E7E7E7E701",
+        max_age_s=3600.0,
+    )
+    assert not mismatch_uri.valid
+    assert "URI mismatch" in mismatch_uri.diagnostic
+
+    stale_path = tmp_path / "stale.json"
+    _write_snapshot(stale_path, captured_at_utc="2000-01-01T00:00:00Z")
+    stale = capability_probe.load_capability_snapshot(
+        stale_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=1.0,
+    )
+    assert not stale.valid
+    assert "stale" in stale.diagnostic
+
+    missing = capability_probe.load_capability_snapshot(
+        tmp_path / "missing.json",
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert not missing.valid
+    assert "not found" in missing.diagnostic
+
+
+def test_cflib_snapshot_covers_z_only_and_all_zero(tmp_path: Path) -> None:
+    z_only_path = tmp_path / "z_only.json"
+    _write_snapshot(z_only_path, flow2=False, zranger2=True)
+    z_only = _adapter_with_client(
+        FakeParameterClient(value_count=0),
+        snapshot_path=z_only_path,
+        robot_uri=CF231_URI,
+    )
+    z_robot = z_only.capabilities()
+    assert z_robot.positioning_mode == "z_ranger"
+    assert z_robot.xy_positioning_available is False
+    assert z_robot.z_positioning_available is True
+
+    none_path = tmp_path / "none.json"
+    _write_snapshot(none_path, flow2=False, zranger2=False)
+    none = _adapter_with_client(
+        FakeParameterClient(value_count=0),
+        snapshot_path=none_path,
+        robot_uri=CF231_URI,
+    )
+    none_robot = none.capabilities()
+    assert none_robot.positioning_mode == "none"
+    assert none_robot.xy_positioning_available is False
+    assert none_robot.z_positioning_available is False
+
+
+def test_probe_failure_and_busy_error_are_reported(monkeypatch: Any) -> None:
+    def fail_import(*_: Any, **__: Any) -> None:
+        raise ImportError("busy radio")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr("builtins.__import__", fail_import)
+        try:
+            capability_probe.probe_cflib_capabilities(robot_id="cf231", uri=CF231_URI, timeout_s=0.01)
+        except capability_probe.CapabilityProbeError as exc:
+            assert "cflib unavailable" in str(exc)
+        else:
+            raise AssertionError("probe failure should raise CapabilityProbeError")
+
+    cflib = types.ModuleType("cflib")
+    crtp = types.ModuleType("cflib.crtp")
+    crazyflie_pkg = types.ModuleType("cflib.crazyflie")
+    sync_module = types.ModuleType("cflib.crazyflie.syncCrazyflie")
+
+    def init_drivers(*_: Any, **__: Any) -> None:
+        return None
+
+    class BusySyncCrazyflie:
+        def __init__(self, uri: str) -> None:
+            self.uri = uri
+
+        def __enter__(self) -> BusySyncCrazyflie:
+            raise OSError("Crazyradio busy")
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    crtp.init_drivers = init_drivers  # type: ignore[attr-defined]
+    sync_module.SyncCrazyflie = BusySyncCrazyflie  # type: ignore[attr-defined]
+    cflib.crtp = crtp  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "cflib", cflib)
+    monkeypatch.setitem(sys.modules, "cflib.crtp", crtp)
+    monkeypatch.setitem(sys.modules, "cflib.crazyflie", crazyflie_pkg)
+    monkeypatch.setitem(sys.modules, "cflib.crazyflie.syncCrazyflie", sync_module)
+
+    try:
+        capability_probe.probe_cflib_capabilities(robot_id="cf231", uri=CF231_URI, timeout_s=0.01)
+    except capability_probe.CapabilityProbeError as exc:
+        assert "Crazyradio busy" in str(exc)
+    else:
+        raise AssertionError("busy radio should raise CapabilityProbeError")
 
 
 def test_battery_critical_and_pose_stability_gate() -> None:
@@ -364,10 +518,20 @@ class FakeHardwareAdapter:
         }
 
 
-def _adapter_with_client(client: FakeParameterClient) -> Any:
+CF231_URI = "radio://0/80/2M/E7E7E7E705"
+
+
+def _adapter_with_client(
+    client: FakeParameterClient,
+    *,
+    snapshot_path: Path | None = None,
+    robot_uri: str | None = None,
+) -> Any:
     adapter = crazyswarm_adapter.Crazyswarm2Adapter(robot_id="cf231")
     adapter._parameter_client = client
     adapter._capability_read_interval_s = 0.0
+    adapter.robot_uri = robot_uri
+    adapter.capability_snapshot_path = snapshot_path
     return adapter
 
 
@@ -464,3 +628,28 @@ def _short_deck_name(parameter_name: str) -> str:
         if parameter_name.endswith(deck_name):
             return str(deck_name)
     return parameter_name
+
+
+def _write_snapshot(
+    path: Path,
+    *,
+    robot_id: str = "cf231",
+    uri: str = CF231_URI,
+    flow2: bool = True,
+    zranger2: bool = True,
+    captured_at_utc: str | None = None,
+) -> None:
+    captured = captured_at_utc
+    if captured is None:
+        captured = (datetime.now(UTC) - timedelta(seconds=1)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    snapshot = capability_probe.HardwareCapabilitySnapshot(
+        robot_id=robot_id,
+        uri=uri,
+        flow2=flow2,
+        zranger2=zranger2,
+        lighthouse=False,
+        loco=False,
+        dwm1000=False,
+        captured_at_utc=captured,
+    )
+    capability_probe.save_capability_snapshot(snapshot, path)
