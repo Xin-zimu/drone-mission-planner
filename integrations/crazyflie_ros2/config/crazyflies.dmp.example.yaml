@@ -1,0 +1,27 @@
+# DMP read-only hardware readiness configuration for Crazyswarm2.
+# Merge the firmware_logging section into the Crazyswarm2 crazyflies.yaml used
+# to launch crazyflie_server for cf231.
+all:
+  firmware_logging:
+    enabled: true
+    default_topics:
+      pose:
+        frequency: 10
+      status:
+        frequency: 1
+      odom:
+        frequency: 10
+    custom_topics:
+      dmp_readiness:
+        frequency: 10
+        vars:
+          - range.zrange
+          - kalman.varX
+          - kalman.varY
+          - kalman.varZ
+
+robots:
+  cf231:
+    enabled: true
+    uri: radio://0/80/2M/E7E7E7E705
+    type: cf21

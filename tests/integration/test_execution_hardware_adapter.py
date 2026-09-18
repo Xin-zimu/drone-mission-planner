@@ -528,14 +528,103 @@ def test_readiness_passes_static_policy_when_live_signals_are_healthy() -> None:
         collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
         collector.record_pose(FakePose(0.0, 0.0, 0.03))
         collector.record_odom(FakeOdom(0.0, 0.0, 0.0))
-        collector.record_range(FakeRange(0.08))
-        collector.record_estimator_variance(0.0001, 0.0001, 0.0001)
+        collector.record_readiness_log_values(FakeLogDataGeneric((80.0, 0.0001, 0.0001, 0.0001)).values)
         clock.advance(0.1)
 
-    readiness = collector.snapshot().flight_readiness
+    snapshot = collector.snapshot()
+    readiness = snapshot.flight_readiness
 
     assert readiness.passed is True
     assert readiness.issues == ()
+    assert readiness.range is not None
+    assert readiness.range.zrange_m == 0.08
+    assert snapshot.to_telemetry_payload()["telemetry_sources"]["readiness_log"] == "/cf231/dmp_readiness"
+
+
+def test_dmp_readiness_log_contract_order_and_unit_conversion() -> None:
+    assert telemetry.DMP_READINESS_LOG_TOPIC == "dmp_readiness"
+    assert telemetry.DMP_READINESS_LOG_VARIABLES == (
+        "range.zrange",
+        "kalman.varX",
+        "kalman.varY",
+        "kalman.varZ",
+    )
+    assert telemetry.DMP_READINESS_LOG_BLOCK_BYTES == 14
+    assert telemetry.DMP_READINESS_LOG_BLOCK_BYTES <= telemetry.CRAZYFLIE_LOG_MAX_BYTES
+
+    sample = telemetry.parse_dmp_readiness_log_values((300.0, 0.001, 0.002, 0.003))
+
+    assert sample.zrange_m == 0.3
+    assert sample.var_x == 0.001
+    assert sample.var_y == 0.002
+    assert sample.var_z == 0.003
+
+
+def test_dmp_readiness_log_rejects_bad_samples_without_replacing_last_good_value() -> None:
+    adapter = _adapter_with_client(FakeParameterClient(values={}))
+    adapter._record_readiness_log(FakeLogDataGeneric((80.0, 0.0001, 0.0001, 0.0001)))
+
+    good_snapshot = adapter._collector.snapshot()
+    assert good_snapshot.range is not None
+    assert good_snapshot.range.zrange_m == 0.08
+
+    for values in (
+        (),
+        (80.0, 0.0001, 0.0001),
+        (80.0, 0.0001, 0.0001, 0.0001, 1.0),
+        (float("nan"), 0.0001, 0.0001, 0.0001),
+        (80.0, float("inf"), 0.0001, 0.0001),
+        (-1.0, 0.0001, 0.0001, 0.0001),
+        (80.0, -0.0001, 0.0001, 0.0001),
+    ):
+        adapter._record_readiness_log(FakeLogDataGeneric(values))
+
+    snapshot = adapter._collector.snapshot()
+    assert snapshot.range is not None
+    assert snapshot.range.zrange_m == 0.08
+    assert any("invalid /cf231/dmp_readiness sample ignored" in item for item in snapshot.diagnostics)
+
+
+def test_odom_velocity_staleness_blocks_readiness() -> None:
+    clock = FakeClock()
+    collector = _ready_collector(clock)
+    for _ in range(60):
+        collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+        collector.record_pose(FakePose(0.0, 0.0, 0.03))
+        collector.record_odom(FakeOdom(0.0, 0.0, 0.0))
+        collector.record_readiness_log_values((80.0, 0.0001, 0.0001, 0.0001))
+        clock.advance(0.1)
+
+    clock.advance(1.0)
+    codes = {issue.code for issue in collector.snapshot().flight_readiness.issues}
+
+    assert "velocity_stale" in codes
+
+
+def test_hardware_session_tracks_status_stale_to_fresh_reconnect() -> None:
+    clock = FakeClock()
+    adapter = _adapter_with_client(FakeParameterClient(values={}))
+    adapter._collector.clock = clock
+
+    assert adapter.capabilities().connected is False
+    assert adapter.session_id is None
+
+    adapter._collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+    first = adapter.capabilities()
+    first_session = adapter.session_id
+    assert first.connected is True
+    assert isinstance(first_session, str)
+
+    clock.advance(3.0)
+    stale = adapter.capabilities()
+    assert stale.connected is False
+    assert adapter.session_id is None
+
+    adapter._collector.record_status(FakeStatus(3.96, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+    fresh = adapter.capabilities()
+    assert fresh.connected is True
+    assert isinstance(adapter.session_id, str)
+    assert adapter.session_id != first_session
 
 
 def test_hardware_protocol_uses_cf231_and_realistic_blockers(monkeypatch: Any) -> None:
@@ -605,6 +694,72 @@ def test_hardware_preflight_blocks_flow_without_current_pose_origin(monkeypatch:
     assert "xy_positioning_missing" not in codes
 
 
+def test_frame_origin_rejects_stale_future_malformed_wrong_session_and_optional_binding() -> None:
+    now = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+    policy = protocol_server.FrameOriginPolicy(max_age_s=300.0, allowed_clock_skew_s=5.0)
+    base = _hardware_mission(
+        {
+            "mode": "relative_current_pose",
+            "origin_source": "current_pose",
+            "origin_captured_at_utc": "2026-09-19T11:59:00Z",
+            "origin_session_id": "session-1",
+            "origin_mission_id": "mission-1",
+            "origin_route_hash": "route-hash",
+        }
+    )
+    issues: list[dict[str, Any]] = []
+    protocol_server._append_frame_origin_issues(
+        base,
+        _flow_robot(),
+        issues,
+        current_session_id="session-1",
+        policy=policy,
+        now_utc=now,
+    )
+    assert issues == []
+
+    cases = {
+        "frame_origin_stale": {"origin_captured_at_utc": "2026-09-19T11:00:00Z"},
+        "frame_origin_future": {"origin_captured_at_utc": "2026-09-19T12:01:00Z"},
+        "frame_origin_invalid": {"origin_captured_at_utc": "not-a-date"},
+        "frame_session_mismatch": {"origin_session_id": "old-session"},
+        "frame_mission_mismatch": {"origin_mission_id": "mission-2"},
+        "frame_route_mismatch": {"origin_route_hash": "other-hash"},
+    }
+    for expected_code, update in cases.items():
+        mission = _hardware_mission({**base["frame"], **update})
+        issues = []
+        protocol_server._append_frame_origin_issues(
+            mission,
+            _flow_robot(),
+            issues,
+            current_session_id="session-1",
+            policy=policy,
+            now_utc=now,
+        )
+        assert expected_code in {issue["code"] for issue in issues}
+
+
+def test_invalid_explicit_safety_config_fails_closed(tmp_path: Path) -> None:
+    invalid_values = (
+        "minimum_acceptable_pose_rate_hz: not-a-number\n",
+        "velocity_stale_timeout_s: -1\n",
+        "minimum_estimator_sample_count: 0\n",
+        "max_estimator_variance: inf\n",
+        "min_startup_zrange_m: 0.50\nmax_startup_zrange_m: 0.02\n",
+        "frame_origin_max_age_s: 0\n",
+        "battery_critical_voltage: nan\n",
+    )
+    for index, config_text in enumerate(invalid_values):
+        config_path = tmp_path / f"bad-{index}.yaml"
+        config_path.write_text(config_text, encoding="utf-8")
+        try:
+            protocol_server.BridgeProtocolServer(backend="sim", config_path=str(config_path))
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid config was accepted: {config_text!r}")
+
+
 @dataclass(slots=True)
 class FakeClock:
     now: float = 0.0
@@ -638,8 +793,8 @@ class FakeOdom:
 
 
 @dataclass(frozen=True, slots=True)
-class FakeRange:
-    range: float
+class FakeLogDataGeneric:
+    values: tuple[Any, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -756,6 +911,53 @@ def _adapter_with_client(
     adapter.robot_uri = robot_uri
     adapter.capability_snapshot_path = snapshot_path
     return adapter
+
+
+def _ready_collector(clock: FakeClock) -> Any:
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+    collector.set_positioning(
+        telemetry.positioning_from_deck_params(
+            {
+                "deck.bcFlow2": 1,
+                "deck.bcZRanger2": 1,
+                "deck.bcLighthouse4": 0,
+                "deck.bcLoco": 0,
+                "deck.bcDWM1000": 0,
+            }
+        )
+    )
+    return collector
+
+
+def _flow_robot() -> Any:
+    return protocol_server.BridgeRobot(
+        robot_id="cf231",
+        connected=True,
+        positioning_mode="flow",
+        xy_positioning_available=True,
+        z_positioning_available=True,
+        pose_stream_available=True,
+        pose_rate_hz=10.0,
+    )
+
+
+def _hardware_mission(frame: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mission_id": "mission-1",
+        "source_route_hash": "route-hash",
+        "frame": frame,
+        "waypoints": [
+            {
+                "index": 1,
+                "x_m": 0.0,
+                "y_m": 0.0,
+                "z_m": 0.4,
+                "yaw_rad": 0.0,
+                "duration_s": 1.0,
+                "action": "fly_to",
+            }
+        ],
+    }
 
 
 class FakeParameterClient:

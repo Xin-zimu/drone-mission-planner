@@ -4,7 +4,7 @@ import math
 import statistics
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
 from threading import Lock
@@ -17,6 +17,19 @@ DEFAULT_MINIMUM_ACCEPTABLE_POSE_RATE_HZ = 8.0
 DEFAULT_VELOCITY_STALE_TIMEOUT_S = 0.75
 DEFAULT_RANGE_STALE_TIMEOUT_S = 0.75
 DEFAULT_ESTIMATOR_STALE_TIMEOUT_S = 1.5
+DMP_READINESS_LOG_TOPIC = "dmp_readiness"
+DMP_READINESS_LOG_VARIABLES = (
+    "range.zrange",
+    "kalman.varX",
+    "kalman.varY",
+    "kalman.varZ",
+)
+DMP_READINESS_RANGE_MM_INDEX = 0
+DMP_READINESS_VAR_X_INDEX = 1
+DMP_READINESS_VAR_Y_INDEX = 2
+DMP_READINESS_VAR_Z_INDEX = 3
+DMP_READINESS_LOG_BLOCK_BYTES = 14
+CRAZYFLIE_LOG_MAX_BYTES = 26
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +150,14 @@ class RangeTelemetry:
 @dataclass(frozen=True, slots=True)
 class EstimatorVarianceTelemetry:
     monotonic_s: float
+    var_x: float
+    var_y: float
+    var_z: float
+
+
+@dataclass(frozen=True, slots=True)
+class DmpReadinessLogSample:
+    zrange_m: float
     var_x: float
     var_y: float
     var_z: float
@@ -272,6 +293,13 @@ class TelemetrySnapshot:
     flight_readiness: FlightReadiness
     diagnostics: tuple[str, ...] = ()
     battery_critical_voltage: float = DEFAULT_BATTERY_CRITICAL_V
+    status_source: str | None = None
+    pose_source: str | None = None
+    velocity_source: str | None = None
+    range_source: str | None = None
+    estimator_source: str | None = None
+    readiness_log_source: str | None = None
+    readiness_log_age_s: float | None = None
 
     @property
     def battery_critical(self) -> bool:
@@ -354,6 +382,15 @@ class TelemetrySnapshot:
                 "var_y": self.estimator_variance.var_y,
                 "var_z": self.estimator_variance.var_z,
             },
+            "telemetry_sources": {
+                "status": self.status_source,
+                "pose": self.pose_source,
+                "velocity": self.velocity_source,
+                "range": self.range_source,
+                "estimator_variance": self.estimator_source,
+                "readiness_log": self.readiness_log_source,
+                "readiness_log_age_s": self.readiness_log_age_s,
+            },
             "readiness": self.flight_readiness.to_payload(),
             "diagnostics": list(self.diagnostics),
         }
@@ -379,9 +416,16 @@ class TelemetryCollector:
     _estimator_variance_samples: deque[EstimatorVarianceTelemetry] = field(default_factory=lambda: deque(maxlen=100))
     _positioning: PositioningCapabilities = UNKNOWN_POSITIONING
     _diagnostics: tuple[str, ...] = ()
+    _status_source: str | None = None
+    _pose_source: str | None = None
+    _velocity_source: str | None = None
+    _range_source: str | None = None
+    _estimator_source: str | None = None
+    _readiness_log_source: str | None = None
+    _latest_readiness_log_s: float | None = None
     _lock: Lock = field(default_factory=Lock)
 
-    def record_status(self, msg: Any) -> None:
+    def record_status(self, msg: Any, *, source: str | None = None) -> None:
         sample = StatusTelemetry(
             monotonic_s=self.clock(),
             battery_voltage=float(msg.battery_voltage),
@@ -395,8 +439,9 @@ class TelemetryCollector:
         with self._lock:
             self._latest_status = sample
             self._status_times.append(sample.monotonic_s)
+            self._status_source = source or f"/{self.robot_id}/status"
 
-    def record_pose(self, msg: Any) -> None:
+    def record_pose(self, msg: Any, *, source: str | None = None) -> None:
         pose = msg.pose
         position = pose.position
         orientation = pose.orientation
@@ -413,8 +458,9 @@ class TelemetryCollector:
         with self._lock:
             self._latest_pose = sample
             self._pose_samples.append(sample)
+            self._pose_source = source or f"/{self.robot_id}/pose"
 
-    def record_odom(self, msg: Any) -> None:
+    def record_odom(self, msg: Any, *, source: str | None = None) -> None:
         linear = msg.twist.twist.linear
         sample = VelocityTelemetry(
             monotonic_s=self.clock(),
@@ -425,16 +471,28 @@ class TelemetryCollector:
         with self._lock:
             self._latest_velocity = sample
             self._velocity_samples.append(sample)
+            self._velocity_source = source or f"/{self.robot_id}/odom"
 
-    def record_range(self, msg: Any) -> None:
+    def record_range(self, msg: Any, *, source: str | None = None) -> None:
         value = getattr(msg, "range", getattr(msg, "data", None))
         if value is None:
             raise ValueError("range message has neither range nor data")
-        sample = RangeTelemetry(monotonic_s=self.clock(), zrange_m=float(value))
+        self.record_range_m(float(value), source=source)
+
+    def record_range_m(self, zrange_m: float, *, source: str | None = None) -> None:
+        sample = RangeTelemetry(monotonic_s=self.clock(), zrange_m=float(zrange_m))
         with self._lock:
             self._latest_range = sample
+            self._range_source = source
 
-    def record_estimator_variance(self, var_x: float, var_y: float, var_z: float) -> None:
+    def record_estimator_variance(
+        self,
+        var_x: float,
+        var_y: float,
+        var_z: float,
+        *,
+        source: str | None = None,
+    ) -> None:
         sample = EstimatorVarianceTelemetry(
             monotonic_s=self.clock(),
             var_x=float(var_x),
@@ -444,6 +502,32 @@ class TelemetryCollector:
         with self._lock:
             self._latest_estimator_variance = sample
             self._estimator_variance_samples.append(sample)
+            self._estimator_source = source
+
+    def record_readiness_log_values(
+        self,
+        values: Sequence[Any],
+        *,
+        source: str | None = None,
+    ) -> None:
+        sample = parse_dmp_readiness_log_values(values)
+        monotonic_s = self.clock()
+        range_sample = RangeTelemetry(monotonic_s=monotonic_s, zrange_m=sample.zrange_m)
+        variance_sample = EstimatorVarianceTelemetry(
+            monotonic_s=monotonic_s,
+            var_x=sample.var_x,
+            var_y=sample.var_y,
+            var_z=sample.var_z,
+        )
+        log_source = source or f"/{self.robot_id}/{DMP_READINESS_LOG_TOPIC}"
+        with self._lock:
+            self._latest_range = range_sample
+            self._latest_estimator_variance = variance_sample
+            self._estimator_variance_samples.append(variance_sample)
+            self._range_source = log_source
+            self._estimator_source = log_source
+            self._readiness_log_source = log_source
+            self._latest_readiness_log_s = monotonic_s
 
     def set_positioning(self, capabilities: PositioningCapabilities) -> None:
         with self._lock:
@@ -466,6 +550,13 @@ class TelemetryCollector:
             estimator_variance_samples = tuple(self._estimator_variance_samples)
             positioning = self._positioning
             diagnostics = self._diagnostics
+            status_source = self._status_source
+            pose_source = self._pose_source
+            velocity_source = self._velocity_source
+            range_source = self._range_source
+            estimator_source = self._estimator_source
+            readiness_log_source = self._readiness_log_source
+            latest_readiness_log_s = self._latest_readiness_log_s
         status_age = None if status is None else max(0.0, now - status.monotonic_s)
         pose_age = None if pose is None else max(0.0, now - pose.monotonic_s)
         connected = status_age is not None and status_age <= self.status_stale_timeout_s
@@ -519,6 +610,13 @@ class TelemetryCollector:
             flight_readiness=flight_readiness,
             diagnostics=diagnostics,
             battery_critical_voltage=self.battery_critical_voltage,
+            status_source=status_source,
+            pose_source=pose_source,
+            velocity_source=velocity_source,
+            range_source=range_source,
+            estimator_source=estimator_source,
+            readiness_log_source=readiness_log_source,
+            readiness_log_age_s=None if latest_readiness_log_s is None else max(0.0, now - latest_readiness_log_s),
         )
 
     def readiness_payload(self) -> dict[str, Any]:
@@ -577,6 +675,34 @@ def positioning_from_deck_params(values: Mapping[str, Any]) -> PositioningCapabi
         relative=True,
         evidence=evidence,
         diagnostics=("no positioning deck detected",),
+    )
+
+
+def parse_dmp_readiness_log_values(values: Sequence[Any]) -> DmpReadinessLogSample:
+    if len(values) != len(DMP_READINESS_LOG_VARIABLES):
+        raise ValueError(
+            f"{DMP_READINESS_LOG_TOPIC} expects {len(DMP_READINESS_LOG_VARIABLES)} values "
+            f"in order {DMP_READINESS_LOG_VARIABLES}, got {len(values)}"
+        )
+    try:
+        parsed = tuple(float(value) for value in values)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{DMP_READINESS_LOG_TOPIC} contains a non-numeric value") from exc
+    if not all(math.isfinite(value) for value in parsed):
+        raise ValueError(f"{DMP_READINESS_LOG_TOPIC} contains NaN or infinite values")
+    zrange_mm = parsed[DMP_READINESS_RANGE_MM_INDEX]
+    var_x = parsed[DMP_READINESS_VAR_X_INDEX]
+    var_y = parsed[DMP_READINESS_VAR_Y_INDEX]
+    var_z = parsed[DMP_READINESS_VAR_Z_INDEX]
+    if zrange_mm < 0.0:
+        raise ValueError(f"{DMP_READINESS_LOG_TOPIC} range.zrange must be non-negative millimeters")
+    if var_x < 0.0 or var_y < 0.0 or var_z < 0.0:
+        raise ValueError(f"{DMP_READINESS_LOG_TOPIC} Kalman variances must be non-negative")
+    return DmpReadinessLogSample(
+        zrange_m=zrange_mm / 1000.0,
+        var_x=var_x,
+        var_y=var_y,
+        var_z=var_z,
     )
 
 

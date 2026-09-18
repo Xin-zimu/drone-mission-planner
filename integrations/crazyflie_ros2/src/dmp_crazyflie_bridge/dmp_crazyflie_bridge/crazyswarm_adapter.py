@@ -21,11 +21,14 @@ from .telemetry import (
     DEFAULT_BATTERY_CRITICAL_V,
     DEFAULT_POSE_STALE_TIMEOUT_S,
     DEFAULT_STATUS_STALE_TIMEOUT_S,
+    DMP_READINESS_LOG_TOPIC,
+    DMP_READINESS_LOG_VARIABLES,
     UNKNOWN_POSITIONING,
     PositioningCapabilities,
     ReadinessPolicy,
     RobotState,
     TelemetryCollector,
+    TelemetrySnapshot,
     positioning_from_deck_params,
 )
 
@@ -187,14 +190,12 @@ class Crazyswarm2Adapter:
             return
         try:
             import rclpy
-            from crazyflie_interfaces.msg import Status
+            from crazyflie_interfaces.msg import LogDataGeneric, Status
             from geometry_msgs.msg import PoseStamped
             from nav_msgs.msg import Odometry
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.node import Node
             from rclpy.parameter_client import AsyncParameterClient
-            from sensor_msgs.msg import Range
-            from std_msgs.msg import Float32
         except Exception as exc:  # pragma: no cover - exercised on non-ROS hosts
             self._record_diagnostic(f"ROS 2 telemetry unavailable: {type(exc).__name__}: {exc}")
             return
@@ -209,8 +210,12 @@ class Crazyswarm2Adapter:
         self._node.create_subscription(Status, f"/{self.robot_id}/status", self._collector.record_status, 10)
         self._node.create_subscription(PoseStamped, f"/{self.robot_id}/pose", self._collector.record_pose, 10)
         self._node.create_subscription(Odometry, f"/{self.robot_id}/odom", self._collector.record_odom, 10)
-        self._node.create_subscription(Range, f"/{self.robot_id}/range/zrange", self._collector.record_range, 10)
-        self._node.create_subscription(Float32, f"/{self.robot_id}/zrange", self._collector.record_range, 10)
+        self._node.create_subscription(
+            LogDataGeneric,
+            f"/{self.robot_id}/{DMP_READINESS_LOG_TOPIC}",
+            self._record_readiness_log,
+            10,
+        )
         self._parameter_client = AsyncParameterClient(self._node, self.crazyflie_server_node)
         self._spin_thread = threading.Thread(
             target=self._executor.spin,
@@ -219,9 +224,10 @@ class Crazyswarm2Adapter:
         )
         self._spin_thread.start()
         self._connected = True
-        self._session_id = str(uuid4())
         self._record_diagnostic(
-            f"subscribed to /{self.robot_id}/status, /{self.robot_id}/pose, /{self.robot_id}/odom and zrange topics"
+            f"subscribed to /{self.robot_id}/status, /{self.robot_id}/pose, /{self.robot_id}/odom "
+            f"and /{self.robot_id}/{DMP_READINESS_LOG_TOPIC} "
+            f"({', '.join(DMP_READINESS_LOG_VARIABLES)})"
         )
 
     def disconnect(self) -> None:
@@ -242,6 +248,7 @@ class Crazyswarm2Adapter:
     def capabilities(self) -> BridgeRobot:
         self._refresh_positioning_capabilities()
         snapshot = self._collector.snapshot()
+        self._sync_session_from_snapshot(snapshot)
         status = snapshot.status
         pose = snapshot.pose
         return BridgeRobot(
@@ -282,7 +289,9 @@ class Crazyswarm2Adapter:
         flight_state: str = "bridge_ready",
     ) -> dict[str, Any]:
         self._refresh_positioning_capabilities()
-        return self._collector.snapshot().to_telemetry_payload(
+        snapshot = self._collector.snapshot()
+        self._sync_session_from_snapshot(snapshot)
+        return snapshot.to_telemetry_payload(
             mission_id=mission_id,
             active_waypoint_index=active_waypoint_index,
             flight_state=flight_state,
@@ -325,6 +334,23 @@ class Crazyswarm2Adapter:
 
     def set_positioning_for_test(self, capabilities: PositioningCapabilities) -> None:
         self._collector.set_positioning(capabilities)
+
+    def _record_readiness_log(self, msg: Any) -> None:
+        source = f"/{self.robot_id}/{DMP_READINESS_LOG_TOPIC}"
+        try:
+            self._collector.record_readiness_log_values(getattr(msg, "values", ()), source=source)
+        except ValueError as exc:
+            self._record_diagnostic(f"invalid {source} sample ignored: {exc}")
+
+    def _sync_session_from_snapshot(self, snapshot: TelemetrySnapshot) -> None:
+        if snapshot.connected:
+            if self._session_id is None:
+                self._session_id = str(uuid4())
+                self._record_diagnostic("hardware telemetry session started from fresh status")
+            return
+        if self._session_id is not None:
+            self._session_id = None
+            self._record_diagnostic("hardware telemetry session invalidated because status is stale")
 
     def _refresh_positioning_capabilities(self) -> None:
         if self._parameter_client is None:

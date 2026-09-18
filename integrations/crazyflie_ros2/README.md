@@ -10,8 +10,8 @@ read-only Crazyswarm2 hardware telemetry backend:
 
 Hardware flight execution is intentionally not enabled from this workspace. The
 `hardware` backend subscribes to Crazyswarm2 `/cf231/status`, `/cf231/pose`,
-`/cf231/odom` and local down-range topics when available, reports real
-battery/link/pose/readiness telemetry, and still returns a structured
+`/cf231/odom` and DMP's `/cf231/dmp_readiness` custom firmware log topic,
+reports real battery/link/pose/readiness telemetry, and still returns a structured
 `execution_not_implemented` error for mission execution until a later supervised
 hardware acceptance phase unlocks flight commands.
 
@@ -51,11 +51,60 @@ The default hardware robot id is configured in
 robot_id: cf231
 ```
 
+The hardware readiness safety thresholds in `bridge.yaml` fail closed if an
+explicit value is invalid. Leave a key absent to use the default; do not rely on
+invalid values falling back silently.
+
 Bridge config paths are deterministic: an explicitly supplied `--config` must
 exist, and relative path values inside that config are resolved relative to the
 config file directory. The checked-in capability snapshot path is therefore
 `src/dmp_crazyflie_bridge/runtime/cf231_capabilities.json` when launched with the
 command above.
+
+## Crazyswarm2 Logging
+
+Crazyswarm2's sample `crazyflies.yaml` enables `pose` and `status` by default.
+DMP readiness also requires explicit `odom` velocity logging and a custom
+`LogDataGeneric` block:
+
+```yaml
+all:
+  firmware_logging:
+    enabled: true
+    default_topics:
+      pose:
+        frequency: 10
+      status:
+        frequency: 1
+      odom:
+        frequency: 10
+    custom_topics:
+      dmp_readiness:
+        frequency: 10
+        vars:
+          - range.zrange
+          - kalman.varX
+          - kalman.varY
+          - kalman.varZ
+```
+
+A complete DMP-owned example is checked in at
+`config/crazyflies.dmp.example.yaml`. The custom log block is 14 bytes
+(`range.zrange` as `uint16`, plus three `float32` Kalman variances), below the
+Crazyflie firmware log-block limit of 26 bytes.
+
+Live topic contract for `cf231`:
+
+- `/cf231/status`: `crazyflie_interfaces/msg/Status`
+- `/cf231/pose`: `geometry_msgs/msg/PoseStamped`
+- `/cf231/odom`: `nav_msgs/msg/Odometry`
+- `/cf231/dmp_readiness`: `crazyflie_interfaces/msg/LogDataGeneric`
+
+The `dmp_readiness.values` order is exactly
+`range.zrange`, `kalman.varX`, `kalman.varY`, `kalman.varZ`. Firmware
+`range.zrange` is millimeters; the bridge converts it to meters before applying
+startup down-range policy. Missing, stale, malformed, NaN/Inf or negative samples
+are ignored or reported as blocking readiness diagnostics rather than guessed.
 
 Non-flight hardware capability probe:
 
@@ -107,7 +156,7 @@ Do not switch to hardware execution until all of the following are true:
   its integrated VL53L1 ToF through the `bcZRanger2` driver.
 - Live readiness is verified separately from deck capability: supervisor state,
   pose freshness/rate, full-window static pose stability, `/odom` velocity,
-  down-range health, Kalman variance diagnostics and current-session frame
+  `/dmp_readiness` down-range health, Kalman variance diagnostics and current-session frame
   origin must all pass the Bridge preflight.
 - The local execution frame origin and yaw calibration have been reviewed and
   captured in the current hardware session.
@@ -132,6 +181,9 @@ Do not switch to hardware execution until all of the following are true:
   supervisor telemetry produces specific blocking issue codes such as
   `velocity_unavailable`, `range_unavailable`, `estimator_not_converged` or
   `supervisor_not_flyable`.
+- Hardware session ids are driven by fresh `/status` telemetry. A stale status
+  stream invalidates current-pose origins even if the adapter process did not
+  explicitly disconnect.
 - Full Windows `pytest tests` can hit a pre-existing native `0xc000001d`
   illegal-instruction crash in `tests/integration/test_examples.py` on this
   host; the Crazyflie-focused and non-example suites pass.
@@ -142,7 +194,8 @@ Do not switch to hardware execution until all of the following are true:
 2. Ensure Crazyswarm2 is not running.
 3. Run the read-only cflib capability probe.
 4. Verify the generated snapshot in `runtime/`.
-5. Start Crazyswarm2 C++ with `gui:=False mocap:=False teleop:=False`.
+5. Start Crazyswarm2 C++ with `gui:=False mocap:=False teleop:=False` and the
+   DMP logging config merged into `crazyflies.yaml`.
 6. Start the DMP bridge hardware backend.
 7. Verify status, pose, capability source, preflight and frame origin.
 8. Remain within CF7 only: no flight commands.

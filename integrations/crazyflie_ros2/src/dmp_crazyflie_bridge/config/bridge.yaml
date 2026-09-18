@@ -6,6 +6,7 @@ robot_uri: radio://0/80/2M/E7E7E7E705
 crazyflie_server_node: /crazyflie_server
 capability_snapshot_path: ../runtime/cf231_capabilities.json
 capability_snapshot_max_age_s: 3600
+battery_critical_voltage: 3.7
 nominal_pose_rate_hz: 10
 minimum_acceptable_pose_rate_hz: 8
 velocity_stale_timeout_s: 0.75
@@ -17,5 +18,7 @@ max_startup_zrange_m: 0.50
 estimator_stale_timeout_s: 1.5
 max_estimator_variance_span: 0.002
 minimum_estimator_sample_count: 5
+frame_origin_max_age_s: 300
+frame_origin_allowed_clock_skew_s: 5
 link_loss_policy: controlled_land
 max_message_bytes: 65536

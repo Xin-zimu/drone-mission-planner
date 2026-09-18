@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import math
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,9 @@ from .protocol_models import (
     encode_message,
 )
 from .telemetry import ReadinessPolicy
+
+DEFAULT_FRAME_ORIGIN_MAX_AGE_S = 300.0
+DEFAULT_FRAME_ORIGIN_ALLOWED_CLOCK_SKEW_S = 5.0
 
 
 @dataclass(slots=True)
@@ -45,6 +49,12 @@ class BridgeSessionState:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class FrameOriginPolicy:
+    max_age_s: float = DEFAULT_FRAME_ORIGIN_MAX_AGE_S
+    allowed_clock_skew_s: float = DEFAULT_FRAME_ORIGIN_ALLOWED_CLOCK_SKEW_S
+
+
 class BridgeProtocolServer:
     def __init__(
         self,
@@ -61,20 +71,42 @@ class BridgeProtocolServer:
         crazyflie_server_node = _config_string(config, "crazyflie_server_node") or "/crazyflie_server"
         robot_uri = _config_string(config, "robot_uri")
         snapshot_path = _config_path(config, "capability_snapshot_path")
-        snapshot_max_age_s = _config_float(config, "capability_snapshot_max_age_s", 3600.0)
+        snapshot_max_age_s = _config_float(config, "capability_snapshot_max_age_s", 3600.0, minimum=0.0, inclusive=False)
         readiness_policy = ReadinessPolicy(
-            minimum_acceptable_pose_rate_hz=_config_float(config, "minimum_acceptable_pose_rate_hz", 8.0),
-            velocity_stale_timeout_s=_config_float(config, "velocity_stale_timeout_s", 0.75),
-            max_abs_velocity_mps=_config_float(config, "max_abs_velocity_mps", 0.05),
-            max_speed_mps=_config_float(config, "max_speed_mps", 0.08),
-            range_stale_timeout_s=_config_float(config, "range_stale_timeout_s", 0.75),
-            min_startup_zrange_m=_config_float(config, "min_startup_zrange_m", 0.02),
-            max_startup_zrange_m=_config_float(config, "max_startup_zrange_m", 0.50),
-            estimator_stale_timeout_s=_config_float(config, "estimator_stale_timeout_s", 1.5),
-            max_estimator_variance=_config_optional_float(config, "max_estimator_variance"),
-            max_estimator_variance_span=_config_float(config, "max_estimator_variance_span", 0.002),
-            minimum_estimator_sample_count=int(_config_float(config, "minimum_estimator_sample_count", 5.0)),
+            minimum_acceptable_pose_rate_hz=_config_float(
+                config, "minimum_acceptable_pose_rate_hz", 8.0, minimum=0.0, inclusive=False
+            ),
+            velocity_stale_timeout_s=_config_float(config, "velocity_stale_timeout_s", 0.75, minimum=0.0, inclusive=False),
+            max_abs_velocity_mps=_config_float(config, "max_abs_velocity_mps", 0.05, minimum=0.0),
+            max_speed_mps=_config_float(config, "max_speed_mps", 0.08, minimum=0.0),
+            range_stale_timeout_s=_config_float(config, "range_stale_timeout_s", 0.75, minimum=0.0, inclusive=False),
+            min_startup_zrange_m=_config_float(config, "min_startup_zrange_m", 0.02, minimum=0.0),
+            max_startup_zrange_m=_config_float(config, "max_startup_zrange_m", 0.50, minimum=0.0, inclusive=False),
+            estimator_stale_timeout_s=_config_float(
+                config, "estimator_stale_timeout_s", 1.5, minimum=0.0, inclusive=False
+            ),
+            max_estimator_variance=_config_optional_float(config, "max_estimator_variance", minimum=0.0),
+            max_estimator_variance_span=_config_float(config, "max_estimator_variance_span", 0.002, minimum=0.0),
+            minimum_estimator_sample_count=_config_int(config, "minimum_estimator_sample_count", 5, minimum=1),
         )
+        if readiness_policy.max_startup_zrange_m <= readiness_policy.min_startup_zrange_m:
+            raise ValueError("max_startup_zrange_m must be greater than min_startup_zrange_m")
+        self._frame_origin_policy = FrameOriginPolicy(
+            max_age_s=_config_float(
+                config,
+                "frame_origin_max_age_s",
+                DEFAULT_FRAME_ORIGIN_MAX_AGE_S,
+                minimum=0.0,
+                inclusive=False,
+            ),
+            allowed_clock_skew_s=_config_float(
+                config,
+                "frame_origin_allowed_clock_skew_s",
+                DEFAULT_FRAME_ORIGIN_ALLOWED_CLOCK_SKEW_S,
+                minimum=0.0,
+            ),
+        )
+        battery_critical_voltage = _config_float(config, "battery_critical_voltage", 3.7, minimum=0.0, inclusive=False)
         self.host = host
         self.port = port
         self.state = BridgeSessionState(backend=backend)
@@ -90,6 +122,7 @@ class BridgeProtocolServer:
                 robot_uri=robot_uri,
                 capability_snapshot_path=snapshot_path,
                 capability_snapshot_max_age_s=snapshot_max_age_s,
+                battery_critical_voltage=battery_critical_voltage,
                 readiness_policy=readiness_policy,
             )
             self._hardware_adapter.connect()
@@ -277,6 +310,7 @@ class BridgeProtocolServer:
                     robot,
                     issues,
                     current_session_id=getattr(self._hardware_adapter, "session_id", None),
+                    policy=self._frame_origin_policy,
                 )
                 readiness = getattr(self._hardware_adapter, "readiness_payload", {"issues": []})
                 for issue in readiness.get("issues", []):
@@ -436,6 +470,8 @@ def _append_frame_origin_issues(
     issues: list[dict[str, Any]],
     *,
     current_session_id: str | None,
+    policy: FrameOriginPolicy,
+    now_utc: datetime | None = None,
 ) -> None:
     if mission is None or robot.positioning_mode != "flow":
         return
@@ -453,6 +489,8 @@ def _append_frame_origin_issues(
     origin_source = frame.get("origin_source")
     captured_at = frame.get("origin_captured_at_utc")
     origin_session_id = frame.get("origin_session_id")
+    origin_mission_id = frame.get("origin_mission_id")
+    origin_route_hash = frame.get("origin_route_hash")
     if mode not in {"relative_current_pose", "relative_takeoff"}:
         issues.append(
             {
@@ -469,6 +507,33 @@ def _append_frame_origin_issues(
                 "blocking": True,
             }
         )
+    elif (captured := _parse_utc_timestamp(captured_at)) is None:
+        issues.append(
+            {
+                "code": "frame_origin_invalid",
+                "message": "Flow positioning origin timestamp is not valid UTC ISO-8601",
+                "blocking": True,
+            }
+        )
+    else:
+        now = datetime.now(UTC) if now_utc is None else now_utc
+        age_s = (now - captured).total_seconds()
+        if age_s < -policy.allowed_clock_skew_s:
+            issues.append(
+                {
+                    "code": "frame_origin_future",
+                    "message": "Flow positioning origin timestamp is in the future",
+                    "blocking": True,
+                }
+            )
+        elif age_s > policy.max_age_s:
+            issues.append(
+                {
+                    "code": "frame_origin_stale",
+                    "message": "Flow positioning origin is older than the allowed hardware-session age",
+                    "blocking": True,
+                }
+            )
     if not isinstance(origin_session_id, str) or not origin_session_id:
         issues.append(
             {
@@ -485,6 +550,37 @@ def _append_frame_origin_issues(
                 "blocking": True,
             }
         )
+    mission_id = mission.get("mission_id")
+    route_hash = mission.get("source_route_hash")
+    if isinstance(origin_mission_id, str) and origin_mission_id and origin_mission_id != mission_id:
+        issues.append(
+            {
+                "code": "frame_mission_mismatch",
+                "message": "execution origin belongs to a different mission",
+                "blocking": True,
+            }
+        )
+    if isinstance(origin_route_hash, str) and origin_route_hash and origin_route_hash != route_hash:
+        issues.append(
+            {
+                "code": "frame_route_mismatch",
+                "message": "execution origin belongs to a different route hash",
+                "blocking": True,
+            }
+        )
+
+
+def _parse_utc_timestamp(value: str) -> datetime | None:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
 
 
 def _append_unique_issue(issues: list[dict[str, Any]], issue: dict[str, Any]) -> None:
@@ -615,24 +711,71 @@ def _config_path(config: dict[str, str], key: str) -> Path | None:
     return (Path(base) / path).resolve()
 
 
-def _config_float(config: dict[str, str], key: str, default: float) -> float:
+def _config_float(
+    config: dict[str, str],
+    key: str,
+    default: float,
+    *,
+    minimum: float | None = None,
+    inclusive: bool = True,
+) -> float:
     value = _config_string(config, key)
     if value is None:
         return default
     try:
-        return float(value)
-    except ValueError:
-        return default
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be a finite number") from exc
+    _validate_finite_minimum(key, parsed, minimum=minimum, inclusive=inclusive)
+    return parsed
 
 
-def _config_optional_float(config: dict[str, str], key: str) -> float | None:
+def _config_optional_float(
+    config: dict[str, str],
+    key: str,
+    *,
+    minimum: float | None = None,
+    inclusive: bool = True,
+) -> float | None:
     value = _config_string(config, key)
     if value is None:
         return None
     try:
-        return float(value)
-    except ValueError:
-        return None
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be a finite number") from exc
+    _validate_finite_minimum(key, parsed, minimum=minimum, inclusive=inclusive)
+    return parsed
+
+
+def _config_int(config: dict[str, str], key: str, default: int, *, minimum: int | None = None) -> int:
+    value = _config_string(config, key)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"{key} must be at least {minimum}")
+    return parsed
+
+
+def _validate_finite_minimum(
+    key: str,
+    value: float,
+    *,
+    minimum: float | None,
+    inclusive: bool,
+) -> None:
+    if not math.isfinite(value):
+        raise ValueError(f"{key} must be a finite number")
+    if minimum is None:
+        return
+    if inclusive and value < minimum:
+        raise ValueError(f"{key} must be at least {minimum:g}")
+    if not inclusive and value <= minimum:
+        raise ValueError(f"{key} must be greater than {minimum:g}")
 
 
 if __name__ == "__main__":
