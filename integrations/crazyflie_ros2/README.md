@@ -3,17 +3,20 @@
 This package is the v1.3 Crazyflie bridge for the Drone Mission Planner
 execution link. The current checked-in implementation supports the TCP + NDJSON
 protocol surface, a deterministic SIM backend for software acceptance, and a
-read-only Crazyswarm2 hardware telemetry backend:
+default-locked Crazyswarm2 hardware backend:
 `hello`, `ping`, `get_capabilities`, `select_robot`, `load_mission`,
 `get_telemetry`, `run_preflight`, `execute_mission`, `abort_land`,
-`emergency_stop` and `clear_mission`.
+`emergency_stop`, `clear_mission`, `run_cf8_acceptance` and
+`get_cf8_acceptance`.
 
-Hardware flight execution is intentionally not enabled from this workspace. The
+Hardware mission execution is intentionally not enabled from this workspace. The
 `hardware` backend subscribes to Crazyswarm2 `/cf231/status`, `/cf231/pose`,
 `/cf231/odom` and DMP's `/cf231/dmp_readiness` custom firmware log topic,
-reports real battery/link/pose/readiness telemetry, and still returns a structured
-`execution_not_implemented` error for mission execution until a later supervised
-hardware acceptance phase unlocks flight commands.
+reports real battery/link/pose/readiness telemetry, and still returns a
+structured `execution_not_implemented` error for mission execution. CF8 adds a
+separate supervised takeoff-hover-land acceptance runner only; it does not open
+XY `go_to`, waypoint mission execution, trajectories, return-to-home or route
+execution.
 
 Default bind:
 
@@ -49,11 +52,17 @@ The default hardware robot id is configured in
 
 ```yaml
 robot_id: cf231
+hardware_flight_enabled: false
 ```
 
 The hardware readiness safety thresholds in `bridge.yaml` fail closed if an
 explicit value is invalid. Leave a key absent to use the default; do not rely on
 invalid values falling back silently.
+
+`hardware_flight_enabled` is deliberately checked in as `false`. With that
+default, even a `run_cf8_acceptance` request cannot create an arm, takeoff or
+land service request. A supervised operator must intentionally set it to `true`
+in a local config and send `confirm_real_flight: true` on that specific request.
 
 Bridge config paths are deterministic: an explicitly supplied `--config` must
 exist, and relative path values inside that config are resolved relative to the
@@ -105,6 +114,48 @@ The `dmp_readiness.values` order is exactly
 `range.zrange` is millimeters; the bridge converts it to meters before applying
 startup down-range policy. Missing, stale, malformed, NaN/Inf or negative samples
 are ignored or reported as blocking readiness diagnostics rather than guessed.
+
+## CF8 Acceptance
+
+CF7-LIVE is intentionally folded into CF8: skipping a standalone CF7-LIVE stage
+does not skip its checks. Before any CF8 takeoff service can be dispatched, the
+bridge immediately re-runs its authoritative live readiness gate: connected
+status, fresh pose, pose rate, Flow XY, Z, battery, supervisor, static pose
+stability, `/odom` velocity, `/dmp_readiness` range/Kalman convergence, fresh
+hardware session and finite current pose.
+
+The CF8 protocol is intentionally separate from mission execution:
+
+```json
+{"type":"run_cf8_acceptance","request_id":"cf8-1","confirm_real_flight":true}
+{"type":"get_cf8_acceptance","request_id":"cf8-poll"}
+```
+
+`run_cf8_acceptance` starts the runner and returns a
+`cf8_acceptance_state`; clients poll `get_cf8_acceptance` for the eventual
+`cf8_acceptance_result`. The runner records an event timeline, origin pose,
+target Z, landing target, service-dispatch events, drift/error/speed/battery
+metrics and final telemetry.
+
+Takeoff and land heights are absolute Crazyswarm2/Crazyflie high-level
+commander heights. CF8 captures an acceptance-only origin at start and computes:
+
+```text
+target_z = origin_z + cf8_takeoff_delta_m
+landing_target_z = origin_z
+```
+
+The service response only means the command was accepted by Crazyswarm2. Takeoff,
+hover and landing success are confirmed from telemetry, including Z error, XY
+drift, low speed over a settle window, fresh status/pose, unchanged session,
+battery and supervisor safety.
+
+Current source review shows the normal Crazyswarm2 examples call takeoff/land
+without a preceding arm request, while Crazyswarm2 also exposes an independent
+`/<cf>/arm` service. DMP therefore defaults `cf8_explicit_arm_required: false`.
+If a local firmware/Crazyswarm2 setup requires explicit arming, the operator can
+set that policy true; CF8 will arm before takeoff and only disarm after safe
+landing confirmation.
 
 Non-flight hardware capability probe:
 
@@ -167,8 +218,14 @@ Do not switch to hardware execution until all of the following are true:
 
 - SIM execution validates protocol, state machine and report behavior only; it is
   not firmware SIL or real flight evidence.
-- The checked-in hardware adapter is read-only for CF7. It does not send real
-  `takeoff`, `go_to`, `land` or emergency commands.
+- The checked-in default config keeps real hardware flight disabled with
+  `hardware_flight_enabled: false`.
+- CF8 can dispatch only `arm` if explicitly required, `takeoff` and `land`, and
+  only through `run_cf8_acceptance` after config unlock, strict per-run operator
+  confirmation and fresh live preflight. Hardware `go_to` remains disabled until
+  CF9, and `execute_mission` still returns `execution_not_implemented`.
+- Protocol `emergency_stop` is not automatically triggered by CF8 faults.
+  Ordinary CF8 faults attempt controlled landing instead.
 - Deck capability detection first attempts reliable Crazyswarm2/ROS parameter
   values. Some Crazyswarm2 C++ backend runs list `cf231.params.deck.*`
   descriptors but return no parameter values because
@@ -198,4 +255,7 @@ Do not switch to hardware execution until all of the following are true:
    DMP logging config merged into `crazyflies.yaml`.
 6. Start the DMP bridge hardware backend.
 7. Verify status, pose, capability source, preflight and frame origin.
-8. Remain within CF7 only: no flight commands.
+8. For CF8 live acceptance only, prepare a local config with
+   `hardware_flight_enabled: true`, send `run_cf8_acceptance` with strict
+   `confirm_real_flight: true`, and poll `get_cf8_acceptance`.
+9. Do not use `execute_mission` for hardware; it remains disabled.

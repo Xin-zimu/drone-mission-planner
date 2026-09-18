@@ -56,6 +56,7 @@ class CrazyflieAdapter(Protocol):
         duration_s: float,
     ) -> None: ...
     async def land(self, height_m: float, duration_s: float) -> None: ...
+    async def arm(self, arm: bool) -> None: ...
     def emergency(self) -> None: ...
 
 
@@ -119,6 +120,9 @@ class SimCrazyflieAdapter:
         await self._run_command("land", duration_s)
         self.state = RobotState(self.robot_id, self.state.x_m, self.state.y_m, height_m)
 
+    async def arm(self, arm: bool) -> None:
+        self.command_log.append(f"arm:{int(arm)}")
+
     def emergency(self) -> None:
         self.command_log.append("emergency")
         self.state = RobotState(self.robot_id, self.state.x_m, self.state.y_m, 0.0)
@@ -160,6 +164,8 @@ class Crazyswarm2Adapter:
     capability_snapshot_path: Path | None = None
     capability_snapshot_max_age_s: float = 3600.0
     readiness_policy: ReadinessPolicy = field(default_factory=ReadinessPolicy)
+    hardware_flight_enabled: bool = False
+    service_timeout_s: float = 2.0
     _collector: TelemetryCollector = field(init=False)
     _diagnostics: list[str] = field(default_factory=list)
     _connected: bool = False
@@ -169,6 +175,13 @@ class Crazyswarm2Adapter:
     _executor: Any = None
     _spin_thread: threading.Thread | None = None
     _parameter_client: Any = None
+    _takeoff_client: Any = None
+    _land_client: Any = None
+    _arm_client: Any = None
+    _duration_msg_type: Any = None
+    _takeoff_request_type: Any = None
+    _land_request_type: Any = None
+    _arm_request_type: Any = None
     _last_capability_read_s: float = 0.0
     _capability_read_interval_s: float = 2.0
     _capability_diagnostics: tuple[str, ...] = ()
@@ -190,7 +203,9 @@ class Crazyswarm2Adapter:
             return
         try:
             import rclpy
+            from builtin_interfaces.msg import Duration
             from crazyflie_interfaces.msg import LogDataGeneric, Status
+            from crazyflie_interfaces.srv import Arm, Land, Takeoff
             from geometry_msgs.msg import PoseStamped
             from nav_msgs.msg import Odometry
             from rclpy.executors import SingleThreadedExecutor
@@ -201,6 +216,10 @@ class Crazyswarm2Adapter:
             return
 
         self._rclpy = rclpy
+        self._duration_msg_type = Duration
+        self._takeoff_request_type = Takeoff.Request
+        self._land_request_type = Land.Request
+        self._arm_request_type = Arm.Request
         self._context = rclpy.context.Context()
         rclpy.init(context=self._context)
         node_name = f"dmp_{self.robot_id}_telemetry"
@@ -216,6 +235,9 @@ class Crazyswarm2Adapter:
             self._record_readiness_log,
             10,
         )
+        self._takeoff_client = self._node.create_client(Takeoff, f"/{self.robot_id}/takeoff")
+        self._land_client = self._node.create_client(Land, f"/{self.robot_id}/land")
+        self._arm_client = self._node.create_client(Arm, f"/{self.robot_id}/arm")
         self._parameter_client = AsyncParameterClient(self._node, self.crazyflie_server_node)
         self._spin_thread = threading.Thread(
             target=self._executor.spin,
@@ -298,7 +320,20 @@ class Crazyswarm2Adapter:
         )
 
     async def takeoff(self, height_m: float, duration_s: float) -> None:
-        raise RuntimeError("hardware takeoff is disabled in CF7 telemetry gate")
+        if not self.hardware_flight_enabled:
+            raise RuntimeError("hardware takeoff is disabled until hardware_flight_enabled is true")
+        if not math.isfinite(height_m) or not math.isfinite(duration_s) or duration_s <= 0.0:
+            raise ValueError("takeoff height and duration must be finite, with positive duration")
+        request = self._takeoff_request_type()
+        request.group_mask = 0
+        request.height = float(height_m)
+        request.duration = _duration_msg(self._duration_msg_type, duration_s)
+        await self._call_service(
+            self._takeoff_client,
+            request,
+            service_name=f"/{self.robot_id}/takeoff",
+            timeout_s=self.service_timeout_s,
+        )
 
     async def go_to(
         self,
@@ -308,13 +343,38 @@ class Crazyswarm2Adapter:
         yaw_rad: float,
         duration_s: float,
     ) -> None:
-        raise RuntimeError("hardware go_to is disabled in CF7 telemetry gate")
+        raise RuntimeError("hardware go_to is disabled until CF9 waypoint acceptance")
 
     async def land(self, height_m: float, duration_s: float) -> None:
-        raise RuntimeError("hardware land is disabled in CF7 telemetry gate")
+        if not self.hardware_flight_enabled:
+            raise RuntimeError("hardware land is disabled until hardware_flight_enabled is true")
+        if not math.isfinite(height_m) or not math.isfinite(duration_s) or duration_s <= 0.0:
+            raise ValueError("land height and duration must be finite, with positive duration")
+        request = self._land_request_type()
+        request.group_mask = 0
+        request.height = float(height_m)
+        request.duration = _duration_msg(self._duration_msg_type, duration_s)
+        await self._call_service(
+            self._land_client,
+            request,
+            service_name=f"/{self.robot_id}/land",
+            timeout_s=self.service_timeout_s,
+        )
+
+    async def arm(self, arm: bool) -> None:
+        if not self.hardware_flight_enabled:
+            raise RuntimeError("hardware arm is disabled until hardware_flight_enabled is true")
+        request = self._arm_request_type()
+        request.arm = bool(arm)
+        await self._call_service(
+            self._arm_client,
+            request,
+            service_name=f"/{self.robot_id}/arm",
+            timeout_s=self.service_timeout_s,
+        )
 
     def emergency(self) -> None:
-        raise RuntimeError("hardware emergency is disabled in CF7 telemetry gate")
+        raise RuntimeError("hardware emergency is disabled in CF8 software acceptance")
 
     @property
     def pose_stability_payload(self) -> dict[str, Any]:
@@ -341,6 +401,20 @@ class Crazyswarm2Adapter:
             self._collector.record_readiness_log_values(getattr(msg, "values", ()), source=source)
         except ValueError as exc:
             self._record_diagnostic(f"invalid {source} sample ignored: {exc}")
+
+    async def _call_service(self, client: Any, request: Any, *, service_name: str, timeout_s: float = 2.0) -> None:
+        if client is None:
+            raise RuntimeError(f"{service_name} client is unavailable")
+        if not client.wait_for_service(timeout_sec=0.0):
+            raise TimeoutError(f"{service_name} service unavailable")
+        future = client.call_async(request)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if future.done():
+                future.result()
+                return
+            await asyncio.sleep(0.01)
+        raise TimeoutError(f"{service_name} service timeout")
 
     def _sync_session_from_snapshot(self, snapshot: TelemetrySnapshot) -> None:
         if snapshot.connected:
@@ -499,3 +573,15 @@ def _parameter_is_set(parameter_value: Any) -> bool:
 
 def _dedupe(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
+
+
+def _duration_msg(duration_msg_type: Any, seconds: float) -> Any:
+    whole = int(seconds)
+    nanoseconds = round((float(seconds) - whole) * 1_000_000_000)
+    if nanoseconds >= 1_000_000_000:
+        whole += 1
+        nanoseconds -= 1_000_000_000
+    msg = duration_msg_type()
+    msg.sec = whole
+    msg.nanosec = nanoseconds
+    return msg

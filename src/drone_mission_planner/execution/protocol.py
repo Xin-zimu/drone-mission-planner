@@ -25,6 +25,8 @@ class ProtocolMessageType(StrEnum):
     SELECT_ROBOT = "select_robot"
     LOAD_MISSION = "load_mission"
     RUN_PREFLIGHT = "run_preflight"
+    RUN_CF8_ACCEPTANCE = "run_cf8_acceptance"
+    GET_CF8_ACCEPTANCE = "get_cf8_acceptance"
     EXECUTE_MISSION = "execute_mission"
     ABORT_LAND = "abort_land"
     EMERGENCY_STOP = "emergency_stop"
@@ -38,6 +40,8 @@ class ProtocolMessageType(StrEnum):
     MISSION_STATE = "mission_state"
     WAYPOINT_STATE = "waypoint_state"
     TELEMETRY = "telemetry"
+    CF8_ACCEPTANCE_STATE = "cf8_acceptance_state"
+    CF8_ACCEPTANCE_RESULT = "cf8_acceptance_result"
     EVENT = "event"
     ERROR = "error"
 

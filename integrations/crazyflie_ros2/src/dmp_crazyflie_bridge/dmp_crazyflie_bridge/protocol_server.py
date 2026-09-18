@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .cf8_acceptance import CF8AcceptancePolicy, CF8AcceptanceResult, HardwareFlightAcceptanceRunner
 from .crazyswarm_adapter import Crazyswarm2Adapter, SimCrazyflieAdapter
 from .execution_state import BridgeExecutionState
 from .mission_executor import MissionExecutionResult, MissionExecutor
@@ -107,6 +108,39 @@ class BridgeProtocolServer:
             ),
         )
         battery_critical_voltage = _config_float(config, "battery_critical_voltage", 3.7, minimum=0.0, inclusive=False)
+        hardware_flight_enabled = _config_bool(config, "hardware_flight_enabled", False)
+        self._cf8_policy = CF8AcceptancePolicy(
+            takeoff_delta_m=_config_float(
+                config, "cf8_takeoff_delta_m", 0.25, minimum=0.0, maximum=0.5, inclusive=False
+            ),
+            takeoff_duration_s=_config_float(
+                config, "cf8_takeoff_duration_s", 2.5, minimum=0.0, maximum=10.0, inclusive=False
+            ),
+            hover_duration_s=_config_float(
+                config, "cf8_hover_duration_s", 3.0, minimum=0.0, maximum=10.0, inclusive=False
+            ),
+            land_duration_s=_config_float(
+                config, "cf8_land_duration_s", 2.5, minimum=0.0, maximum=10.0, inclusive=False
+            ),
+            takeoff_timeout_s=_config_float(
+                config, "cf8_takeoff_timeout_s", 8.0, minimum=0.0, maximum=30.0, inclusive=False
+            ),
+            landing_timeout_s=_config_float(
+                config, "cf8_landing_timeout_s", 8.0, minimum=0.0, maximum=30.0, inclusive=False
+            ),
+            service_timeout_s=_config_float(
+                config, "cf8_service_timeout_s", 2.0, minimum=0.0, maximum=10.0, inclusive=False
+            ),
+            z_acceptance_tolerance_m=_config_float(config, "cf8_z_acceptance_tolerance_m", 0.08, minimum=0.0, inclusive=False),
+            xy_drift_tolerance_m=_config_float(config, "cf8_xy_drift_tolerance_m", 0.15, minimum=0.0, inclusive=False),
+            settle_velocity_mps=_config_float(config, "cf8_settle_velocity_mps", 0.08, minimum=0.0),
+            settle_duration_s=_config_float(config, "cf8_settle_duration_s", 0.5, minimum=0.0, inclusive=False),
+            max_total_acceptance_time_s=_config_float(
+                config, "cf8_max_total_acceptance_time_s", 30.0, minimum=0.0, maximum=60.0, inclusive=False
+            ),
+            explicit_arm_required=_config_bool(config, "cf8_explicit_arm_required", False),
+        )
+        self._hardware_flight_enabled = hardware_flight_enabled
         self.host = host
         self.port = port
         self.state = BridgeSessionState(backend=backend)
@@ -124,12 +158,17 @@ class BridgeProtocolServer:
                 capability_snapshot_max_age_s=snapshot_max_age_s,
                 battery_critical_voltage=battery_critical_voltage,
                 readiness_policy=readiness_policy,
+                hardware_flight_enabled=hardware_flight_enabled,
+                service_timeout_s=self._cf8_policy.service_timeout_s,
             )
             self._hardware_adapter.connect()
             self._refresh_hardware_robot()
         self._server: asyncio.AbstractServer | None = None
         self._execute_cache: dict[str, dict[str, Any]] = {}
         self._active_executor: MissionExecutor | None = None
+        self._cf8_runner: HardwareFlightAcceptanceRunner | None = None
+        self._cf8_task: asyncio.Task[CF8AcceptanceResult] | None = None
+        self._cf8_request_id: str | None = None
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
@@ -180,6 +219,15 @@ class BridgeProtocolServer:
         message_type = _message_type(message)
         if message_type is None:
             return self._error("unknown_message_type", "message type must be a non-empty string", request_id=request_id)
+        if message_type == "run_cf8_acceptance":
+            return await self._run_cf8_acceptance(message, request_id)
+        if message_type == "get_cf8_acceptance":
+            return self._cf8_acceptance_status(request_id)
+        if message_type == "abort_land" and self._cf8_active():
+            assert self._cf8_runner is not None
+            self._cf8_runner.request_abort()
+            self.state.state = BridgeExecutionState.ABORTING
+            return {"type": "cf8_acceptance_state", "request_id": request_id, "state": BridgeExecutionState.ABORTING.value}
         if message_type == "execute_mission":
             if request_id is not None and request_id in self._execute_cache:
                 return dict(self._execute_cache[request_id])
@@ -219,6 +267,14 @@ class BridgeProtocolServer:
             }
         if message_type == "get_telemetry":
             return self._telemetry(request_id)
+        if message_type == "get_cf8_acceptance":
+            return self._cf8_acceptance_status(request_id)
+        if message_type == "run_cf8_acceptance":
+            return self._error(
+                "async_protocol_required",
+                "run_cf8_acceptance must be handled by the async protocol server",
+                request_id=request_id,
+            )
         if message_type == "select_robot":
             return self._select_robot(message, request_id)
         if message_type == "load_mission":
@@ -388,12 +444,23 @@ class BridgeProtocolServer:
         return response
 
     def _abort_land(self, request_id: str | None) -> dict[str, Any]:
+        if self._cf8_active():
+            assert self._cf8_runner is not None
+            self._cf8_runner.request_abort()
+            self.state.state = BridgeExecutionState.ABORTING
+            return {"type": "cf8_acceptance_state", "request_id": request_id, "state": BridgeExecutionState.ABORTING.value}
         if self._active_executor is None:
             return self._error("execution_not_active", "no mission execution is active", request_id=request_id)
         self._active_executor.request_abort("operator_abort")
         return {"type": "mission_state", "request_id": request_id, "state": BridgeExecutionState.ABORTING.value}
 
     def _emergency_stop(self, request_id: str | None) -> dict[str, Any]:
+        if self._cf8_active():
+            return self._error(
+                "emergency_disabled",
+                "CF8 software acceptance does not enable automatic or protocol emergency motor stop",
+                request_id=request_id,
+            )
         if self._active_executor is None:
             return self._error("execution_not_active", "no mission execution is active", request_id=request_id)
         self._active_executor.request_emergency("operator_emergency")
@@ -421,6 +488,60 @@ class BridgeProtocolServer:
             response["failure_code"] = result.failure_code
             response["failure_message"] = result.failure_message
         return response
+
+    async def _run_cf8_acceptance(self, message: dict[str, Any], request_id: str | None) -> dict[str, Any]:
+        if message.get("confirm_real_flight") is not True:
+            return self._error(
+                "operator_confirmation_required",
+                "run_cf8_acceptance requires confirm_real_flight to be boolean true",
+                request_id=request_id,
+            )
+        if not self._hardware_flight_enabled:
+            return self._error(
+                "hardware_flight_disabled",
+                "hardware_flight_enabled must be true in bridge config before CF8 acceptance can send flight services",
+                request_id=request_id,
+            )
+        if self.state.backend != "hardware" or self._hardware_adapter is None:
+            return self._error("hardware_backend_required", "CF8 acceptance requires the hardware backend", request_id=request_id)
+        if self._cf8_active():
+            return self._error("cf8_acceptance_active", "CF8 acceptance is already active", request_id=request_id)
+        runner = HardwareFlightAcceptanceRunner(self._hardware_adapter, policy=self._cf8_policy)
+        self._cf8_runner = runner
+        self._cf8_request_id = request_id
+        self.state.state = BridgeExecutionState.PREFLIGHT_RECHECK
+        self._cf8_task = asyncio.create_task(self._cf8_task_body(runner))
+        return {
+            "type": "cf8_acceptance_state",
+            "request_id": request_id,
+            "state": BridgeExecutionState.PREFLIGHT_RECHECK.value,
+        }
+
+    async def _cf8_task_body(self, runner: HardwareFlightAcceptanceRunner) -> CF8AcceptanceResult:
+        result = await runner.run()
+        self.state.state = result.state
+        return result
+
+    def _cf8_acceptance_status(self, request_id: str | None) -> dict[str, Any]:
+        if self._cf8_runner is None:
+            return {
+                "type": "cf8_acceptance_state",
+                "request_id": request_id,
+                "state": self.state.state.value,
+                "active": False,
+            }
+        if self._cf8_task is not None and self._cf8_task.done():
+            try:
+                result = self._cf8_task.result()
+            except Exception as exc:
+                return self._error("cf8_acceptance_failed", str(exc), request_id=request_id)
+            return result.to_payload(request_id=request_id)
+        payload = self._cf8_runner.status_payload(request_id=request_id)
+        payload["active"] = True
+        return payload
+
+    def _cf8_active(self) -> bool:
+        return self._cf8_task is not None and not self._cf8_task.done()
 
     def _error(self, code: str, message: str, *, request_id: str | None = None) -> dict[str, Any]:
         response: dict[str, Any] = {"type": "error", "code": code, "message": message}
@@ -717,6 +838,7 @@ def _config_float(
     default: float,
     *,
     minimum: float | None = None,
+    maximum: float | None = None,
     inclusive: bool = True,
 ) -> float:
     value = _config_string(config, key)
@@ -726,7 +848,7 @@ def _config_float(
         parsed = float(value)
     except ValueError as exc:
         raise ValueError(f"{key} must be a finite number") from exc
-    _validate_finite_minimum(key, parsed, minimum=minimum, inclusive=inclusive)
+    _validate_finite_range(key, parsed, minimum=minimum, maximum=maximum, inclusive=inclusive)
     return parsed
 
 
@@ -735,6 +857,7 @@ def _config_optional_float(
     key: str,
     *,
     minimum: float | None = None,
+    maximum: float | None = None,
     inclusive: bool = True,
 ) -> float | None:
     value = _config_string(config, key)
@@ -744,7 +867,7 @@ def _config_optional_float(
         parsed = float(value)
     except ValueError as exc:
         raise ValueError(f"{key} must be a finite number") from exc
-    _validate_finite_minimum(key, parsed, minimum=minimum, inclusive=inclusive)
+    _validate_finite_range(key, parsed, minimum=minimum, maximum=maximum, inclusive=inclusive)
     return parsed
 
 
@@ -761,11 +884,24 @@ def _config_int(config: dict[str, str], key: str, default: int, *, minimum: int 
     return parsed
 
 
-def _validate_finite_minimum(
+def _config_bool(config: dict[str, str], key: str, default: bool) -> bool:
+    value = _config_string(config, key)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"true", "yes", "on", "1"}:
+        return True
+    if normalized in {"false", "no", "off", "0"}:
+        return False
+    raise ValueError(f"{key} must be a boolean")
+
+
+def _validate_finite_range(
     key: str,
     value: float,
     *,
     minimum: float | None,
+    maximum: float | None,
     inclusive: bool,
 ) -> None:
     if not math.isfinite(value):
@@ -776,6 +912,10 @@ def _validate_finite_minimum(
         raise ValueError(f"{key} must be at least {minimum:g}")
     if not inclusive and value <= minimum:
         raise ValueError(f"{key} must be greater than {minimum:g}")
+    if maximum is None:
+        return
+    if value > maximum:
+        raise ValueError(f"{key} must be no greater than {maximum:g}")
 
 
 if __name__ == "__main__":
