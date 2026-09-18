@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -95,7 +96,10 @@ class BridgeProtocolServer:
 
     async def handle_message_async(self, message: dict[str, Any]) -> dict[str, Any]:
         request_id = _request_id(message)
-        if str(message["type"]) == "execute_mission":
+        message_type = _message_type(message)
+        if message_type is None:
+            return self._error("unknown_message_type", "message type must be a non-empty string", request_id=request_id)
+        if message_type == "execute_mission":
             if request_id is not None and request_id in self._execute_cache:
                 return dict(self._execute_cache[request_id])
             return await self._execute_sim_async(request_id)
@@ -103,7 +107,9 @@ class BridgeProtocolServer:
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any]:
         request_id = _request_id(message)
-        message_type = str(message["type"])
+        message_type = _message_type(message)
+        if message_type is None:
+            return self._error("unknown_message_type", "message type must be a non-empty string", request_id=request_id)
         if message_type == "hello":
             return {
                 "type": "hello_ack",
@@ -179,6 +185,9 @@ class BridgeProtocolServer:
         loaded_hash = mission.get("source_route_hash")
         if loaded_hash != route_hash:
             return self._error("route_hash_mismatch", "mission hash does not match request hash", request_id=request_id)
+        mission_error = _mission_shape_error(mission, mission_id)
+        if mission_error is not None:
+            return self._error("invalid_mission_payload", mission_error, request_id=request_id)
         self.state.loaded_mission_id = mission_id
         self.state.loaded_route_hash = route_hash
         self.state.loaded_mission = mission
@@ -300,6 +309,36 @@ class BridgeProtocolServer:
 def _request_id(message: dict[str, Any]) -> str | None:
     request_id = message.get("request_id")
     return request_id if isinstance(request_id, str) else None
+
+
+def _message_type(message: dict[str, Any]) -> str | None:
+    message_type = message.get("type")
+    return message_type if isinstance(message_type, str) and message_type else None
+
+
+def _mission_shape_error(mission: dict[str, Any], mission_id: str) -> str | None:
+    if mission.get("mission_id") != mission_id:
+        return "mission_id does not match request mission_id"
+    waypoints = mission.get("waypoints")
+    if not isinstance(waypoints, list) or not waypoints:
+        return "mission requires a non-empty waypoints list"
+    supported_actions = {"fly_to", "hover", "land", "return_to_launch"}
+    for index, waypoint in enumerate(waypoints, start=1):
+        if not isinstance(waypoint, dict):
+            return f"waypoint {index} must be an object"
+        for key in ("index", "x_m", "y_m", "z_m", "yaw_rad", "duration_s"):
+            value = waypoint.get(key)
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                return f"waypoint {index} requires finite numeric {key}"
+        if float(waypoint["duration_s"]) <= 0.0:
+            return f"waypoint {index} duration_s must be positive"
+        action = waypoint.get("action")
+        if not isinstance(action, str) or action not in supported_actions:
+            return f"waypoint {index} action is not supported"
+        hold_s = waypoint.get("hold_s", 0.0)
+        if not isinstance(hold_s, (int, float)) or not math.isfinite(float(hold_s)) or float(hold_s) < 0.0:
+            return f"waypoint {index} hold_s must be a non-negative finite number"
+    return None
 
 
 async def run_server(host: str, port: int, backend: str) -> None:
