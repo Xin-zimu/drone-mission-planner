@@ -163,8 +163,10 @@ def profile_to_payload(profile: ExecutionTargetProfile) -> dict[str, Any]:
         "max_radius_m": profile.max_radius_m,
         "supported_actions": sorted(action.value for action in profile.supported_actions),
         "requires_xy_positioning": profile.requires_xy_positioning,
+        "requires_z_positioning": profile.requires_z_positioning,
         "requires_pose_stream": profile.requires_pose_stream,
         "min_pose_rate_hz": profile.min_pose_rate_hz,
+        "nominal_pose_rate_hz": profile.nominal_pose_rate_hz,
         "supports_live_telemetry": profile.supports_live_telemetry,
     }
 

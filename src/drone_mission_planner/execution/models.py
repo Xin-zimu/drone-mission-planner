@@ -37,6 +37,7 @@ class ExecutionFrameCalibration:
     validated: bool
     origin_source: str = "manual"
     origin_captured_at_utc: str | None = None
+    origin_session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,8 +52,10 @@ class ExecutionTargetProfile:
     max_radius_m: float
     supported_actions: frozenset[WaypointAction]
     requires_xy_positioning: bool
+    requires_z_positioning: bool
     requires_pose_stream: bool
     min_pose_rate_hz: float
+    nominal_pose_rate_hz: float
     supports_live_telemetry: bool
 
 
@@ -92,6 +95,7 @@ class RobotCapabilities:
     xy_positioning_available: bool
     pose_stream_available: bool
     pose_rate_hz: float
+    z_positioning_available: bool = False
     target_profile_id: str | None = None
 
 

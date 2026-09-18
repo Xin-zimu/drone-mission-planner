@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import types
 from dataclasses import dataclass
@@ -248,6 +249,108 @@ def test_cflib_snapshot_rejects_robot_uri_stale_and_missing(tmp_path: Path) -> N
     assert "not found" in missing.diagnostic
 
 
+def test_default_snapshot_path_is_package_runtime() -> None:
+    path = capability_probe.default_snapshot_path("cf231")
+
+    assert path.name == "cf231_capabilities.json"
+    assert path.parent.name == "runtime"
+    assert path.parent.parent.name == "dmp_crazyflie_bridge"
+    assert path.parent.parent.parent.name == "src"
+
+
+def test_cflib_snapshot_rejects_missing_deck_key_invalid_source_future_and_max_age(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "invalid.json"
+    _write_snapshot(snapshot_path)
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    del payload["deck"]["bcDWM1000"]
+    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    missing_deck = capability_probe.load_capability_snapshot(
+        snapshot_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert not missing_deck.valid
+    assert "missing deck keys" in missing_deck.diagnostic
+
+    malformed_path = tmp_path / "malformed.json"
+    malformed_payload = dict(payload)
+    malformed_payload["deck"] = []
+    malformed_path.write_text(json.dumps(malformed_payload), encoding="utf-8")
+    malformed = capability_probe.load_capability_snapshot(
+        malformed_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert not malformed.valid
+    assert "missing deck values" in malformed.diagnostic
+
+    invalid_source_path = tmp_path / "source.json"
+    _write_snapshot(invalid_source_path)
+    invalid_source_payload = json.loads(invalid_source_path.read_text(encoding="utf-8"))
+    invalid_source_payload["source"] = "guessed"
+    invalid_source_path.write_text(json.dumps(invalid_source_payload), encoding="utf-8")
+    invalid_source = capability_probe.load_capability_snapshot(
+        invalid_source_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert not invalid_source.valid
+    assert "unsupported" in invalid_source.diagnostic
+
+    future_path = tmp_path / "future.json"
+    future = (datetime.now(UTC) + timedelta(seconds=60)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    _write_snapshot(future_path, captured_at_utc=future)
+    future_result = capability_probe.load_capability_snapshot(
+        future_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert not future_result.valid
+    assert "future" in future_result.diagnostic
+
+    skew_path = tmp_path / "skew.json"
+    slight_skew = (datetime.now(UTC) + timedelta(seconds=2)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    _write_snapshot(skew_path, captured_at_utc=slight_skew)
+    skew = capability_probe.load_capability_snapshot(
+        skew_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert skew.valid
+
+    invalid_max_age = capability_probe.load_capability_snapshot(
+        skew_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=0.0,
+    )
+    assert not invalid_max_age.valid
+    assert "max age" in invalid_max_age.diagnostic
+
+
+def test_config_path_is_relative_to_config_file_and_missing_config_fails(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "bridge.yaml"
+    config_path.write_text("capability_snapshot_path: ../runtime/cf231.json\n", encoding="utf-8")
+
+    config = protocol_server._load_config(str(config_path))
+
+    assert protocol_server._config_path(config, "capability_snapshot_path") == (tmp_path / "runtime" / "cf231.json").resolve()
+    try:
+        protocol_server._load_config(str(tmp_path / "missing.yaml"))
+    except FileNotFoundError as exc:
+        assert "configuration file not found" in str(exc)
+    else:
+        raise AssertionError("missing explicit config must fail closed")
+
+
 def test_cflib_snapshot_covers_z_only_and_all_zero(tmp_path: Path) -> None:
     z_only_path = tmp_path / "z_only.json"
     _write_snapshot(z_only_path, flow2=False, zranger2=True)
@@ -336,6 +439,105 @@ def test_battery_critical_and_pose_stability_gate() -> None:
     assert snapshot.pose_stability.xy_displacement_m > 0.03
 
 
+def test_pose_stability_uses_full_window_not_first_last() -> None:
+    clock = FakeClock()
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+    for x in [0.0, 0.10, 0.08, 0.01] * 15:
+        collector.record_pose(FakePose(x, 0.0, 0.01))
+        clock.advance(0.1)
+
+    stability = collector.snapshot().pose_stability
+
+    assert stability.observed is True
+    assert stability.stable is False
+    assert stability.xy_displacement_m <= 0.03
+    assert stability.xy_span_m >= 0.10
+
+
+def test_pose_stability_blocks_large_gap_short_duration_and_low_sample_count() -> None:
+    clock = FakeClock()
+    low_samples = telemetry.TelemetryCollector("cf231", clock=clock)
+    for _ in range(5):
+        low_samples.record_pose(FakePose(0.0, 0.0, 0.0))
+        clock.advance(0.1)
+    assert low_samples.snapshot().pose_stability.reason == "not_enough_pose_samples"
+
+    short = telemetry.TelemetryCollector("cf231", clock=FakeClock())
+    short_clock = short.clock
+    assert isinstance(short_clock, FakeClock)
+    for _ in range(20):
+        short.record_pose(FakePose(0.0, 0.0, 0.0))
+        short_clock.advance(0.1)
+    assert short.snapshot().pose_stability.reason == "observation_too_short"
+
+    gap_clock = FakeClock()
+    gap = telemetry.TelemetryCollector("cf231", clock=gap_clock)
+    for index in range(60):
+        gap.record_pose(FakePose(0.0, 0.0, 0.0))
+        gap_clock.advance(1.0 if index == 30 else 0.1)
+    gap_stability = gap.snapshot().pose_stability
+    assert gap_stability.observed is True
+    assert gap_stability.stable is False
+    assert gap_stability.max_sample_gap_s > 0.5
+
+
+def test_readiness_blocks_z_velocity_range_estimator_and_supervisor() -> None:
+    clock = FakeClock()
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+    collector.set_positioning(
+        telemetry.positioning_from_deck_params(
+            {
+                "deck.bcFlow2": 1,
+                "deck.bcZRanger2": 0,
+                "deck.bcLighthouse4": 0,
+                "deck.bcLoco": 0,
+                "deck.bcDWM1000": 0,
+            }
+        )
+    )
+    collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0))
+    for _ in range(60):
+        collector.record_pose(FakePose(0.0, 0.0, 0.03))
+        clock.advance(0.1)
+
+    codes = {issue.code for issue in collector.snapshot().flight_readiness.issues}
+
+    assert "z_positioning_missing" in codes
+    assert "supervisor_not_flyable" in codes
+    assert "velocity_unavailable" in codes
+    assert "range_unavailable" in codes
+    assert "estimator_not_converged" in codes
+
+
+def test_readiness_passes_static_policy_when_live_signals_are_healthy() -> None:
+    clock = FakeClock()
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+    collector.set_positioning(
+        telemetry.positioning_from_deck_params(
+            {
+                "deck.bcFlow2": 1,
+                "deck.bcZRanger2": 1,
+                "deck.bcLighthouse4": 0,
+                "deck.bcLoco": 0,
+                "deck.bcDWM1000": 0,
+            }
+        )
+    )
+    collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+    for _ in range(60):
+        collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+        collector.record_pose(FakePose(0.0, 0.0, 0.03))
+        collector.record_odom(FakeOdom(0.0, 0.0, 0.0))
+        collector.record_range(FakeRange(0.08))
+        collector.record_estimator_variance(0.0001, 0.0001, 0.0001)
+        clock.advance(0.1)
+
+    readiness = collector.snapshot().flight_readiness
+
+    assert readiness.passed is True
+    assert readiness.issues == ()
+
+
 def test_hardware_protocol_uses_cf231_and_realistic_blockers(monkeypatch: Any) -> None:
     fake = FakeHardwareAdapter("cf231")
     monkeypatch.setattr(protocol_server, "Crazyswarm2Adapter", lambda robot_id, **_: fake)
@@ -422,11 +624,22 @@ class FakeStatus:
     latency_unicast: int
     num_rx_unicast: int
     num_tx_unicast: int
+    supervisor_info: int = 0
 
 
 class FakePose:
     def __init__(self, x: float, y: float, z: float) -> None:
         self.pose = _Pose(_Point(x, y, z), _Orientation())
+
+
+class FakeOdom:
+    def __init__(self, vx: float, vy: float, vz: float) -> None:
+        self.twist = _TwistWithCovariance(_Twist(_Point(vx, vy, vz)))
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRange:
+    range: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,6 +661,16 @@ class _Orientation:
 class _Pose:
     position: _Point
     orientation: _Orientation
+
+
+@dataclass(frozen=True, slots=True)
+class _Twist:
+    linear: _Point
+
+
+@dataclass(frozen=True, slots=True)
+class _TwistWithCovariance:
+    twist: _Twist
 
 
 class FakeHardwareAdapter:

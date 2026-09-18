@@ -14,7 +14,10 @@ def test_crazyflie_profile_matches_cf1_target_contract() -> None:
     assert profile.vehicle_family == "Crazyflie 2.x"
     assert profile.coordinate_frame == "local_world_m"
     assert profile.requires_xy_positioning is True
+    assert profile.requires_z_positioning is True
     assert profile.requires_pose_stream is True
+    assert profile.nominal_pose_rate_hz == 10.0
+    assert profile.min_pose_rate_hz < profile.nominal_pose_rate_hz
     assert profile.supports_live_telemetry is True
     assert profile.supported_actions == frozenset(
         {
@@ -35,4 +38,3 @@ def test_default_safety_limits_are_small_hardware_experiment_limits() -> None:
     assert limits.max_horizontal_radius_m == 2.0
     assert limits.max_speed_mps == 0.5
     assert limits.pose_stale_timeout_s > 0.0
-

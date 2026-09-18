@@ -9,10 +9,11 @@ read-only Crazyswarm2 hardware telemetry backend:
 `emergency_stop` and `clear_mission`.
 
 Hardware flight execution is intentionally not enabled from this workspace. The
-`hardware` backend subscribes to Crazyswarm2 `/cf231/status` and `/cf231/pose`,
-reports real battery/link/pose telemetry when available, and still returns a
-structured `execution_not_implemented` error for mission execution until
-supervised hardware acceptance unlocks flight commands.
+`hardware` backend subscribes to Crazyswarm2 `/cf231/status`, `/cf231/pose`,
+`/cf231/odom` and local down-range topics when available, reports real
+battery/link/pose/readiness telemetry, and still returns a structured
+`execution_not_implemented` error for mission execution until a later supervised
+hardware acceptance phase unlocks flight commands.
 
 Default bind:
 
@@ -36,19 +37,30 @@ Run the read-only hardware telemetry backend after Crazyswarm2 is already
 running:
 
 ```bash
+cd integrations/crazyflie_ros2
 export PYTHONPATH="$PWD/src/dmp_crazyflie_bridge:${PYTHONPATH:-}"
-python -m dmp_crazyflie_bridge.protocol_server --backend hardware --config config/bridge.yaml
+python -m dmp_crazyflie_bridge.protocol_server \
+  --backend hardware \
+  --config src/dmp_crazyflie_bridge/config/bridge.yaml
 ```
 
-The default hardware robot id is configured in `config/bridge.yaml`:
+The default hardware robot id is configured in
+`src/dmp_crazyflie_bridge/config/bridge.yaml`:
 
 ```yaml
 robot_id: cf231
 ```
 
-Read-only hardware capability probe:
+Bridge config paths are deterministic: an explicitly supplied `--config` must
+exist, and relative path values inside that config are resolved relative to the
+config file directory. The checked-in capability snapshot path is therefore
+`src/dmp_crazyflie_bridge/runtime/cf231_capabilities.json` when launched with the
+command above.
+
+Non-flight hardware capability probe:
 
 ```bash
+cd integrations/crazyflie_ros2
 export PYTHONPATH="$PWD/src/dmp_crazyflie_bridge:${PYTHONPATH:-}"
 python -m dmp_crazyflie_bridge.capability_probe \
   --robot-id cf231 \
@@ -56,10 +68,11 @@ python -m dmp_crazyflie_bridge.capability_probe \
 ```
 
 The capability probe only connects through cflib, reads selected firmware deck
-parameters, writes a runtime JSON snapshot, and disconnects. It does not set
-firmware parameters, start commanders, arm, take off, land, or send motor
-commands. Run it only while Crazyswarm2 is stopped so cflib and the C++ backend
-do not compete for Crazyradio.
+parameters, writes a runtime JSON snapshot, and disconnects. From DMP it is a
+non-flight capability probe: it does not request arm, takeoff, waypoint `go_to`
+or land. Run it only while the Crazyflie is landed with motors stopped, while
+Crazyswarm2 is stopped, and restart Crazyswarm2 after the probe so cflib and the
+C++ backend do not compete for Crazyradio.
 
 Non-flight environment probe:
 
@@ -88,8 +101,16 @@ Do not switch to hardware execution until all of the following are true:
   stopped, the read-only cflib capability probe has generated a fresh snapshot,
   and the snapshot robot id and URI match the bridge configuration.
 - Battery, deck/status and pose telemetry are streaming at the required rate.
-- Flow Deck V2, Lighthouse or equivalent XY positioning is verified stable.
-- The local execution frame origin and yaw calibration have been reviewed.
+- Flow Deck V2, Lighthouse or equivalent XY positioning capability is verified.
+- Z positioning is verified separately from XY positioning. For Flow Deck V2,
+  `bcFlow2=1` plus `bcZRanger2=1` is expected because the Flow deck initializes
+  its integrated VL53L1 ToF through the `bcZRanger2` driver.
+- Live readiness is verified separately from deck capability: supervisor state,
+  pose freshness/rate, full-window static pose stability, `/odom` velocity,
+  down-range health, Kalman variance diagnostics and current-session frame
+  origin must all pass the Bridge preflight.
+- The local execution frame origin and yaw calibration have been reviewed and
+  captured in the current hardware session.
 - A supervised non-autonomous hardware probe has passed.
 - A supervised takeoff/hover/land acceptance run has passed.
 
@@ -107,6 +128,10 @@ Do not switch to hardware execution until all of the following are true:
   otherwise it reports unknown positioning with diagnostics rather than guessing
   readiness.
 - Real waypoint execution remains blocked until the positioning gate is passed.
+- Readiness is fail-closed. Missing `/odom`, down-range, Kalman variance or
+  supervisor telemetry produces specific blocking issue codes such as
+  `velocity_unavailable`, `range_unavailable`, `estimator_not_converged` or
+  `supervisor_not_flyable`.
 - Full Windows `pytest tests` can hit a pre-existing native `0xc000001d`
   illegal-instruction crash in `tests/integration/test_examples.py` on this
   host; the Crazyflie-focused and non-example suites pass.

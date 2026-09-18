@@ -22,8 +22,10 @@ CRAZYFLIE_CRAZYSWARM2_SINGLE_PROFILE = ExecutionTargetProfile(
         }
     ),
     requires_xy_positioning=True,
+    requires_z_positioning=True,
     requires_pose_stream=True,
-    min_pose_rate_hz=10.0,
+    min_pose_rate_hz=8.0,
+    nominal_pose_rate_hz=10.0,
     supports_live_telemetry=True,
 )
 
@@ -36,4 +38,3 @@ DEFAULT_CRAZYFLIE_SAFETY_LIMITS = ExecutionSafetyLimits(
     pose_stale_timeout_s=0.5,
     max_tracking_error_m=0.35,
 )
-

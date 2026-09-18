@@ -218,27 +218,11 @@ def _validate_robot_capabilities(
     profile: ExecutionTargetProfile,
     issues: list[PreflightIssue],
 ) -> None:
-    if not robot.connected:
-        _issue(issues, "robot_not_connected", f"robot {robot.robot_id} is not connected")
     if robot.target_profile_id is not None and robot.target_profile_id != profile.id:
         _issue(
             issues,
             "robot_profile_mismatch",
             f"robot {robot.robot_id} reports profile {robot.target_profile_id}, not {profile.id}",
-        )
-    if profile.requires_xy_positioning and not robot.xy_positioning_available:
-        _issue(
-            issues,
-            "xy_positioning_missing",
-            f"robot {robot.robot_id} has no reliable XY positioning",
-        )
-    if profile.requires_pose_stream and not robot.pose_stream_available:
-        _issue(issues, "pose_stream_missing", f"robot {robot.robot_id} has no pose stream")
-    if profile.requires_pose_stream and robot.pose_rate_hz < profile.min_pose_rate_hz:
-        _issue(
-            issues,
-            "pose_rate_too_low",
-            f"robot {robot.robot_id} pose rate {robot.pose_rate_hz:g} Hz is below required {profile.min_pose_rate_hz:g} Hz",
         )
 
 

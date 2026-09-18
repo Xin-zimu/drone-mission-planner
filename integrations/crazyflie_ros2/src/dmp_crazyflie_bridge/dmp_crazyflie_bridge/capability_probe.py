@@ -19,6 +19,7 @@ DECK_PARAMETER_NAMES = (
 )
 CAPABILITY_SOURCE_CFLIB = "cflib_firmware_parameter_probe"
 CAPABILITY_SOURCE_ROS = "ros_runtime_parameter"
+CAPABILITY_SNAPSHOT_ALLOWED_CLOCK_SKEW_S = 5.0
 
 
 class CapabilityProbeError(RuntimeError):
@@ -83,14 +84,17 @@ class HardwareCapabilitySnapshot:
             raise CapabilityProbeError("capability snapshot timestamp is invalid")
         if source != CAPABILITY_SOURCE_CFLIB:
             raise CapabilityProbeError(f"unsupported capability snapshot source {source!r}")
+        missing = tuple(key for key in _REQUIRED_DECK_KEYS if key not in deck)
+        if missing:
+            raise CapabilityProbeError(f"capability snapshot missing deck keys: {', '.join(missing)}")
         return cls(
             robot_id=robot_id,
             uri=uri,
-            flow2=_truthy(deck.get("bcFlow2")),
-            zranger2=_truthy(deck.get("bcZRanger2")),
-            lighthouse=_truthy(deck.get("bcLighthouse4")),
-            loco=_truthy(deck.get("bcLoco")),
-            dwm1000=_truthy(deck.get("bcDWM1000")),
+            flow2=_deck_bool(deck["bcFlow2"], "bcFlow2"),
+            zranger2=_deck_bool(deck["bcZRanger2"], "bcZRanger2"),
+            lighthouse=_deck_bool(deck["bcLighthouse4"], "bcLighthouse4"),
+            loco=_deck_bool(deck["bcLoco"], "bcLoco"),
+            dwm1000=_deck_bool(deck["bcDWM1000"], "bcDWM1000"),
             captured_at_utc=captured_at_utc,
             source=source,
         )
@@ -137,6 +141,8 @@ def load_capability_snapshot(
     age = _snapshot_age_s(snapshot)
     if age is None:
         return CapabilitySnapshotValidation(None, "capability snapshot timestamp is invalid")
+    if age < -CAPABILITY_SNAPSHOT_ALLOWED_CLOCK_SKEW_S:
+        return CapabilitySnapshotValidation(None, "capability snapshot timestamp is in the future")
     if not math.isfinite(max_age_s) or max_age_s <= 0.0:
         return CapabilitySnapshotValidation(None, "capability snapshot max age is invalid")
     if age > max_age_s:
@@ -176,6 +182,7 @@ def probe_cflib_capabilities(
         with SyncCrazyflie(uri) as sync_cf:
             cf = sync_cf.cf
             deadline = time.monotonic() + timeout_s
+            _wait_for_cflib_parameters(cf, deadline)
             values: dict[str, int] = {}
             for name in DECK_PARAMETER_NAMES:
                 values[name] = _read_cflib_parameter(cf, name, deadline)
@@ -217,17 +224,44 @@ def main() -> None:
 
 
 def default_snapshot_path(robot_id: str) -> Path:
-    package_root = Path(__file__).resolve().parents[2]
+    package_root = Path(__file__).resolve().parents[1]
     return package_root / "runtime" / f"{robot_id}_capabilities.json"
+
+
+def _wait_for_cflib_parameters(cf: Any, deadline: float) -> None:
+    param = getattr(cf, "param", None)
+    initialized = getattr(param, "_initialized", None)
+    while time.monotonic() < deadline:
+        if initialized is None or initialized.is_set():
+            return
+        time.sleep(0.02)
+    raise TimeoutError("cflib parameter initialization timed out")
 
 
 def _read_cflib_parameter(cf: Any, name: str, deadline: float) -> int:
     while time.monotonic() < deadline:
-        value = cf.param.get_value(name)
+        value = _cflib_cached_parameter_value(cf, name)
         if value is not None:
-            return int(value)
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise CapabilityProbeError(f"parameter {name} value is invalid: {value!r}") from exc
         time.sleep(0.05)
-    raise TimeoutError(f"parameter {name} read timed out")
+    raise TimeoutError(f"parameter {name} unavailable before timeout")
+
+
+def _cflib_cached_parameter_value(cf: Any, name: str) -> Any:
+    try:
+        group, param_name = name.split(".", 1)
+    except ValueError as exc:
+        raise CapabilityProbeError(f"invalid parameter name {name!r}") from exc
+    values = getattr(getattr(cf, "param", None), "values", {})
+    if not isinstance(values, Mapping):
+        return None
+    group_values = values.get(group)
+    if not isinstance(group_values, Mapping):
+        return None
+    return group_values.get(param_name)
 
 
 def _snapshot_age_s(snapshot: HardwareCapabilitySnapshot) -> float | None:
@@ -240,17 +274,18 @@ def _snapshot_age_s(snapshot: HardwareCapabilitySnapshot) -> float | None:
             captured = captured.replace(tzinfo=UTC)
     except ValueError:
         return None
-    return max(0.0, (datetime.now(UTC) - captured.astimezone(UTC)).total_seconds())
+    return (datetime.now(UTC) - captured.astimezone(UTC)).total_seconds()
 
 
-def _truthy(value: Any) -> bool:
+_REQUIRED_DECK_KEYS = ("bcFlow2", "bcZRanger2", "bcLighthouse4", "bcLoco", "bcDWM1000")
+
+
+def _deck_bool(value: Any, key: str) -> bool:
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    raise CapabilityProbeError(f"capability snapshot deck.{key} must be 0/1 or boolean")
 
 
 if __name__ == "__main__":

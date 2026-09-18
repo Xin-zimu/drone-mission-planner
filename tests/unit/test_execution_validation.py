@@ -97,14 +97,14 @@ def test_execution_validation_requires_current_pose_origin_timestamp() -> None:
     assert any(issue.code == "frame_origin_timestamp_missing" for issue in issues)
 
 
-def test_preflight_blocks_missing_xy_positioning() -> None:
+def test_preflight_does_not_duplicate_bridge_hardware_readiness() -> None:
     robot = RobotCapabilities(
         robot_id="cf1",
-        connected=True,
+        connected=False,
         positioning_mode="z_ranger",
         xy_positioning_available=False,
         pose_stream_available=True,
-        pose_rate_hz=10.0,
+        pose_rate_hz=1.0,
     )
 
     report = run_preflight_gate(
@@ -114,8 +114,8 @@ def test_preflight_blocks_missing_xy_positioning() -> None:
         bridge_connected=True,
     )
 
-    assert not report.passed
-    assert any(issue.code == "xy_positioning_missing" for issue in report.issues)
+    assert report.passed
+    assert all(issue.code not in {"robot_not_connected", "xy_positioning_missing", "pose_rate_too_low"} for issue in report.issues)
 
 
 def test_preflight_passes_when_mission_and_robot_are_ready() -> None:

@@ -19,6 +19,7 @@ from .protocol_models import (
     decode_message,
     encode_message,
 )
+from .telemetry import ReadinessPolicy
 
 
 @dataclass(slots=True)
@@ -61,6 +62,19 @@ class BridgeProtocolServer:
         robot_uri = _config_string(config, "robot_uri")
         snapshot_path = _config_path(config, "capability_snapshot_path")
         snapshot_max_age_s = _config_float(config, "capability_snapshot_max_age_s", 3600.0)
+        readiness_policy = ReadinessPolicy(
+            minimum_acceptable_pose_rate_hz=_config_float(config, "minimum_acceptable_pose_rate_hz", 8.0),
+            velocity_stale_timeout_s=_config_float(config, "velocity_stale_timeout_s", 0.75),
+            max_abs_velocity_mps=_config_float(config, "max_abs_velocity_mps", 0.05),
+            max_speed_mps=_config_float(config, "max_speed_mps", 0.08),
+            range_stale_timeout_s=_config_float(config, "range_stale_timeout_s", 0.75),
+            min_startup_zrange_m=_config_float(config, "min_startup_zrange_m", 0.02),
+            max_startup_zrange_m=_config_float(config, "max_startup_zrange_m", 0.50),
+            estimator_stale_timeout_s=_config_float(config, "estimator_stale_timeout_s", 1.5),
+            max_estimator_variance=_config_optional_float(config, "max_estimator_variance"),
+            max_estimator_variance_span=_config_float(config, "max_estimator_variance_span", 0.002),
+            minimum_estimator_sample_count=int(_config_float(config, "minimum_estimator_sample_count", 5.0)),
+        )
         self.host = host
         self.port = port
         self.state = BridgeSessionState(backend=backend)
@@ -76,6 +90,7 @@ class BridgeProtocolServer:
                 robot_uri=robot_uri,
                 capability_snapshot_path=snapshot_path,
                 capability_snapshot_max_age_s=snapshot_max_age_s,
+                readiness_policy=readiness_policy,
             )
             self._hardware_adapter.connect()
             self._refresh_hardware_robot()
@@ -252,40 +267,23 @@ class BridgeProtocolServer:
                 issues.append({"code": "robot_disconnected", "message": "robot is not connected", "blocking": True})
             if not robot.xy_positioning_available:
                 issues.append({"code": "xy_positioning_missing", "message": "robot has no reliable XY positioning", "blocking": True})
+            if not robot.z_positioning_available:
+                issues.append({"code": "z_positioning_missing", "message": "robot has no reliable Z positioning", "blocking": True})
             if not robot.pose_stream_available:
                 issues.append({"code": "pose_stream_missing", "message": "robot pose stream is unavailable", "blocking": True})
-            if self.state.backend == "hardware":
-                if robot.battery_critical:
-                    voltage = robot.battery_voltage
-                    threshold = robot.battery_critical_voltage
-                    if voltage is None or threshold is None:
-                        message = "battery is critical"
-                    else:
-                        message = f"battery {voltage:.3f} V is at or below critical {threshold:.3f} V"
-                    issues.append({"code": "battery_critical", "message": message, "blocking": True})
-                if self._hardware_adapter is not None:
-                    _append_frame_origin_issues(self.state.loaded_mission, robot, issues)
-                    stability = self._hardware_adapter.pose_stability_payload
-                    if not stability["observed"]:
-                        issues.append(
-                            {
-                                "code": "pose_stability_observation_missing",
-                                "message": f"pose stability observation incomplete: {stability['reason']}",
-                                "blocking": True,
-                            }
-                        )
-                    elif not stability["stable"]:
-                        issues.append(
-                            {
-                                "code": "pose_stability_failed",
-                                "message": (
-                                    "static pose drift exceeds limit: "
-                                    f"dxy={stability['xy_displacement_m']:.3f} m, "
-                                    f"dz={stability['z_displacement_m']:.3f} m"
-                                ),
-                                "blocking": True,
-                            }
-                        )
+            if self.state.backend == "hardware" and self._hardware_adapter is not None:
+                _append_frame_origin_issues(
+                    self.state.loaded_mission,
+                    robot,
+                    issues,
+                    current_session_id=getattr(self._hardware_adapter, "session_id", None),
+                )
+                readiness = getattr(self._hardware_adapter, "readiness_payload", {"issues": []})
+                for issue in readiness.get("issues", []):
+                    if isinstance(issue, dict):
+                        _append_unique_issue(issues, issue)
+                if not hasattr(self._hardware_adapter, "readiness_payload"):
+                    _append_legacy_hardware_readiness_issues(robot, self._hardware_adapter, issues)
         passed = not any(issue["blocking"] for issue in issues)
         self.state.preflight_passed = passed
         if passed:
@@ -436,6 +434,8 @@ def _append_frame_origin_issues(
     mission: dict[str, Any] | None,
     robot: BridgeRobot,
     issues: list[dict[str, Any]],
+    *,
+    current_session_id: str | None,
 ) -> None:
     if mission is None or robot.positioning_mode != "flow":
         return
@@ -452,6 +452,7 @@ def _append_frame_origin_issues(
     mode = frame.get("mode")
     origin_source = frame.get("origin_source")
     captured_at = frame.get("origin_captured_at_utc")
+    origin_session_id = frame.get("origin_session_id")
     if mode not in {"relative_current_pose", "relative_takeoff"}:
         issues.append(
             {
@@ -467,6 +468,75 @@ def _append_frame_origin_issues(
                 "message": "Flow positioning requires an execution origin captured from the current pose",
                 "blocking": True,
             }
+        )
+    if not isinstance(origin_session_id, str) or not origin_session_id:
+        issues.append(
+            {
+                "code": "frame_origin_stale",
+                "message": "Flow positioning requires a current-session execution origin",
+                "blocking": True,
+            }
+        )
+    elif current_session_id is None or origin_session_id != current_session_id:
+        issues.append(
+            {
+                "code": "frame_session_mismatch",
+                "message": "execution origin was captured in a different hardware session",
+                "blocking": True,
+            }
+        )
+
+
+def _append_unique_issue(issues: list[dict[str, Any]], issue: dict[str, Any]) -> None:
+    code = issue.get("code")
+    if not isinstance(code, str):
+        return
+    if any(existing.get("code") == code for existing in issues):
+        return
+    message = issue.get("message")
+    blocking = issue.get("blocking", True)
+    issues.append(
+        {
+            "code": code,
+            "message": message if isinstance(message, str) else code,
+            "blocking": bool(blocking),
+        }
+    )
+
+
+def _append_legacy_hardware_readiness_issues(
+    robot: BridgeRobot,
+    adapter: Any,
+    issues: list[dict[str, Any]],
+) -> None:
+    if robot.battery_critical:
+        voltage = robot.battery_voltage
+        threshold = robot.battery_critical_voltage
+        if voltage is None or threshold is None:
+            message = "battery is critical"
+        else:
+            message = f"battery {voltage:.3f} V is at or below critical {threshold:.3f} V"
+        _append_unique_issue(issues, {"code": "battery_critical", "message": message, "blocking": True})
+    stability = getattr(adapter, "pose_stability_payload", None)
+    if not isinstance(stability, dict):
+        return
+    if not stability.get("observed", False):
+        _append_unique_issue(
+            issues,
+            {
+                "code": "pose_stability_observation_missing",
+                "message": f"pose stability observation incomplete: {stability.get('reason')}",
+                "blocking": True,
+            },
+        )
+    elif not stability.get("stable", False):
+        _append_unique_issue(
+            issues,
+            {
+                "code": "pose_stability_failed",
+                "message": "static pose drift exceeds limit",
+                "blocking": True,
+            },
         )
 
 
@@ -516,8 +586,8 @@ def _load_config(config_path: str | None) -> dict[str, str]:
         return {}
     path = Path(config_path)
     if not path.exists():
-        return {}
-    values: dict[str, str] = {}
+        raise FileNotFoundError(f"configuration file not found: {path}")
+    values: dict[str, str] = {"__config_dir": str(path.resolve().parent)}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.split("#", 1)[0].strip()
         if not line or ":" not in line:
@@ -536,7 +606,13 @@ def _config_path(config: dict[str, str], key: str) -> Path | None:
     value = _config_string(config, key)
     if value is None:
         return None
-    return Path(value)
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    base = _config_string(config, "__config_dir")
+    if base is None:
+        return path
+    return (Path(base) / path).resolve()
 
 
 def _config_float(config: dict[str, str], key: str, default: float) -> float:
@@ -547,6 +623,16 @@ def _config_float(config: dict[str, str], key: str, default: float) -> float:
         return float(value)
     except ValueError:
         return default
+
+
+def _config_optional_float(config: dict[str, str], key: str) -> float | None:
+    value = _config_string(config, key)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 if __name__ == "__main__":

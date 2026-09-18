@@ -7,10 +7,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from .capability_probe import (
     CAPABILITY_SOURCE_CFLIB,
     CAPABILITY_SOURCE_ROS,
+    CapabilitySnapshotValidation,
     default_snapshot_path,
     load_capability_snapshot,
 )
@@ -21,6 +23,7 @@ from .telemetry import (
     DEFAULT_STATUS_STALE_TIMEOUT_S,
     UNKNOWN_POSITIONING,
     PositioningCapabilities,
+    ReadinessPolicy,
     RobotState,
     TelemetryCollector,
     positioning_from_deck_params,
@@ -153,6 +156,7 @@ class Crazyswarm2Adapter:
     robot_uri: str | None = None
     capability_snapshot_path: Path | None = None
     capability_snapshot_max_age_s: float = 3600.0
+    readiness_policy: ReadinessPolicy = field(default_factory=ReadinessPolicy)
     _collector: TelemetryCollector = field(init=False)
     _diagnostics: list[str] = field(default_factory=list)
     _connected: bool = False
@@ -167,6 +171,7 @@ class Crazyswarm2Adapter:
     _capability_diagnostics: tuple[str, ...] = ()
     _capability_source: str | None = None
     _capability_captured_at: str | None = None
+    _session_id: str | None = None
 
     def __post_init__(self) -> None:
         self._collector = TelemetryCollector(
@@ -174,6 +179,7 @@ class Crazyswarm2Adapter:
             status_stale_timeout_s=self.status_stale_timeout_s,
             pose_stale_timeout_s=self.pose_stale_timeout_s,
             battery_critical_voltage=self.battery_critical_voltage,
+            readiness_policy=self.readiness_policy,
         )
 
     def connect(self) -> None:
@@ -183,9 +189,12 @@ class Crazyswarm2Adapter:
             import rclpy
             from crazyflie_interfaces.msg import Status
             from geometry_msgs.msg import PoseStamped
+            from nav_msgs.msg import Odometry
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.node import Node
             from rclpy.parameter_client import AsyncParameterClient
+            from sensor_msgs.msg import Range
+            from std_msgs.msg import Float32
         except Exception as exc:  # pragma: no cover - exercised on non-ROS hosts
             self._record_diagnostic(f"ROS 2 telemetry unavailable: {type(exc).__name__}: {exc}")
             return
@@ -199,6 +208,9 @@ class Crazyswarm2Adapter:
         self._executor.add_node(self._node)
         self._node.create_subscription(Status, f"/{self.robot_id}/status", self._collector.record_status, 10)
         self._node.create_subscription(PoseStamped, f"/{self.robot_id}/pose", self._collector.record_pose, 10)
+        self._node.create_subscription(Odometry, f"/{self.robot_id}/odom", self._collector.record_odom, 10)
+        self._node.create_subscription(Range, f"/{self.robot_id}/range/zrange", self._collector.record_range, 10)
+        self._node.create_subscription(Float32, f"/{self.robot_id}/zrange", self._collector.record_range, 10)
         self._parameter_client = AsyncParameterClient(self._node, self.crazyflie_server_node)
         self._spin_thread = threading.Thread(
             target=self._executor.spin,
@@ -207,7 +219,10 @@ class Crazyswarm2Adapter:
         )
         self._spin_thread.start()
         self._connected = True
-        self._record_diagnostic(f"subscribed to /{self.robot_id}/status and /{self.robot_id}/pose")
+        self._session_id = str(uuid4())
+        self._record_diagnostic(
+            f"subscribed to /{self.robot_id}/status, /{self.robot_id}/pose, /{self.robot_id}/odom and zrange topics"
+        )
 
     def disconnect(self) -> None:
         if self._executor is not None:
@@ -222,6 +237,7 @@ class Crazyswarm2Adapter:
             except Exception as exc:  # pragma: no cover - shutdown best effort
                 self._record_diagnostic(f"ROS 2 shutdown warning: {exc}")
         self._connected = False
+        self._session_id = None
 
     def capabilities(self) -> BridgeRobot:
         self._refresh_positioning_capabilities()
@@ -294,6 +310,14 @@ class Crazyswarm2Adapter:
     @property
     def pose_stability_payload(self) -> dict[str, Any]:
         return self._collector.snapshot().pose_stability.to_payload()
+
+    @property
+    def readiness_payload(self) -> dict[str, Any]:
+        return self._collector.readiness_payload()
+
+    @property
+    def session_id(self) -> str | None:
+        return self._session_id
 
     @property
     def battery_critical(self) -> bool:
@@ -393,7 +417,7 @@ class Crazyswarm2Adapter:
             self._capability_diagnostics = (diagnostic,)
             self._collector.set_diagnostics(self._combined_diagnostics())
             return
-        diagnostics = (diagnostic,)
+        diagnostics: tuple[str, ...] = (diagnostic,)
         if snapshot.diagnostic is not None:
             diagnostics += (snapshot.diagnostic,)
         self._capability_source = None
@@ -411,7 +435,7 @@ class Crazyswarm2Adapter:
         )
         self._collector.set_diagnostics(self._combined_diagnostics())
 
-    def _load_snapshot_capabilities(self) -> Any:
+    def _load_snapshot_capabilities(self) -> CapabilitySnapshotValidation:
         path = self.capability_snapshot_path or default_snapshot_path(self.robot_id)
         return load_capability_snapshot(
             path,
