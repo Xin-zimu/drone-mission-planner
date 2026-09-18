@@ -11,8 +11,8 @@ class RobotState:
     z_m: float
     yaw_rad: float = 0.0
     battery_voltage: float | None = None
+    pose_age_s: float = 0.0
 
 
 class TelemetryAdapter:
     """Placeholder telemetry adapter for CF5/CF6."""
-

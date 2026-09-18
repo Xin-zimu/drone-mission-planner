@@ -34,6 +34,9 @@ class SimCrazyflieAdapter:
     connected: bool = False
     state: RobotState = field(default_factory=lambda: RobotState("cf1", 0.0, 0.0, 0.0))
     command_log: list[str] = field(default_factory=list)
+    fail_on_command: str | None = None
+    disconnect_on_command: str | None = None
+    pose_age_s: float = 0.0
     _command_active: bool = False
 
     def connect(self) -> None:
@@ -53,7 +56,15 @@ class SimCrazyflieAdapter:
         )
 
     def latest_state(self) -> RobotState:
-        return self.state
+        return RobotState(
+            self.state.robot_id,
+            self.state.x_m,
+            self.state.y_m,
+            self.state.z_m,
+            self.state.yaw_rad,
+            self.state.battery_voltage,
+            self.pose_age_s,
+        )
 
     async def takeoff(self, height_m: float, duration_s: float) -> None:
         await self._run_command("takeoff", duration_s)
@@ -88,6 +99,11 @@ class SimCrazyflieAdapter:
         self._command_active = True
         self.command_log.append(name)
         try:
+            if self.disconnect_on_command == name:
+                self.connected = False
+                raise RuntimeError("Crazyflie adapter disconnected")
+            if self.fail_on_command == name:
+                raise TimeoutError(f"{name} timeout")
             await asyncio.sleep(duration_s * self.time_scale)
         finally:
             self._command_active = False
@@ -98,4 +114,3 @@ class Crazyswarm2Adapter:
 
     def connect(self) -> None:
         raise NotImplementedError("Crazyswarm2 integration requires a ROS 2 environment")
-

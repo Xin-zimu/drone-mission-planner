@@ -13,6 +13,7 @@ class BridgeExecutionState(StrEnum):
     PREFLIGHT_PASSED = "preflight_passed"
     READY_TO_EXECUTE = "ready_to_execute"
     TAKING_OFF = "taking_off"
+    HOVERING = "hovering"
     EXECUTING = "executing"
     HOLDING = "holding"
     RETURNING = "returning"

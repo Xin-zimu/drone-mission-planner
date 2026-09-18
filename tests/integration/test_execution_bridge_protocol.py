@@ -57,6 +57,7 @@ def test_bridge_skeleton_loads_mission_and_executes_sim_sequence() -> None:
     server = protocol_server.BridgeProtocolServer()
     mission = _sim_mission()
 
+    selected = server.handle_message({"type": "select_robot", "request_id": "select-1", "robot_id": "cf1"})
     loaded = server.handle_message(
         {
             "type": "load_mission",
@@ -66,19 +67,56 @@ def test_bridge_skeleton_loads_mission_and_executes_sim_sequence() -> None:
             "mission": mission,
         }
     )
+    preflight = server.handle_message({"type": "run_preflight", "request_id": "preflight-1"})
     completed = server.handle_message(
         {"type": "execute_mission", "request_id": "exec-1", "mission_id": "m-1"}
     )
 
+    assert selected["type"] == "robot_state"
     assert loaded["type"] == "mission_loaded"
     assert loaded["source_route_hash"] == "hash-1"
+    assert preflight["passed"] is True
+    assert preflight["state"] == "ready_to_execute"
     assert completed["type"] == "mission_state"
     assert completed["state"] == "landed"
+    assert completed["status"] == "completed"
     assert completed["completed_waypoints"] == 3
     assert completed["command_log"] == ["takeoff", "go_to", "go_to", "land"]
 
 
-def test_bridge_hardware_backend_still_rejects_execution_in_cf4() -> None:
+def test_bridge_rejects_execute_until_preflight_passes() -> None:
+    server = protocol_server.BridgeProtocolServer()
+    server.handle_message(
+        {
+            "type": "load_mission",
+            "request_id": "load-1",
+            "mission_id": "m-1",
+            "source_route_hash": "hash-1",
+            "mission": _sim_mission(),
+        }
+    )
+
+    rejected = server.handle_message(
+        {"type": "execute_mission", "request_id": "exec-1", "mission_id": "m-1"}
+    )
+
+    assert rejected["type"] == "error"
+    assert rejected["code"] == "preflight_required"
+
+
+def test_bridge_duplicate_execute_request_returns_cached_result() -> None:
+    server = protocol_server.BridgeProtocolServer()
+    _load_ready_mission(server)
+
+    first = server.handle_message({"type": "execute_mission", "request_id": "exec-1", "mission_id": "m-1"})
+    second = server.handle_message({"type": "execute_mission", "request_id": "exec-1", "mission_id": "m-1"})
+
+    assert first["type"] == "mission_state"
+    assert second == first
+    assert first["command_log"] == ["takeoff", "go_to", "go_to", "land"]
+
+
+def test_bridge_hardware_backend_still_rejects_execution_in_cf8() -> None:
     server = protocol_server.BridgeProtocolServer(backend="hardware")
     mission = _sim_mission()
     server.handle_message(
@@ -152,3 +190,18 @@ def _sim_mission() -> dict[str, Any]:
             },
         ],
     }
+
+
+def _load_ready_mission(server: Any) -> None:
+    server.handle_message({"type": "select_robot", "request_id": "select-1", "robot_id": "cf1"})
+    server.handle_message(
+        {
+            "type": "load_mission",
+            "request_id": "load-1",
+            "mission_id": "m-1",
+            "source_route_hash": "hash-1",
+            "mission": _sim_mission(),
+        }
+    )
+    preflight = server.handle_message({"type": "run_preflight", "request_id": "preflight-1"})
+    assert preflight["passed"] is True

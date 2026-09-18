@@ -7,7 +7,7 @@ from typing import Any
 
 from .crazyswarm_adapter import SimCrazyflieAdapter
 from .execution_state import BridgeExecutionState
-from .mission_executor import MissionExecutor
+from .mission_executor import MissionExecutionResult, MissionExecutor
 from .protocol_models import (
     BRIDGE_VERSION,
     PROTOCOL_VERSION,
@@ -27,6 +27,7 @@ class BridgeSessionState:
     loaded_route_hash: str | None = None
     loaded_mission: dict[str, Any] | None = None
     state: BridgeExecutionState = BridgeExecutionState.BRIDGE_READY
+    preflight_passed: bool = False
     robots: dict[str, BridgeRobot] = field(
         default_factory=lambda: {
             "cf1": BridgeRobot(
@@ -46,7 +47,13 @@ class BridgeProtocolServer:
         self.host = host
         self.port = port
         self.state = BridgeSessionState(backend=backend)
+        if backend == "sim":
+            sim_adapter = SimCrazyflieAdapter()
+            sim_adapter.connect()
+            self.state.robots["cf1"] = sim_adapter.capabilities()
         self._server: asyncio.AbstractServer | None = None
+        self._execute_cache: dict[str, dict[str, Any]] = {}
+        self._active_executor: MissionExecutor | None = None
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
@@ -89,6 +96,8 @@ class BridgeProtocolServer:
     async def handle_message_async(self, message: dict[str, Any]) -> dict[str, Any]:
         request_id = _request_id(message)
         if str(message["type"]) == "execute_mission":
+            if request_id is not None and request_id in self._execute_cache:
+                return dict(self._execute_cache[request_id])
             return await self._execute_sim_async(request_id)
         return self.handle_message(message)
 
@@ -127,18 +136,20 @@ class BridgeProtocolServer:
         if message_type == "run_preflight":
             return self._preflight(request_id)
         if message_type == "execute_mission":
+            if request_id is not None and request_id in self._execute_cache:
+                return dict(self._execute_cache[request_id])
             return asyncio.run(self._execute_sim_async(request_id))
-        if message_type in {"abort_land", "emergency_stop"}:
-            return self._error(
-                "flight_control_not_available",
-                "CF3 bridge skeleton has no active flight control path",
-                request_id=request_id,
-            )
+        if message_type == "abort_land":
+            return self._abort_land(request_id)
+        if message_type == "emergency_stop":
+            return self._emergency_stop(request_id)
         if message_type == "clear_mission":
             self.state.loaded_mission_id = None
             self.state.loaded_route_hash = None
             self.state.loaded_mission = None
+            self.state.preflight_passed = False
             self.state.state = BridgeExecutionState.BRIDGE_READY
+            self._execute_cache.clear()
             return {"type": "mission_state", "request_id": request_id, "state": self.state.state.value}
         return self._error("unknown_message_type", f"unsupported message type {message_type}", request_id=request_id)
 
@@ -151,6 +162,7 @@ class BridgeProtocolServer:
         self.state.state = (
             BridgeExecutionState.ROBOT_CONNECTED if robot.connected else BridgeExecutionState.BRIDGE_READY
         )
+        self.state.preflight_passed = False
         return {
             "type": "robot_state",
             "request_id": request_id,
@@ -170,6 +182,8 @@ class BridgeProtocolServer:
         self.state.loaded_mission_id = mission_id
         self.state.loaded_route_hash = route_hash
         self.state.loaded_mission = mission
+        self.state.preflight_passed = False
+        self._execute_cache.clear()
         self.state.state = BridgeExecutionState.MISSION_LOADED
         return {
             "type": "mission_loaded",
@@ -186,17 +200,29 @@ class BridgeProtocolServer:
             issues.append({"code": "mission_missing", "message": "no mission is loaded", "blocking": True})
         if robot is None:
             issues.append({"code": "robot_missing", "message": "no robot is selected", "blocking": True})
-        elif not robot.xy_positioning_available:
-            issues.append({"code": "xy_positioning_missing", "message": "robot has no reliable XY positioning", "blocking": True})
+        else:
+            if not robot.connected:
+                issues.append({"code": "robot_disconnected", "message": "robot is not connected", "blocking": True})
+            if not robot.xy_positioning_available:
+                issues.append({"code": "xy_positioning_missing", "message": "robot has no reliable XY positioning", "blocking": True})
+            if not robot.pose_stream_available:
+                issues.append({"code": "pose_stream_missing", "message": "robot pose stream is unavailable", "blocking": True})
+        passed = not any(issue["blocking"] for issue in issues)
+        self.state.preflight_passed = passed
+        if passed:
+            self.state.state = BridgeExecutionState.READY_TO_EXECUTE
         return {
             "type": "preflight_report",
             "request_id": request_id,
             "mission_id": self.state.loaded_mission_id,
-            "passed": not any(issue["blocking"] for issue in issues),
+            "passed": passed,
+            "state": self.state.state.value,
             "issues": issues,
         }
 
     async def _execute_sim_async(self, request_id: str | None) -> dict[str, Any]:
+        if self._active_executor is not None:
+            return self._error("execution_already_active", "a mission execution is already active", request_id=request_id)
         if self.state.backend != "sim":
             return self._error(
                 "execution_not_implemented",
@@ -205,8 +231,15 @@ class BridgeProtocolServer:
             )
         if self.state.loaded_mission is None:
             return self._error("mission_missing", "no mission is loaded", request_id=request_id)
+        if not self.state.preflight_passed or self.state.state != BridgeExecutionState.READY_TO_EXECUTE:
+            return self._error(
+                "preflight_required",
+                "run_preflight must pass before mission execution",
+                request_id=request_id,
+            )
         adapter = SimCrazyflieAdapter(time_scale=0.0)
         executor = MissionExecutor(adapter)
+        self._active_executor = executor
         try:
             result = await executor.execute(self.state.loaded_mission)
         except RuntimeError:
@@ -214,15 +247,45 @@ class BridgeProtocolServer:
         except Exception as exc:
             self.state.state = BridgeExecutionState.FAULT
             return self._error("mission_execution_failed", str(exc), request_id=request_id)
+        finally:
+            self._active_executor = None
         self.state.state = result.final_state
-        return {
+        response = self._mission_result_response(request_id, result)
+        if request_id is not None:
+            self._execute_cache[request_id] = dict(response)
+        return response
+
+    def _abort_land(self, request_id: str | None) -> dict[str, Any]:
+        if self._active_executor is None:
+            return self._error("execution_not_active", "no mission execution is active", request_id=request_id)
+        self._active_executor.request_abort("operator_abort")
+        return {"type": "mission_state", "request_id": request_id, "state": BridgeExecutionState.ABORTING.value}
+
+    def _emergency_stop(self, request_id: str | None) -> dict[str, Any]:
+        if self._active_executor is None:
+            return self._error("execution_not_active", "no mission execution is active", request_id=request_id)
+        self._active_executor.request_emergency("operator_emergency")
+        return {"type": "mission_state", "request_id": request_id, "state": BridgeExecutionState.EMERGENCY.value}
+
+    def _mission_result_response(
+        self,
+        request_id: str | None,
+        result: MissionExecutionResult,
+    ) -> dict[str, Any]:
+        response: dict[str, Any] = {
             "type": "mission_state",
             "request_id": request_id,
             "mission_id": result.mission_id,
             "state": result.final_state.value,
             "completed_waypoints": result.completed_waypoints,
             "command_log": list(result.command_log),
+            "status": result.status,
+            "events": list(result.events),
         }
+        if result.failure_code is not None:
+            response["failure_code"] = result.failure_code
+            response["failure_message"] = result.failure_message
+        return response
 
     def _error(self, code: str, message: str, *, request_id: str | None = None) -> dict[str, Any]:
         response: dict[str, Any] = {"type": "error", "code": code, "message": message}
