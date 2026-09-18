@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from drone_mission_planner.execution.models import ExecutionMission, PreflightReport
 from drone_mission_planner.execution.profile import DEFAULT_CRAZYFLIE_SAFETY_LIMITS
+from drone_mission_planner.execution.result import ExecutionResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,7 @@ class ExecutionPanel(QWidget):
         controls_layout.addWidget(self.emergency_button)
         layout.addWidget(controls)
         self._live_labels = self._add_live_group(layout)
+        self._report_labels = self._add_report_group(layout)
         layout.addStretch()
         self.connect_button.clicked.connect(self.connect_requested)
         self.disconnect_button.clicked.connect(self.disconnect_requested)
@@ -81,6 +83,7 @@ class ExecutionPanel(QWidget):
         self.render_connection()
         self.render_mission(None)
         self.render_live_state(ExecutionLiveState())
+        self.render_execution_result(None)
 
     def render_connection(
         self,
@@ -145,6 +148,28 @@ class ExecutionPanel(QWidget):
         self._live_labels["pose age"].setText("-" if state.pose_age_s is None else f"{state.pose_age_s:.2f} s")
         self._live_labels["elapsed"].setText(f"{state.elapsed_s:.1f} s")
 
+    def render_execution_result(self, result: ExecutionResult | None) -> None:
+        if result is None:
+            values = {
+                "result": "-",
+                "waypoints": "0",
+                "mission time": "-",
+                "mean error": "-",
+                "max error": "-",
+                "telemetry gaps": "0",
+            }
+        else:
+            values = {
+                "result": result.result,
+                "waypoints": str(result.completed_waypoints),
+                "mission time": "-" if result.actual_duration_s is None else f"{result.actual_duration_s:.1f} s",
+                "mean error": _error_text(result.mean_position_error_m),
+                "max error": _error_text(result.max_position_error_m),
+                "telemetry gaps": str(result.telemetry_gaps),
+            }
+        for key, value in values.items():
+            self._report_labels[key].setText(value)
+
     def _add_connection_group(self, layout: QVBoxLayout) -> dict[str, QLabel]:
         group = QGroupBox("Connection")
         form = QFormLayout(group)
@@ -190,6 +215,15 @@ class ExecutionPanel(QWidget):
         layout.addWidget(group)
         return labels
 
+    def _add_report_group(self, layout: QVBoxLayout) -> dict[str, QLabel]:
+        group = QGroupBox("Execution Report")
+        form = QFormLayout(group)
+        labels = _labels("result", "waypoints", "mission time", "mean error", "max error", "telemetry gaps")
+        for key, label in labels.items():
+            form.addRow(key, label)
+        layout.addWidget(group)
+        return labels
+
 
 def _labels(*keys: str) -> dict[str, QLabel]:
     return {key: QLabel("-") for key in keys}
@@ -200,3 +234,6 @@ def _position_text(x_m: float | None, y_m: float | None, z_m: float | None) -> s
         return "-"
     return f"{x_m:.2f}, {y_m:.2f}, {z_m:.2f} m"
 
+
+def _error_text(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f} m"

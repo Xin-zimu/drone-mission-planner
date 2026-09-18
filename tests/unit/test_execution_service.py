@@ -29,6 +29,21 @@ def test_execution_service_compiles_and_builds_protocol_requests() -> None:
     assert load["type"] == "load_mission"
     assert load["mission_id"] == mission.mission_id
 
+    result = service.build_execution_result(
+        {
+            "type": "mission_state",
+            "mission_id": mission.mission_id,
+            "status": "completed",
+            "completed_waypoints": 2,
+            "planned_duration_s": 1.0,
+            "actual_duration_s": 1.2,
+            "samples": [],
+            "events": [],
+        }
+    )
+    assert result.source_route_hash == mission.source_route_hash
+    assert result.actual_duration_s == pytest.approx(1.2)
+
 
 def test_execution_service_requires_a_compiled_mission_before_load_request() -> None:
     service = ExecutionService(ProjectModel())
@@ -49,4 +64,3 @@ def _frame() -> ExecutionFrameCalibration:
         yaw_offset_rad=0.0,
         validated=True,
     )
-

@@ -21,6 +21,8 @@ from drone_mission_planner.execution.protocol import (
     load_mission_request,
     ping_request,
 )
+from drone_mission_planner.execution.reporting import execution_result_from_bridge_response
+from drone_mission_planner.execution.result import ExecutionResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,3 +76,20 @@ class ExecutionService:
             raise ValueError("compile a mission before building load_mission")
         return load_mission_request(selected)
 
+    def build_execution_result(
+        self,
+        response: dict[str, Any],
+        *,
+        mission: ExecutionMission | None = None,
+        started_at_utc: str = "",
+        ended_at_utc: str | None = None,
+    ) -> ExecutionResult:
+        selected = mission or self.pending_mission
+        if selected is None:
+            raise ValueError("compile a mission before building an execution result")
+        return execution_result_from_bridge_response(
+            response,
+            source_route_hash=selected.source_route_hash,
+            started_at_utc=started_at_utc,
+            ended_at_utc=ended_at_utc,
+        )
