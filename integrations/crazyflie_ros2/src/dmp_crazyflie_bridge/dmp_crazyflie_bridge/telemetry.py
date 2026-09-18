@@ -298,7 +298,7 @@ class TelemetryCollector:
 
 
 def positioning_from_deck_params(values: Mapping[str, Any]) -> PositioningCapabilities:
-    normalized = {key: _truthy(value) for key, value in values.items()}
+    normalized = {_deck_key(key): _truthy(value) for key, value in values.items()}
     evidence = tuple(f"{key}={int(value)}" for key, value in sorted(normalized.items()))
     has_flow2 = normalized.get("deck.bcFlow2", False)
     has_zranger2 = normalized.get("deck.bcZRanger2", False)
@@ -331,15 +331,38 @@ def positioning_from_deck_params(values: Mapping[str, Any]) -> PositioningCapabi
             relative=False,
             evidence=evidence,
         )
+    if has_zranger2:
+        return PositioningCapabilities(
+            mode="z_ranger",
+            xy_available=False,
+            z_available=True,
+            pose_available=False,
+            relative=True,
+            evidence=evidence,
+            diagnostics=("Z positioning deck detected without XY positioning",),
+        )
     return PositioningCapabilities(
-        mode="unknown",
+        mode="none",
         xy_available=False,
-        z_available=has_zranger2,
+        z_available=False,
         pose_available=False,
         relative=True,
         evidence=evidence,
-        diagnostics=("no XY positioning deck detected",),
+        diagnostics=("no positioning deck detected",),
     )
+
+
+def _deck_key(parameter_name: str) -> str:
+    for deck_name in (
+        "deck.bcFlow2",
+        "deck.bcZRanger2",
+        "deck.bcLighthouse4",
+        "deck.bcLoco",
+        "deck.bcDWM1000",
+    ):
+        if parameter_name == deck_name or parameter_name.endswith(f".params.{deck_name}"):
+            return deck_name
+    return parameter_name
 
 
 def _truthy(value: Any) -> bool:

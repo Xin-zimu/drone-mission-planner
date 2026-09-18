@@ -115,6 +115,8 @@ class ExecutionPanel(QWidget):
                 "Mission hash": "-",
                 "Waypoints": "0",
                 "Frame": "-",
+                "Origin": "Missing",
+                "Origin XYZ": "-",
                 "Max altitude": f"{DEFAULT_CRAZYFLIE_SAFETY_LIMITS.max_altitude_m:g} m",
                 "Max radius": f"{DEFAULT_CRAZYFLIE_SAFETY_LIMITS.max_horizontal_radius_m:g} m",
             }
@@ -124,6 +126,12 @@ class ExecutionPanel(QWidget):
                 "Mission hash": mission.source_route_hash[:12],
                 "Waypoints": str(len(mission.waypoints)),
                 "Frame": mission.frame.mode,
+                "Origin": _origin_text(mission),
+                "Origin XYZ": (
+                    f"{mission.frame.cf_origin_x_m:.2f}, "
+                    f"{mission.frame.cf_origin_y_m:.2f}, "
+                    f"{mission.frame.cf_origin_z_m:.2f} m"
+                ),
                 "Max altitude": f"{mission.safety_limits.max_altitude_m:g} m",
                 "Max radius": f"{mission.safety_limits.max_horizontal_radius_m:g} m",
             }
@@ -205,7 +213,16 @@ class ExecutionPanel(QWidget):
     def _add_mission_group(self, layout: QVBoxLayout) -> dict[str, QLabel]:
         group = QGroupBox("Mission")
         form = QFormLayout(group)
-        labels = _labels("Target drone", "Mission hash", "Waypoints", "Frame", "Max altitude", "Max radius")
+        labels = _labels(
+            "Target drone",
+            "Mission hash",
+            "Waypoints",
+            "Frame",
+            "Origin",
+            "Origin XYZ",
+            "Max altitude",
+            "Max radius",
+        )
         for key, label in labels.items():
             form.addRow(key, label)
         buttons = QWidget()
@@ -259,6 +276,12 @@ def _position_text(x_m: float | None, y_m: float | None, z_m: float | None) -> s
     if x_m is None or y_m is None or z_m is None:
         return "-"
     return f"{x_m:.2f}, {y_m:.2f}, {z_m:.2f} m"
+
+
+def _origin_text(mission: ExecutionMission) -> str:
+    if mission.frame.origin_source == "current_pose" and mission.frame.origin_captured_at_utc:
+        return "Captured"
+    return "Missing" if mission.frame.mode == "relative_current_pose" else "Manual"
 
 
 def _error_text(value: float | None) -> str:

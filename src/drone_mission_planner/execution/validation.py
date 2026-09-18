@@ -13,7 +13,8 @@ from .models import (
     RobotCapabilities,
 )
 
-VALID_FRAME_MODES = frozenset({"relative_takeoff", "absolute_local"})
+VALID_FRAME_MODES = frozenset({"relative_takeoff", "relative_current_pose", "absolute_local"})
+VALID_FRAME_ORIGIN_SOURCES = frozenset({"manual", "current_pose"})
 
 
 class ExecutionValidationError(ValueError):
@@ -94,6 +95,24 @@ def _validate_frame(mission: ExecutionMission, issues: list[PreflightIssue]) -> 
     frame = mission.frame
     if frame.mode not in VALID_FRAME_MODES:
         _issue(issues, "invalid_frame_mode", f"execution frame mode {frame.mode} is unsupported")
+    if frame.origin_source not in VALID_FRAME_ORIGIN_SOURCES:
+        _issue(
+            issues,
+            "invalid_frame_origin_source",
+            f"execution frame origin source {frame.origin_source} is unsupported",
+        )
+    if frame.mode == "relative_current_pose" and frame.origin_source != "current_pose":
+        _issue(
+            issues,
+            "frame_origin_source_mismatch",
+            "relative_current_pose frame requires a current-pose origin",
+        )
+    if frame.origin_source == "current_pose" and not frame.origin_captured_at_utc:
+        _issue(
+            issues,
+            "frame_origin_timestamp_missing",
+            "current-pose execution frame origin requires a capture timestamp",
+        )
     if not frame.validated:
         _issue(issues, "calibration_not_validated", "execution frame calibration is not validated")
     values = (
@@ -234,4 +253,3 @@ def _issue(
 
 def _finite(value: float) -> bool:
     return math.isfinite(value)
-

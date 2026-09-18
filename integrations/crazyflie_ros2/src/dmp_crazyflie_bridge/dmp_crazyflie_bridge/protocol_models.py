@@ -68,6 +68,7 @@ class BridgeRobot:
             "y_m": self.y_m,
             "z_m": self.z_m,
             "positioning_evidence": list(self.positioning_evidence),
+            "capability_evidence": list(self.positioning_evidence),
             "diagnostics": list(self.diagnostics),
             "target_profile_id": self.target_profile_id,
         }

@@ -35,6 +35,8 @@ class ExecutionFrameCalibration:
     cf_origin_z_m: float
     yaw_offset_rad: float
     validated: bool
+    origin_source: str = "manual"
+    origin_captured_at_utc: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,4 +148,3 @@ def _source_waypoint_payload(index: int, waypoint: Waypoint) -> dict[str, Any]:
         "hold_seconds": waypoint.hold_seconds,
         "task_id": waypoint.task_id,
     }
-

@@ -154,6 +154,7 @@ class Crazyswarm2Adapter:
     _parameter_client: Any = None
     _last_capability_read_s: float = 0.0
     _capability_read_interval_s: float = 2.0
+    _capability_diagnostics: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self._collector = TelemetryCollector(
@@ -237,7 +238,7 @@ class Crazyswarm2Adapter:
             y_m=None if pose is None else pose.y_m,
             z_m=None if pose is None else pose.z_m,
             positioning_evidence=snapshot.positioning.evidence,
-            diagnostics=snapshot.diagnostics + snapshot.positioning.diagnostics,
+            diagnostics=_dedupe(snapshot.diagnostics + snapshot.positioning.diagnostics),
         )
 
     def latest_state(self) -> RobotState:
@@ -289,8 +290,7 @@ class Crazyswarm2Adapter:
 
     def _refresh_positioning_capabilities(self) -> None:
         if self._parameter_client is None:
-            self._collector.set_positioning(UNKNOWN_POSITIONING)
-            self._collector.set_diagnostics(tuple(self._diagnostics))
+            self._set_unknown_positioning("crazyflie_server parameter client is unavailable")
             return
         now = time.monotonic()
         if now - self._last_capability_read_s < self._capability_read_interval_s:
@@ -298,42 +298,97 @@ class Crazyswarm2Adapter:
         self._last_capability_read_s = now
         try:
             if not self._parameter_client.wait_for_services(timeout_sec=0.05):
-                self._record_diagnostic(f"{self.crazyflie_server_node} parameter service unavailable")
-                self._collector.set_positioning(UNKNOWN_POSITIONING)
-                self._collector.set_diagnostics(tuple(self._diagnostics))
+                self._set_unknown_positioning(f"{self.crazyflie_server_node} parameter service unavailable")
                 return
-            names = tuple(f"{self.robot_id}.params.{name}" for name in DECK_PARAMETER_NAMES)
+            names_by_deck = self._discover_deck_parameter_names()
+            missing = tuple(name for name in DECK_PARAMETER_NAMES if name not in names_by_deck)
+            if missing:
+                self._set_unknown_positioning(
+                    "deck parameters not listed by "
+                    f"{self.crazyflie_server_node}: missing {', '.join(missing)}"
+                )
+                return
+            names = tuple(names_by_deck[name] for name in DECK_PARAMETER_NAMES)
             future = self._parameter_client.get_parameters(names)
-            deadline = time.monotonic() + 0.5
-            while not future.done() and time.monotonic() < deadline:
-                time.sleep(0.01)
-            if not future.done():
-                self._record_diagnostic("deck parameter read timed out")
-                self._collector.set_diagnostics(tuple(self._diagnostics))
+            if not self._wait_for_future(future, timeout_s=0.5):
+                self._set_unknown_positioning("deck parameter read timed out")
                 return
-            parameter_values = tuple(future.result().values)
+            result = future.result()
+            parameter_values = tuple(getattr(result, "values", ()))
             if len(parameter_values) != len(DECK_PARAMETER_NAMES):
-                self._record_diagnostic(
+                self._set_unknown_positioning(
                     "deck parameter values unavailable from "
                     f"{self.crazyflie_server_node}: expected {len(DECK_PARAMETER_NAMES)}, "
                     f"received {len(parameter_values)}"
                 )
-                self._collector.set_positioning(UNKNOWN_POSITIONING)
-                self._collector.set_diagnostics(tuple(self._diagnostics))
+                return
+            unset = tuple(
+                name for name, value in zip(names, parameter_values, strict=True)
+                if not _parameter_is_set(value)
+            )
+            if unset:
+                self._set_unknown_positioning(
+                    "deck parameters are listed but unset by "
+                    f"{self.crazyflie_server_node}: {', '.join(unset)}"
+                )
                 return
             values = {
-                name: _parameter_value(value)
-                for name, value in zip(DECK_PARAMETER_NAMES, parameter_values, strict=True)
+                full_name: _parameter_value(value)
+                for full_name, value in zip(names, parameter_values, strict=True)
             }
             self._collector.set_positioning(positioning_from_deck_params(values))
+            self._capability_diagnostics = ()
         except Exception as exc:
-            self._record_diagnostic(f"deck parameter read failed: {type(exc).__name__}: {exc}")
-        self._collector.set_diagnostics(tuple(self._diagnostics))
+            self._set_unknown_positioning(f"deck parameter read failed: {type(exc).__name__}: {exc}")
+        self._collector.set_diagnostics(self._combined_diagnostics())
+
+    def _discover_deck_parameter_names(self) -> dict[str, str]:
+        future = self._parameter_client.list_parameters(
+            prefixes=[f"{self.robot_id}.params.deck"],
+            depth=0,
+        )
+        if not self._wait_for_future(future, timeout_s=0.5):
+            raise TimeoutError("deck parameter list timed out")
+        result = future.result()
+        listed = tuple(getattr(getattr(result, "result", result), "names", ()))
+        names_by_deck: dict[str, str] = {}
+        for listed_name in listed:
+            if not isinstance(listed_name, str):
+                continue
+            for deck_name in DECK_PARAMETER_NAMES:
+                expected = f"{self.robot_id}.params.{deck_name}"
+                if listed_name == expected or listed_name.endswith(f".{expected}"):
+                    names_by_deck[deck_name] = listed_name
+        return names_by_deck
+
+    @staticmethod
+    def _wait_for_future(future: Any, *, timeout_s: float) -> bool:
+        deadline = time.monotonic() + timeout_s
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return bool(future.done())
+
+    def _set_unknown_positioning(self, diagnostic: str) -> None:
+        self._capability_diagnostics = (diagnostic,)
+        self._collector.set_positioning(
+            PositioningCapabilities(
+                mode=UNKNOWN_POSITIONING.mode,
+                xy_available=UNKNOWN_POSITIONING.xy_available,
+                z_available=UNKNOWN_POSITIONING.z_available,
+                pose_available=UNKNOWN_POSITIONING.pose_available,
+                relative=UNKNOWN_POSITIONING.relative,
+                diagnostics=UNKNOWN_POSITIONING.diagnostics + self._capability_diagnostics,
+            )
+        )
+        self._collector.set_diagnostics(self._combined_diagnostics())
+
+    def _combined_diagnostics(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self._diagnostics, *self._capability_diagnostics)))
 
     def _record_diagnostic(self, message: str) -> None:
         if message not in self._diagnostics:
             self._diagnostics.append(message)
-        self._collector.set_diagnostics(tuple(self._diagnostics))
+        self._collector.set_diagnostics(self._combined_diagnostics())
 
 
 def _parameter_value(parameter_value: Any) -> Any:
@@ -347,3 +402,12 @@ def _parameter_value(parameter_value: Any) -> Any:
         if value not in (None, "", 0, 0.0, False):
             return value
     return getattr(parameter_value, "integer_value", 0)
+
+
+def _parameter_is_set(parameter_value: Any) -> bool:
+    value_type = getattr(parameter_value, "type", None)
+    return value_type is None or int(value_type) != 0
+
+
+def _dedupe(values: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(values))

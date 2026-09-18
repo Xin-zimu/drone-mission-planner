@@ -5,8 +5,13 @@ import math
 from drone_mission_planner.domain.terrain import TerrainModel
 from drone_mission_planner.domain.waypoint import Waypoint, waypoint_msl_altitude
 
-from .models import ExecutionFrameCalibration
+from .models import ExecutionFrameCalibration, utc_timestamp
 from .validation import VALID_FRAME_MODES, ExecutionValidationError
+
+FRAME_MODE_RELATIVE_CURRENT_POSE = "relative_current_pose"
+FRAME_MODE_RELATIVE_TAKEOFF = "relative_takeoff"
+FRAME_MODE_ABSOLUTE_LOCAL = "absolute_local"
+ORIGIN_SOURCE_CURRENT_POSE = "current_pose"
 
 
 def transform_planner_waypoint(
@@ -44,6 +49,45 @@ def transform_planner_xy(
     return (
         frame.cf_origin_x_m + cos_yaw * dx_m - sin_yaw * dy_m,
         frame.cf_origin_y_m + sin_yaw * dx_m + cos_yaw * dy_m,
+    )
+
+
+def capture_current_pose_origin(
+    *,
+    planner_origin_x_m: float,
+    planner_origin_y_m: float,
+    planner_origin_z_m: float,
+    cf_x_m: float,
+    cf_y_m: float,
+    cf_z_m: float,
+    yaw_offset_rad: float = 0.0,
+    captured_at_utc: str | None = None,
+) -> ExecutionFrameCalibration:
+    """Capture the current Crazyflie estimator pose as the execution origin."""
+
+    values = (
+        planner_origin_x_m,
+        planner_origin_y_m,
+        planner_origin_z_m,
+        cf_x_m,
+        cf_y_m,
+        cf_z_m,
+        yaw_offset_rad,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ExecutionValidationError("execution frame origin contains non-finite values")
+    return ExecutionFrameCalibration(
+        mode=FRAME_MODE_RELATIVE_CURRENT_POSE,
+        planner_origin_x_m=planner_origin_x_m,
+        planner_origin_y_m=planner_origin_y_m,
+        planner_origin_z_m=planner_origin_z_m,
+        cf_origin_x_m=cf_x_m,
+        cf_origin_y_m=cf_y_m,
+        cf_origin_z_m=cf_z_m,
+        yaw_offset_rad=yaw_offset_rad,
+        validated=True,
+        origin_source=ORIGIN_SOURCE_CURRENT_POSE,
+        origin_captured_at_utc=captured_at_utc or utc_timestamp(),
     )
 
 

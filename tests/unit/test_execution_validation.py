@@ -75,6 +75,28 @@ def test_execution_validation_rejects_invalid_calibration() -> None:
     assert any(issue.code == "calibration_not_validated" for issue in issues)
 
 
+def test_execution_validation_requires_current_pose_origin_timestamp() -> None:
+    mission = _mission(
+        frame=ExecutionFrameCalibration(
+            mode="relative_current_pose",
+            planner_origin_x_m=10.0,
+            planner_origin_y_m=10.0,
+            planner_origin_z_m=0.0,
+            cf_origin_x_m=14.9911,
+            cf_origin_y_m=6.6701,
+            cf_origin_z_m=0.00965,
+            yaw_offset_rad=0.0,
+            validated=True,
+            origin_source="current_pose",
+            origin_captured_at_utc=None,
+        )
+    )
+
+    issues = validate_execution_mission(mission, CRAZYFLIE_CRAZYSWARM2_SINGLE_PROFILE)
+
+    assert any(issue.code == "frame_origin_timestamp_missing" for issue in issues)
+
+
 def test_preflight_blocks_missing_xy_positioning() -> None:
     robot = RobotCapabilities(
         robot_id="cf1",
@@ -174,4 +196,3 @@ def _waypoint(
         hold_s=0.0,
         source_task_id="T-01" if index == 1 else None,
     )
-

@@ -57,6 +57,7 @@ class BridgeProtocolServer:
         config = _load_config(config_path)
         if robot_id is None:
             robot_id = _config_string(config, "robot_id")
+        crazyflie_server_node = _config_string(config, "crazyflie_server_node") or "/crazyflie_server"
         self.host = host
         self.port = port
         self.state = BridgeSessionState(backend=backend)
@@ -66,7 +67,10 @@ class BridgeProtocolServer:
             sim_adapter.connect()
             self.state.robots["cf1"] = sim_adapter.capabilities()
         elif backend == "hardware":
-            self._hardware_adapter = Crazyswarm2Adapter(robot_id=robot_id or "cf231")
+            self._hardware_adapter = Crazyswarm2Adapter(
+                robot_id=robot_id or "cf231",
+                crazyflie_server_node=crazyflie_server_node,
+            )
             self._hardware_adapter.connect()
             self._refresh_hardware_robot()
         self._server: asyncio.AbstractServer | None = None
@@ -254,6 +258,7 @@ class BridgeProtocolServer:
                         message = f"battery {voltage:.3f} V is at or below critical {threshold:.3f} V"
                     issues.append({"code": "battery_critical", "message": message, "blocking": True})
                 if self._hardware_adapter is not None:
+                    _append_frame_origin_issues(self.state.loaded_mission, robot, issues)
                     stability = self._hardware_adapter.pose_stability_payload
                     if not stability["observed"]:
                         issues.append(
@@ -419,6 +424,44 @@ def _mission_shape_error(mission: dict[str, Any], mission_id: str) -> str | None
         if not isinstance(hold_s, (int, float)) or not math.isfinite(float(hold_s)) or float(hold_s) < 0.0:
             return f"waypoint {index} hold_s must be a non-negative finite number"
     return None
+
+
+def _append_frame_origin_issues(
+    mission: dict[str, Any] | None,
+    robot: BridgeRobot,
+    issues: list[dict[str, Any]],
+) -> None:
+    if mission is None or robot.positioning_mode != "flow":
+        return
+    frame = mission.get("frame")
+    if not isinstance(frame, dict):
+        issues.append(
+            {
+                "code": "frame_origin_missing",
+                "message": "mission frame calibration is missing",
+                "blocking": True,
+            }
+        )
+        return
+    mode = frame.get("mode")
+    origin_source = frame.get("origin_source")
+    captured_at = frame.get("origin_captured_at_utc")
+    if mode not in {"relative_current_pose", "relative_takeoff"}:
+        issues.append(
+            {
+                "code": "frame_mode_invalid",
+                "message": f"Flow positioning requires a relative execution frame, not {mode!r}",
+                "blocking": True,
+            }
+        )
+    if origin_source != "current_pose" or not isinstance(captured_at, str) or not captured_at:
+        issues.append(
+            {
+                "code": "frame_origin_missing",
+                "message": "Flow positioning requires an execution origin captured from the current pose",
+                "blocking": True,
+            }
+        )
 
 
 async def run_server(
