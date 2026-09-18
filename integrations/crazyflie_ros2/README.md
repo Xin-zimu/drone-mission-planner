@@ -2,15 +2,17 @@
 
 This package is the v1.3 Crazyflie bridge for the Drone Mission Planner
 execution link. The current checked-in implementation supports the TCP + NDJSON
-protocol surface and a deterministic SIM backend for software acceptance:
+protocol surface, a deterministic SIM backend for software acceptance, and a
+read-only Crazyswarm2 hardware telemetry backend:
 `hello`, `ping`, `get_capabilities`, `select_robot`, `load_mission`,
-`run_preflight`, `execute_mission`, `abort_land`, `emergency_stop` and
-`clear_mission`.
+`get_telemetry`, `run_preflight`, `execute_mission`, `abort_land`,
+`emergency_stop` and `clear_mission`.
 
-Hardware execution is intentionally not enabled from this workspace. The
-`hardware` backend returns a structured `execution_not_implemented` error until
-ROS 2/Crazyswarm2, telemetry, reliable XY positioning and supervised hardware
-acceptance are available.
+Hardware flight execution is intentionally not enabled from this workspace. The
+`hardware` backend subscribes to Crazyswarm2 `/cf231/status` and `/cf231/pose`,
+reports real battery/link/pose telemetry when available, and still returns a
+structured `execution_not_implemented` error for mission execution until
+supervised hardware acceptance unlocks flight commands.
 
 Default bind:
 
@@ -28,6 +30,20 @@ Run explicitly without hardware control:
 
 ```bash
 python -m dmp_crazyflie_bridge.protocol_server --backend sim
+```
+
+Run the read-only hardware telemetry backend after Crazyswarm2 is already
+running:
+
+```bash
+export PYTHONPATH="$PWD/src/dmp_crazyflie_bridge:${PYTHONPATH:-}"
+python -m dmp_crazyflie_bridge.protocol_server --backend hardware --config config/bridge.yaml
+```
+
+The default hardware robot id is configured in `config/bridge.yaml`:
+
+```yaml
+robot_id: cf231
 ```
 
 Non-flight environment probe:
@@ -63,8 +79,14 @@ Do not switch to hardware execution until all of the following are true:
 
 - SIM execution validates protocol, state machine and report behavior only; it is
   not firmware SIL or real flight evidence.
-- The checked-in hardware adapter remains a placeholder and does not send real
+- The checked-in hardware adapter is read-only for CF7. It does not send real
   `takeoff`, `go_to`, `land` or emergency commands.
+- Deck capability detection first attempts Crazyswarm2/ROS parameter reads. If
+  those parameters are unavailable, the bridge reports unknown positioning with
+  diagnostics rather than guessing readiness.
+- Some Crazyswarm2 runs list `cf231.params.deck.*` descriptors but return no
+  parameter values at runtime. Treat that as a blocked positioning gate unless
+  a separate read-only deck check confirms the hardware.
 - Real waypoint execution remains blocked until the positioning gate is passed.
 - Full Windows `pytest tests` can hit a pre-existing native `0xc000001d`
   illegal-instruction crash in `tests/integration/test_examples.py` on this

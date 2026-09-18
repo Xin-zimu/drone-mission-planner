@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python -m dmp_crazyflie_bridge.protocol_server --backend hardware
-
+python -m dmp_crazyflie_bridge.protocol_server --backend hardware --config config/bridge.yaml

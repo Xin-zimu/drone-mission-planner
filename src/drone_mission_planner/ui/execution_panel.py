@@ -22,13 +22,17 @@ from drone_mission_planner.execution.result import ExecutionResult
 @dataclass(frozen=True, slots=True)
 class ExecutionLiveState:
     state: str = "idle"
+    blocked: bool = False
     waypoint_index: int | None = None
     waypoint_count: int = 0
     x_m: float | None = None
     y_m: float | None = None
     z_m: float | None = None
     battery_voltage: float | None = None
+    rssi: int | None = None
+    latency_unicast: int | None = None
     tracking_error_m: float | None = None
+    status_age_s: float | None = None
     pose_age_s: float | None = None
     elapsed_s: float = 0.0
 
@@ -92,12 +96,16 @@ class ExecutionPanel(QWidget):
         bridge_connected: bool = False,
         robot: str = "Not selected",
         positioning: str = "Unknown",
+        xy_available: bool = False,
+        z_available: bool = False,
         pose_fresh: bool = False,
     ) -> None:
         self._connection_labels["Backend"].setText(backend)
         self._connection_labels["Bridge"].setText("Connected" if bridge_connected else "Disconnected")
         self._connection_labels["Robot"].setText(robot)
         self._connection_labels["Positioning"].setText(positioning)
+        self._connection_labels["XY"].setText("Available" if xy_available else "Unavailable")
+        self._connection_labels["Z"].setText("Available" if z_available else "Unavailable")
         self._connection_labels["Pose"].setText("Fresh" if pose_fresh else "Stale")
 
     def render_mission(self, mission: ExecutionMission | None) -> None:
@@ -136,14 +144,21 @@ class ExecutionPanel(QWidget):
 
     def render_live_state(self, state: ExecutionLiveState) -> None:
         progress = "-" if state.waypoint_index is None else f"{state.waypoint_index} / {state.waypoint_count}"
-        self._live_labels["state"].setText(state.state)
+        self._live_labels["state"].setText(f"{state.state} BLOCKED" if state.blocked else state.state)
         self._live_labels["waypoint"].setText(progress)
         self._live_labels["position"].setText(_position_text(state.x_m, state.y_m, state.z_m))
         self._live_labels["battery"].setText(
             "-" if state.battery_voltage is None else f"{state.battery_voltage:.2f} V"
         )
+        self._live_labels["rssi"].setText("-" if state.rssi is None else str(state.rssi))
+        self._live_labels["latency"].setText(
+            "-" if state.latency_unicast is None else f"{state.latency_unicast} ms"
+        )
         self._live_labels["tracking error"].setText(
             "-" if state.tracking_error_m is None else f"{state.tracking_error_m:.2f} m"
+        )
+        self._live_labels["status age"].setText(
+            "-" if state.status_age_s is None else f"{state.status_age_s:.2f} s"
         )
         self._live_labels["pose age"].setText("-" if state.pose_age_s is None else f"{state.pose_age_s:.2f} s")
         self._live_labels["elapsed"].setText(f"{state.elapsed_s:.1f} s")
@@ -173,7 +188,7 @@ class ExecutionPanel(QWidget):
     def _add_connection_group(self, layout: QVBoxLayout) -> dict[str, QLabel]:
         group = QGroupBox("Connection")
         form = QFormLayout(group)
-        labels = _labels("Backend", "Bridge", "Robot", "Positioning", "Pose")
+        labels = _labels("Backend", "Bridge", "Robot", "Positioning", "XY", "Z", "Pose")
         for key, label in labels.items():
             form.addRow(key, label)
         buttons = QWidget()
@@ -209,7 +224,18 @@ class ExecutionPanel(QWidget):
     def _add_live_group(self, layout: QVBoxLayout) -> dict[str, QLabel]:
         group = QGroupBox("Live State")
         form = QFormLayout(group)
-        labels = _labels("state", "waypoint", "position", "battery", "tracking error", "pose age", "elapsed")
+        labels = _labels(
+            "state",
+            "waypoint",
+            "position",
+            "battery",
+            "rssi",
+            "latency",
+            "tracking error",
+            "status age",
+            "pose age",
+            "elapsed",
+        )
         for key, label in labels.items():
             form.addRow(key, label)
         layout.addWidget(group)

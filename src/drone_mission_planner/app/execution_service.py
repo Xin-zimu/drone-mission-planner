@@ -20,6 +20,7 @@ from drone_mission_planner.execution.protocol import (
     hello_request,
     load_mission_request,
     ping_request,
+    telemetry_request,
 )
 from drone_mission_planner.execution.reporting import execution_result_from_bridge_response
 from drone_mission_planner.execution.result import ExecutionResult
@@ -69,6 +70,9 @@ class ExecutionService:
 
     def build_capabilities_request(self) -> dict[str, Any]:
         return capabilities_request()
+
+    def build_telemetry_request(self) -> dict[str, Any]:
+        return telemetry_request()
 
     def build_load_mission(self, mission: ExecutionMission | None = None) -> dict[str, Any]:
         selected = mission or self.pending_mission

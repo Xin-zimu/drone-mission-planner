@@ -27,6 +27,22 @@ class BridgeRobot:
     xy_positioning_available: bool
     pose_stream_available: bool
     pose_rate_hz: float
+    z_positioning_available: bool = False
+    battery_voltage: float | None = None
+    battery_critical: bool = False
+    battery_critical_voltage: float | None = None
+    rssi: int | None = None
+    latency_unicast: int | None = None
+    num_rx_unicast: int | None = None
+    num_tx_unicast: int | None = None
+    status_age_s: float | None = None
+    pose_age_s: float | None = None
+    status_rate_hz: float = 0.0
+    x_m: float | None = None
+    y_m: float | None = None
+    z_m: float | None = None
+    positioning_evidence: tuple[str, ...] = ()
+    diagnostics: tuple[str, ...] = ()
     target_profile_id: str | None = "crazyflie-crazyswarm2-single-v1"
 
     def to_payload(self) -> dict[str, Any]:
@@ -35,8 +51,24 @@ class BridgeRobot:
             "connected": self.connected,
             "positioning_mode": self.positioning_mode,
             "xy_positioning_available": self.xy_positioning_available,
+            "z_positioning_available": self.z_positioning_available,
             "pose_stream_available": self.pose_stream_available,
             "pose_rate_hz": self.pose_rate_hz,
+            "status_rate_hz": self.status_rate_hz,
+            "battery_voltage": self.battery_voltage,
+            "battery_critical": self.battery_critical,
+            "battery_critical_voltage": self.battery_critical_voltage,
+            "rssi": self.rssi,
+            "latency_unicast": self.latency_unicast,
+            "num_rx_unicast": self.num_rx_unicast,
+            "num_tx_unicast": self.num_tx_unicast,
+            "status_age_s": self.status_age_s,
+            "pose_age_s": self.pose_age_s,
+            "x_m": self.x_m,
+            "y_m": self.y_m,
+            "z_m": self.z_m,
+            "positioning_evidence": list(self.positioning_evidence),
+            "diagnostics": list(self.diagnostics),
             "target_profile_id": self.target_profile_id,
         }
 
@@ -70,4 +102,3 @@ def decode_message(line: bytes) -> dict[str, Any]:
     if request_id is not None and not isinstance(request_id, str):
         raise BridgeProtocolError("request_id must be a string when present")
     return dict(payload)
-

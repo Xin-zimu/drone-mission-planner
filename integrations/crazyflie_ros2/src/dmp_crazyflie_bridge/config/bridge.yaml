@@ -1,6 +1,6 @@
 bind: 127.0.0.1
 port: 8765
 backend: sim
+robot_id: cf231
 link_loss_policy: controlled_land
 max_message_bytes: 65536
-

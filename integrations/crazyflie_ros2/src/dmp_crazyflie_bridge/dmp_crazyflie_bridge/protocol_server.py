@@ -4,9 +4,10 @@ import argparse
 import asyncio
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from .crazyswarm_adapter import SimCrazyflieAdapter
+from .crazyswarm_adapter import Crazyswarm2Adapter, SimCrazyflieAdapter
 from .execution_state import BridgeExecutionState
 from .mission_executor import MissionExecutionResult, MissionExecutor
 from .protocol_models import (
@@ -44,14 +45,30 @@ class BridgeSessionState:
 
 
 class BridgeProtocolServer:
-    def __init__(self, *, host: str = "127.0.0.1", port: int = 8765, backend: str = "sim") -> None:
+    def __init__(
+        self,
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        backend: str = "sim",
+        robot_id: str | None = None,
+        config_path: str | None = None,
+    ) -> None:
+        config = _load_config(config_path)
+        if robot_id is None:
+            robot_id = _config_string(config, "robot_id")
         self.host = host
         self.port = port
         self.state = BridgeSessionState(backend=backend)
+        self._hardware_adapter: Crazyswarm2Adapter | None = None
         if backend == "sim":
             sim_adapter = SimCrazyflieAdapter()
             sim_adapter.connect()
             self.state.robots["cf1"] = sim_adapter.capabilities()
+        elif backend == "hardware":
+            self._hardware_adapter = Crazyswarm2Adapter(robot_id=robot_id or "cf231")
+            self._hardware_adapter.connect()
+            self._refresh_hardware_robot()
         self._server: asyncio.AbstractServer | None = None
         self._execute_cache: dict[str, dict[str, Any]] = {}
         self._active_executor: MissionExecutor | None = None
@@ -61,10 +78,16 @@ class BridgeProtocolServer:
 
     async def stop(self) -> None:
         if self._server is None:
+            if self._hardware_adapter is not None:
+                self._hardware_adapter.disconnect()
             return
-        self._server.close()
-        await self._server.wait_closed()
-        self._server = None
+        try:
+            self._server.close()
+            await self._server.wait_closed()
+        finally:
+            self._server = None
+            if self._hardware_adapter is not None:
+                self._hardware_adapter.disconnect()
 
     @property
     def sockets(self) -> tuple[Any, ...]:
@@ -121,6 +144,7 @@ class BridgeProtocolServer:
         if message_type == "ping":
             return {"type": "pong", "request_id": request_id}
         if message_type == "get_capabilities":
+            self._refresh_hardware_robot()
             return {
                 "type": "capabilities",
                 "request_id": request_id,
@@ -135,6 +159,8 @@ class BridgeProtocolServer:
                 ],
                 "robots": [robot.to_payload() for robot in self.state.robots.values()],
             }
+        if message_type == "get_telemetry":
+            return self._telemetry(request_id)
         if message_type == "select_robot":
             return self._select_robot(message, request_id)
         if message_type == "load_mission":
@@ -160,6 +186,7 @@ class BridgeProtocolServer:
         return self._error("unknown_message_type", f"unsupported message type {message_type}", request_id=request_id)
 
     def _select_robot(self, message: dict[str, Any], request_id: str | None) -> dict[str, Any]:
+        self._refresh_hardware_robot()
         robot_id = message.get("robot_id")
         if not isinstance(robot_id, str) or robot_id not in self.state.robots:
             return self._error("robot_not_found", f"robot {robot_id!r} is not known", request_id=request_id)
@@ -203,6 +230,7 @@ class BridgeProtocolServer:
         }
 
     def _preflight(self, request_id: str | None) -> dict[str, Any]:
+        self._refresh_hardware_robot()
         issues: list[dict[str, Any]] = []
         robot = self.state.robots.get(self.state.selected_robot_id or "")
         if self.state.loaded_mission_id is None:
@@ -216,6 +244,37 @@ class BridgeProtocolServer:
                 issues.append({"code": "xy_positioning_missing", "message": "robot has no reliable XY positioning", "blocking": True})
             if not robot.pose_stream_available:
                 issues.append({"code": "pose_stream_missing", "message": "robot pose stream is unavailable", "blocking": True})
+            if self.state.backend == "hardware":
+                if robot.battery_critical:
+                    voltage = robot.battery_voltage
+                    threshold = robot.battery_critical_voltage
+                    if voltage is None or threshold is None:
+                        message = "battery is critical"
+                    else:
+                        message = f"battery {voltage:.3f} V is at or below critical {threshold:.3f} V"
+                    issues.append({"code": "battery_critical", "message": message, "blocking": True})
+                if self._hardware_adapter is not None:
+                    stability = self._hardware_adapter.pose_stability_payload
+                    if not stability["observed"]:
+                        issues.append(
+                            {
+                                "code": "pose_stability_observation_missing",
+                                "message": f"pose stability observation incomplete: {stability['reason']}",
+                                "blocking": True,
+                            }
+                        )
+                    elif not stability["stable"]:
+                        issues.append(
+                            {
+                                "code": "pose_stability_failed",
+                                "message": (
+                                    "static pose drift exceeds limit: "
+                                    f"dxy={stability['xy_displacement_m']:.3f} m, "
+                                    f"dz={stability['z_displacement_m']:.3f} m"
+                                ),
+                                "blocking": True,
+                            }
+                        )
         passed = not any(issue["blocking"] for issue in issues)
         self.state.preflight_passed = passed
         if passed:
@@ -228,6 +287,27 @@ class BridgeProtocolServer:
             "state": self.state.state.value,
             "issues": issues,
         }
+
+    def _telemetry(self, request_id: str | None) -> dict[str, Any]:
+        if self._hardware_adapter is None:
+            return self._error(
+                "telemetry_unavailable",
+                "telemetry is only available from the hardware backend",
+                request_id=request_id,
+            )
+        payload = self._hardware_adapter.telemetry_payload(
+            mission_id=self.state.loaded_mission_id,
+            flight_state=self.state.state.value,
+        )
+        if request_id is not None:
+            payload["request_id"] = request_id
+        return payload
+
+    def _refresh_hardware_robot(self) -> None:
+        if self._hardware_adapter is None:
+            return
+        robot = self._hardware_adapter.capabilities()
+        self.state.robots = {robot.robot_id: robot}
 
     async def _execute_sim_async(self, request_id: str | None) -> dict[str, Any]:
         if self._active_executor is not None:
@@ -341,10 +421,26 @@ def _mission_shape_error(mission: dict[str, Any], mission_id: str) -> str | None
     return None
 
 
-async def run_server(host: str, port: int, backend: str) -> None:
-    server = BridgeProtocolServer(host=host, port=port, backend=backend)
-    await server.start()
-    await asyncio.Event().wait()
+async def run_server(
+    host: str,
+    port: int,
+    backend: str,
+    *,
+    robot_id: str | None = None,
+    config_path: str | None = None,
+) -> None:
+    server = BridgeProtocolServer(
+        host=host,
+        port=port,
+        backend=backend,
+        robot_id=robot_id,
+        config_path=config_path,
+    )
+    try:
+        await server.start()
+        await asyncio.Event().wait()
+    finally:
+        await server.stop()
 
 
 def main() -> None:
@@ -352,8 +448,39 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--backend", default="sim", choices=("sim", "hardware"))
+    parser.add_argument("--robot-id", default=None)
+    parser.add_argument("--config", default=None)
     args = parser.parse_args()
-    asyncio.run(run_server(args.host, args.port, args.backend))
+    asyncio.run(
+        run_server(
+            args.host,
+            args.port,
+            args.backend,
+            robot_id=args.robot_id,
+            config_path=args.config,
+        )
+    )
+
+
+def _load_config(config_path: str | None) -> dict[str, str]:
+    if config_path is None:
+        return {}
+    path = Path(config_path)
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
+def _config_string(config: dict[str, str], key: str) -> str | None:
+    value = config.get(key)
+    return value or None
 
 
 if __name__ == "__main__":

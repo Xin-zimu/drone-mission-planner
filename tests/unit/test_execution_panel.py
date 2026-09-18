@@ -39,6 +39,8 @@ def test_execution_panel_renders_live_state(qtbot: object) -> None:
         bridge_connected=True,
         robot="cf1",
         positioning="Flow",
+        xy_available=True,
+        z_available=True,
         pose_fresh=True,
     )
     panel.render_live_state(
@@ -50,15 +52,22 @@ def test_execution_panel_renders_live_state(qtbot: object) -> None:
             y_m=0.5,
             z_m=0.4,
             battery_voltage=3.9,
+            rssi=37,
+            latency_unicast=6,
             tracking_error_m=0.06,
+            status_age_s=0.2,
             pose_age_s=0.03,
             elapsed_s=4.2,
         )
     )
 
     assert panel._connection_labels["Bridge"].text() == "Connected"
+    assert panel._connection_labels["XY"].text() == "Available"
+    assert panel._connection_labels["Z"].text() == "Available"
     assert panel._live_labels["waypoint"].text() == "2 / 5"
     assert panel._live_labels["position"].text() == "0.25, 0.50, 0.40 m"
+    assert panel._live_labels["rssi"].text() == "37"
+    assert panel._live_labels["latency"].text() == "6 ms"
 
 
 def test_execution_panel_renders_execution_report(qtbot: object) -> None:

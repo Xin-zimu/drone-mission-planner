@@ -21,6 +21,7 @@ class ProtocolMessageType(StrEnum):
     HELLO = "hello"
     PING = "ping"
     GET_CAPABILITIES = "get_capabilities"
+    GET_TELEMETRY = "get_telemetry"
     SELECT_ROBOT = "select_robot"
     LOAD_MISSION = "load_mission"
     RUN_PREFLIGHT = "run_preflight"
@@ -143,6 +144,13 @@ def capabilities_request(*, request_id: str | None = None) -> dict[str, Any]:
     }
 
 
+def telemetry_request(*, request_id: str | None = None) -> dict[str, Any]:
+    return {
+        "type": ProtocolMessageType.GET_TELEMETRY.value,
+        "request_id": request_id or new_request_id(),
+    }
+
+
 def profile_to_payload(profile: ExecutionTargetProfile) -> dict[str, Any]:
     return {
         "id": profile.id,
@@ -167,6 +175,7 @@ def robot_capabilities_to_payload(robot: RobotCapabilities) -> dict[str, Any]:
         "connected": robot.connected,
         "positioning_mode": robot.positioning_mode,
         "xy_positioning_available": robot.xy_positioning_available,
+        "z_positioning_available": getattr(robot, "z_positioning_available", False),
         "pose_stream_available": robot.pose_stream_available,
         "pose_rate_hz": robot.pose_rate_hz,
         "target_profile_id": robot.target_profile_id,
