@@ -359,7 +359,8 @@ class HardwareFlightAcceptanceRunner:
             telemetry = self._telemetry()
             self._check_health_or_raise(telemetry, origin=origin, target_z_m=target_z_m)
             if self._settled(telemetry, origin=origin, target_z_m=target_z_m):
-                settled_since = settled_since or self.clock()
+                if settled_since is None:
+                    settled_since = self.clock()
                 if self.clock() - settled_since >= self.policy.settle_duration_s:
                     return
             else:
@@ -368,20 +369,31 @@ class HardwareFlightAcceptanceRunner:
         raise CF8AcceptanceError(f"{phase}_motion_timeout", f"{phase} did not settle before timeout")
 
     async def _hover(self, *, origin: CF8AcceptanceOrigin, target_z_m: float, start_s: float) -> None:
-        deadline = self.clock() + self.policy.hover_duration_s
+        hover_started_at = self.clock()
+        minimum_hover_deadline = hover_started_at + self.policy.hover_duration_s
+        total_deadline = start_s + self.policy.max_total_acceptance_time_s
         settled_since: float | None = None
-        while self.clock() < deadline or settled_since is None:
-            if self.clock() - start_s > self.policy.max_total_acceptance_time_s:
-                raise CF8AcceptanceError("acceptance_total_timeout", "CF8 acceptance exceeded total timeout")
+        while True:
+            now = self.clock()
+            if now >= total_deadline:
+                raise CF8AcceptanceError("hover_settle_timeout", "hover did not complete before CF8 total timeout")
             if self._abort_requested:
                 raise CF8AcceptanceError("operator_abort", "operator requested controlled abort")
             telemetry = self._telemetry()
             self._check_health_or_raise(telemetry, origin=origin, target_z_m=target_z_m)
             if self._settled(telemetry, origin=origin, target_z_m=target_z_m):
-                settled_since = settled_since or self.clock()
+                if settled_since is None:
+                    settled_since = now
             else:
                 settled_since = None
-            await asyncio.sleep(self.policy.poll_interval_s)
+            minimum_hover_complete = now >= minimum_hover_deadline
+            continuous_settle_complete = (
+                settled_since is not None
+                and now - settled_since >= self.policy.settle_duration_s
+            )
+            if minimum_hover_complete and continuous_settle_complete:
+                return
+            await asyncio.sleep(min(self.policy.poll_interval_s, total_deadline - now))
 
     async def _land(self, *, origin: CF8AcceptanceOrigin, reason: str) -> None:
         self.state = BridgeExecutionState.LANDING
@@ -401,7 +413,8 @@ class HardwareFlightAcceptanceRunner:
             if health_issue is not None and health_issue.code not in {"battery_critical"}:
                 raise health_issue
             if self._landed(telemetry, origin=origin):
-                settled_since = settled_since or self.clock()
+                if settled_since is None:
+                    settled_since = self.clock()
                 if self.clock() - settled_since >= self.policy.settle_duration_s:
                     self.state = BridgeExecutionState.LANDED
                     self._event("landed_confirmed")

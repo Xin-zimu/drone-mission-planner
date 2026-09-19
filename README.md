@@ -132,6 +132,10 @@ The final suite covers geometry, rasterization, A*, smoothing, energy, assignmen
 - [后续功能开发计划（详细实施版）](docs/follow-up-development-plan.md)
 - [计划对齐与差距](docs/plan-alignment.md) · [流程优化总结](docs/workflow-optimization.md) · [新对话交接单](docs/handoff.md)
 
+CF8.1 hardens supervised hover acceptance: minimum hover duration and a continuous
+settle window must both complete before the total acceptance deadline. Hardware
+flight remains disabled by default; CF8 LIVE has not been run and CF9 is not opened.
+
 ## Architecture
 
 The project enforces `UI → application → domain/planning/simulation/persistence` dependency direction. Planning and simulation never depend on PySide6, all domain objects are dataclasses, deterministic behavior accepts a fixed seed, and each core feature has automated tests. A route has one authoritative representation — the three-dimensional waypoint list — and `Drone.planned_path` is a read-only projection of it (project format 1.7).

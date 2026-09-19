@@ -61,6 +61,151 @@ def test_cf8_runner_preflight_failure_sends_no_flight_services() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("stable_windows", "hover_duration_s", "expected_elapsed_s"),
+    [
+        ([(3.0, 10.0)], 3.0, 3.5),  # A: one settled sample at minimum is insufficient.
+        ([(0.0, 10.0)], 3.0, 3.0),  # B: early settle cannot shorten minimum hover.
+        ([(0.0, 0.3), (0.5, 10.0)], 0.3, 1.0),  # C: interrupted window restarts.
+    ],
+)
+def test_cf8_hover_requires_minimum_and_continuous_settle(
+    monkeypatch: pytest.MonkeyPatch,
+    stable_windows: list[tuple[float, float]],
+    hover_duration_s: float,
+    expected_elapsed_s: float,
+) -> None:
+    clock = FakeClock()
+    adapter = FakeAcceptanceAdapter()
+    runner = cf8_acceptance.HardwareFlightAcceptanceRunner(
+        adapter,
+        policy=_fast_policy(
+            hover_duration_s=hover_duration_s, settle_duration_s=0.5,
+            poll_interval_s=0.1, max_total_acceptance_time_s=10.0,
+        ),
+        clock=clock,
+    )
+    origin = runner._capture_origin(adapter.session_id)
+    original_telemetry = adapter.telemetry_payload
+
+    def telemetry(**kwargs: Any) -> dict[str, Any]:
+        adapter.speed_mps = 0.0 if any(a <= clock() <= b for a, b in stable_windows) else 0.2
+        return original_telemetry(**kwargs)
+
+    monkeypatch.setattr(adapter, "telemetry_payload", telemetry)
+    monkeypatch.setattr(cf8_acceptance.asyncio, "sleep", clock.sleep)
+    asyncio.run(runner._hover(origin=origin, target_z_m=origin.z_m, start_s=clock()))
+
+    assert clock() == pytest.approx(expected_elapsed_s)
+    assert adapter.takeoff_calls == adapter.land_calls == adapter.go_to_calls == []
+
+
+def test_cf8_hover_never_settles_times_out_and_attempts_controlled_land(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = FakeClock()
+    adapter = FakeAcceptanceAdapter()
+    runner = cf8_acceptance.HardwareFlightAcceptanceRunner(
+        adapter,
+        policy=_fast_policy(
+            hover_duration_s=0.3, settle_duration_s=0.5, poll_interval_s=0.1,
+            takeoff_timeout_s=1.0, landing_timeout_s=1.0,
+            max_total_acceptance_time_s=1.25,
+        ),
+        clock=clock,
+    )
+    original_telemetry = adapter.telemetry_payload
+
+    def telemetry(**kwargs: Any) -> dict[str, Any]:
+        adapter.speed_mps = 0.2 if kwargs.get("flight_state") == "hovering" else 0.0
+        return original_telemetry(**kwargs)
+
+    monkeypatch.setattr(adapter, "telemetry_payload", telemetry)
+    monkeypatch.setattr(cf8_acceptance.asyncio, "sleep", clock.sleep)
+    result = asyncio.run(runner.run())
+
+    assert result.passed is False
+    assert result.failure_code == "hover_settle_timeout"
+    assert len(adapter.takeoff_calls) == len(adapter.land_calls) == 1
+    assert adapter.go_to_calls == []
+    assert "hover_settled" not in _event_names(result)
+    assert "landed_confirmed" in _event_names(result)
+    controlled_land = next(e for e in result.events if e.name == "controlled_land_started")
+    assert controlled_land.monotonic_s == pytest.approx(1.25)
+
+
+def test_cf8_hover_cannot_pass_at_total_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = FakeClock()
+    adapter = FakeAcceptanceAdapter()
+    runner = cf8_acceptance.HardwareFlightAcceptanceRunner(
+        adapter,
+        policy=_fast_policy(
+            hover_duration_s=0.5, settle_duration_s=0.5,
+            max_total_acceptance_time_s=0.5, poll_interval_s=0.1,
+        ),
+        clock=clock,
+    )
+    origin = runner._capture_origin(adapter.session_id)
+    monkeypatch.setattr(cf8_acceptance.asyncio, "sleep", clock.sleep)
+    with pytest.raises(cf8_acceptance.CF8AcceptanceError) as exc:
+        asyncio.run(runner._hover(origin=origin, target_z_m=origin.z_m, start_s=0.0))
+    assert exc.value.code == "hover_settle_timeout"
+    assert clock() == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("phase", ["takeoff", "landing"])
+@pytest.mark.parametrize("physical_completion", [True, False])
+def test_cf8_motion_confirmation_uses_full_window_from_zero(
+    monkeypatch: pytest.MonkeyPatch, phase: str, physical_completion: bool,
+) -> None:
+    clock = FakeClock()
+    adapter = FakeAcceptanceAdapter()
+    runner = cf8_acceptance.HardwareFlightAcceptanceRunner(
+        adapter,
+        policy=_fast_policy(settle_duration_s=0.5, landing_timeout_s=0.6, poll_interval_s=0.1),
+        clock=clock,
+    )
+    origin = runner._capture_origin(adapter.session_id)
+    original_telemetry = adapter.telemetry_payload
+
+    def telemetry(**kwargs: Any) -> dict[str, Any]:
+        payload = original_telemetry(**kwargs)
+        if not physical_completion:
+            payload["z_m"] = origin.z_m + 0.2
+        return payload
+
+    async def scenario() -> None:
+        if phase == "landing":
+            await runner._land(origin=origin, reason="test")
+        else:
+            await runner._wait_for_settle(
+                phase=phase, origin=origin, target_z_m=origin.z_m, timeout_s=0.6,
+            )
+
+    monkeypatch.setattr(adapter, "telemetry_payload", telemetry)
+    monkeypatch.setattr(cf8_acceptance.asyncio, "sleep", clock.sleep)
+    if physical_completion:
+        asyncio.run(scenario())
+        assert clock() == pytest.approx(0.5)
+    else:
+        with pytest.raises(cf8_acceptance.CF8AcceptanceError) as exc:
+            asyncio.run(scenario())
+        assert exc.value.code == f"{phase}_motion_timeout"
+        assert clock() == pytest.approx(0.6)
+        assert "landed_confirmed" not in _event_names(runner)
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.now = round(self.now + delay, 9)
+
+
 def test_cf8_runner_safety_fault_during_hover_attempts_controlled_land() -> None:
     async def scenario() -> None:
         adapter = FakeAcceptanceAdapter(fail_after_takeoff="battery_critical")
