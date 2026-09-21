@@ -15,6 +15,7 @@ class BridgeExecutionState(StrEnum):
     READY_TO_EXECUTE = "ready_to_execute"
     ARMING = "arming"
     TAKING_OFF = "taking_off"
+    STABILIZING = "stabilizing"
     HOVERING = "hovering"
     EXECUTING = "executing"
     HOLDING = "holding"

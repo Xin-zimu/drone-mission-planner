@@ -59,6 +59,118 @@ The hardware readiness safety thresholds in `bridge.yaml` fail closed if an
 explicit value is invalid. Leave a key absent to use the default; do not rely on
 invalid values falling back silently.
 
+### Down-range band (`range_ground_advisory_m`, `min_reliable_zrange_m`, `max_reliable_zrange_m`)
+
+The VL53L1x down-range sensor is not trustworthy closer than roughly 4 cm, so a
+ground reading of 0–13 mm is **not** a height and cannot be used to judge whether
+the sensor works. The single old key `min_startup_zrange_m` applied a near-field
+plausibility check to a quantity the sensor cannot measure near-field; neither
+`0.02` nor a lowered `0.005` was defensible. It is **deprecated**. The band ceiling
+was called `max_startup_zrange_m`; that name described a startup plausibility bound,
+but the value bounds where the sensor is *reliable*, which is an airborne property,
+so it was renamed to `max_reliable_zrange_m`. The number is unchanged (`0.50`).
+
+```yaml
+range_ground_advisory_m: 0.04   # below this on the ground -> non-blocking advisory
+min_reliable_zrange_m: 0.10     # airborne reliable band floor
+max_reliable_zrange_m: 0.50     # airborne reliable band ceiling
+```
+
+Legacy key handling is deliberately unambiguous:
+
+| legacy key | behaviour |
+|---|---|
+| `min_startup_zrange_m` | read but **ignored**, emits a `DeprecationWarning`. Never mapped onto either new key: the retired value was often lowered to a few millimetres to force a ground reading through, and reusing it as the airborne floor would declare a vehicle that never left the ground to be valid. |
+| `max_startup_zrange_m` | a pure rename, so the value **is still honoured** when the new key is absent, with a `DeprecationWarning`. If both keys are present the new key wins outright and a second, explicit warning names the shadowed key — a stale local override can never silently win. |
+
+Configuration must satisfy
+`range_ground_advisory_m < min_reliable_zrange_m < max_reliable_zrange_m`;
+any other ordering fails at startup with a `ValueError`.
+
+### Capability snapshot freshness is session-scoped
+
+`capability_snapshot_max_age_s` (default one hour) is **not** a recurring cache TTL.
+It used to be re-evaluated on every telemetry poll, so once the cflib snapshot file
+aged past an hour a healthy Flow2 + ZRanger2 vehicle could silently degrade to
+`positioning_mode = unknown` in the middle of a live session - and readiness then
+blocked on `xy_positioning_missing` / `z_positioning_missing`.
+
+Freshness is now judged **once per hardware telemetry session**, at the moment a
+capability verdict is granted:
+
+1. a new session has no capability at all;
+2. live `crazyflie_server` deck parameters win when available;
+3. otherwise a capability snapshot that is fresh **at that moment** is accepted;
+4. otherwise the adapter fails closed (`positioning_mode = unknown`) and keeps
+   retrying on later calls (rate limited) until a source grants a verdict;
+5. once granted, the verdict (`Flow2`, `ZRanger2`, `positioning_mode`, source and
+   captured-at) is **pinned for the rest of the session** and is never re-read, so
+   wall-clock TTL expiry cannot withdraw capability from a vehicle that is flying;
+6. the session ending (status gap, `disconnect()`, reconnect, changed session id)
+   clears the pin, and the next session re-runs the whole decision from scratch.
+
+A snapshot that is already stale **before** a session starts stays rejected: its age
+only grows, so it can never be accepted later in that session. Capability never leaks
+across sessions. This is also why the manual refresh procedure below stops Crazyswarm2
+first: the Bridge itself never starts a firmware parameter probe (it would seize the
+Crazyradio from Crazyswarm2) and never stops or restarts Crazyswarm2 to refresh a
+snapshot. `tests/integration/test_execution_hardware_adapter.py` asserts both
+behaviourally and by scanning the adapter source.
+
+### Ground vs airborne readiness stages
+
+`get_telemetry.readiness` reports `ground_passed` and `airborne_passed` alongside
+`passed`, and every issue carries a `stage` of `ground`, `airborne` or `both`.
+Ground launch preflight consumes only `ground`/`both` issues. `pose_stability_*`,
+`velocity_not_settled` and `range_invalid` are `airborne`: they depend on the
+PMW3901 (specified for 80 mm to infinity) and on near-field ranging, so they are
+enforced by the post-takeoff stabilization gate rather than by a ground gate.
+Issues without a `stage` (legacy payloads) are treated as `both` — fail-closed.
+See `../../docs/v1.3-cf81-ground-airborne-readiness-split.md`.
+
+Supervisor codes are staged too. `supervisor_not_flyable`, `supervisor_armed`,
+`supervisor_flying` and `supervisor_high_level_active` describe the supervisor's
+*handover* state ("may a supervised flight start from here?") and are **`ground`
+only**: a vehicle that is legitimately under way reports `armed=True`,
+`flying=True`, `can_be_armed=False` (manual explicit-arm builds) and often active
+high-level control, so re-using those checks airborne would fault every normal
+flight. `can_fly=False` keeps a ground code (`supervisor_not_flyable`) and gains
+its own airborne code `supervisor_cannot_fly`; CF8 also treats a revoked
+`can_fly` as an immediate hard health fault. `supervisor_missing`,
+`supervisor_locked`, `supervisor_tumbled`, `supervisor_crashed` and `deck_fault`
+are `both`. The classification lives in
+`telemetry.GROUND_ONLY_SUPERVISOR_ISSUE_CODES` /
+`AIRBORNE_ONLY_SUPERVISOR_ISSUE_CODES` / `BOTH_STAGE_SUPERVISOR_ISSUE_CODES` and
+is asserted against all `2**12` raw supervisor bit patterns by the tests.
+
+### CF8 post-takeoff stabilization gate
+
+`run_cf8_acceptance` no longer jumps from `taking_off` to `hovering`. The state
+order is `taking_off -> stabilizing -> hovering -> landing`, where `STABILIZING`
+is the only place flow- and near-field-derived quality is enforced:
+
+- anchor: the monotonic timestamp of the `takeoff_target_reached` event;
+- `minimum_airborne_observation_s = 5.0` of post-anchor samples, plus a
+  continuous `stabilization_window_s = 3.0` window in which **every** fresh
+  sample satisfies `0.10 <= range.zrange <= 0.50`, `max(|vx|)`, `max(|vy|)`,
+  `max(|vz|) <= 0.05`, `max(speed) <= 0.08` (strict max, **no percentile**),
+  `xy_span <= 0.03`, `xy_displacement <= 0.03`, and the estimator stays fresh
+  and converged;
+- the window is fed only by samples the runner polls after the anchor — never by
+  `TelemetryCollector._pose_samples`, whose 200-sample deque (~20 s at 10 Hz)
+  still holds pre-takeoff ground samples after liftoff;
+- hard health faults (battery critical, lost status/pose, changed hardware
+  session, locked/tumbled/crashed/deck fault, revoked `can_fly`, XY drift)
+  go straight to the controlled landing path;
+- soft convergence shortfalls wait until `stabilization_timeout_s = 10.0` and
+  then fail (`stabilization_timeout`) through the same controlled landing.
+  The controlled landing is sent exactly once; emergency stop is never used as a
+  substitute.
+
+Progress and events are visible in `get_cf8_acceptance`, and
+`metrics.stabilization` carries the strict-max window evidence
+(`min_zrange_m`, `max_abs_vx_mps`, `max_speed_mps`, `xy_span_m`, ...).
+
 `hardware_flight_enabled` is deliberately checked in as `false`. With that
 default, even a `run_cf8_acceptance` request cannot create an arm, takeoff or
 land service request. A supervised operator must intentionally set it to `true`
@@ -95,12 +207,26 @@ all:
           - kalman.varX
           - kalman.varY
           - kalman.varZ
+      # Optional local diagnostic: raw Flow deck v2 (PMW3901) quality/motion data.
+      # Must stay on its OWN topic — see the block-size note below.
+      dmp_flow:
+        frequency: 10
+        vars:
+          - motion.deltaX
+          - motion.deltaY
+          - motion.motion
+          - motion.squal
 ```
 
 A complete DMP-owned example is checked in at
-`config/crazyflies.dmp.example.yaml`. The custom log block is 14 bytes
+`config/crazyflies.dmp.example.yaml`. The `dmp_readiness` custom log block is 14 bytes
 (`range.zrange` as `uint16`, plus three `float32` Kalman variances), below the
 Crazyflie firmware log-block limit of 26 bytes.
+
+> **Do not add variables to `dmp_readiness`.** The bridge parses its `values` list
+> **positionally**, so changing the variable set or order silently changes the block
+> layout. Keep additional diagnostics (such as the `dmp_flow` quality topic above) on a
+> separate custom topic.
 
 Live topic contract for `cf231`:
 
@@ -108,12 +234,36 @@ Live topic contract for `cf231`:
 - `/cf231/pose`: `geometry_msgs/msg/PoseStamped`
 - `/cf231/odom`: `nav_msgs/msg/Odometry`
 - `/cf231/dmp_readiness`: `crazyflie_interfaces/msg/LogDataGeneric`
+- `/cf231/dmp_flow`: `crazyflie_interfaces/msg/LogDataGeneric` (optional diagnostic;
+  `motion.deltaX`, `motion.deltaY`, `motion.motion`, `motion.squal`)
 
 The `dmp_readiness.values` order is exactly
 `range.zrange`, `kalman.varX`, `kalman.varY`, `kalman.varZ`. Firmware
 `range.zrange` is millimeters; the bridge converts it to meters before applying
 startup down-range policy. Missing, stale, malformed, NaN/Inf or negative samples
 are ignored or reported as blocking readiness diagnostics rather than guessed.
+
+## Static Drift Diagnostics
+
+`scripts/flow_drift_probe.py` is a **read-only** localisation probe. It subscribes to the
+same topics the bridge consumes and recomputes the identical pose/velocity/range policy
+statistics, so its numbers are directly comparable with `get_telemetry`. It also reports
+raw Flow deck quality from `/cf231/dmp_flow`.
+
+```bash
+cd ~/ros2_ws
+source ~/crazyswarm-env/bin/activate
+source /opt/ros/jazzy/setup.bash
+source install/local_setup.bash
+python3 <repo>/integrations/crazyflie_ros2/scripts/flow_drift_probe.py \
+  --robot-id cf231 --duration 30 --json /tmp/cf231-drift.json
+```
+
+It creates subscriptions only: it never publishes and never calls a service, so it cannot
+arm, take off or land a vehicle. Use it to judge whether a ground surface and mounting
+height actually support optical flow before treating a readiness failure as a software
+problem. A healthy reading needs `squal` well above the noise floor and small
+`motion.deltaX` / `motion.deltaY` while the vehicle is stationary.
 
 ## CF8 Acceptance
 
@@ -233,11 +383,40 @@ Do not switch to hardware execution until all of the following are true:
   bridge may consume a fresh, URI-matched read-only cflib capability snapshot;
   otherwise it reports unknown positioning with diagnostics rather than guessing
   readiness.
-- Real waypoint execution remains blocked until the positioning gate is passed.
+- **The cflib capability snapshot is only a session-bootstrap source.**
+  `capability_snapshot_max_age_s` defaults to 3600 s, but it is evaluated once per
+  hardware telemetry session, not on every poll: a session that already granted
+  `positioning_mode=flow` keeps it for the whole session even after the file ages
+  past the TTL, so a healthy Flow2 + ZRanger2 vehicle can no longer degrade
+  mid-flight. A session whose snapshot was already stale when it started still
+  fails closed (`positioning_mode=unknown`). Refreshing a snapshot is always a
+  manual operator action and requires **exclusive** radio access — stop
+  Crazyswarm2, re-run the capability probe, then restart Crazyswarm2 and the
+  bridge — because cflib and the C++ backend cannot share the Crazyradio. The
+  Bridge itself never starts a probe and never restarts Crazyswarm2.
+- **Ground readiness currently demands signals that are only valid in the air.**
+  `pose_stability_*`, `velocity_not_settled` and `range_invalid` all depend on
+  optical flow and near-field ranging. The PMW3901 is specified for 80 mm to
+  infinity, and the VL53L1x is unreliable below roughly 4 cm, so `range.zrange`
+  readings of 0–13 mm while the vehicle rests on the ground are not trustworthy
+  heights and neither `min_startup_zrange_m` nor a lowered local value can make
+  them so. The ground/airborne split is specified in
+  `../../docs/v1.3-cf81-ground-airborne-readiness-split.md`.
+- Static Flow deck position estimates drift slowly even on a level, textured
+  surface; velocity noise scales with height (`v = flow·h/k`), so a vehicle held
+  far above the ground can fail the velocity gate purely because of the mounting
+  height. Keep the measured height near the intended hover altitude when judging
+  static readiness.
 - Readiness is fail-closed. Missing `/odom`, down-range, Kalman variance or
   supervisor telemetry produces specific blocking issue codes such as
   `velocity_unavailable`, `range_unavailable`, `estimator_not_converged` or
   `supervisor_not_flyable`.
+- Auto-arm firmware parks reporting `supervisor_info_raw = 526`
+  (`armed | auto_arm | can_fly | high_level_trajectory_finished`) with
+  `can_be_armed = 0`. That is a healthy standby state: arming readiness is
+  `can_be_armed or (auto_arm and armed)`, and `armed` without `auto_arm` is still
+  the blocking `supervisor_armed` fault.
+- Real waypoint execution remains blocked until the positioning gate is passed.
 - Hardware session ids are driven by fresh `/status` telemetry. A stale status
   stream invalidates current-pose origins even if the adapter process did not
   explicitly disconnect.
@@ -259,3 +438,13 @@ Do not switch to hardware execution until all of the following are true:
    `hardware_flight_enabled: true`, send `run_cf8_acceptance` with strict
    `confirm_real_flight: true`, and poll `get_cf8_acceptance`.
 9. Do not use `execute_mission` for hardware; it remains disabled.
+
+### Repeating steps 2–6
+
+Step 3 needs the Crazyradio to itself, so it can only run while Crazyswarm2 is stopped.
+The snapshot it writes is only accepted as a session-bootstrap source while it is younger
+than `capability_snapshot_max_age_s` (one hour by default). A session that already granted
+capability keeps it until the session ends; only a **new** session re-checks the file. If a
+fresh session still reports unknown positioning, repeat steps 2–6 rather than lowering
+readiness thresholds. Steps 8–9 additionally require a charged pack; the battery critical
+threshold is 3.7 V.

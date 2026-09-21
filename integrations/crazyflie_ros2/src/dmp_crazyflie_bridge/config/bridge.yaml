@@ -14,8 +14,9 @@ velocity_stale_timeout_s: 0.75
 max_abs_velocity_mps: 0.05
 max_speed_mps: 0.08
 range_stale_timeout_s: 0.75
-min_startup_zrange_m: 0.02
-max_startup_zrange_m: 0.50
+range_ground_advisory_m: 0.04
+min_reliable_zrange_m: 0.10
+max_reliable_zrange_m: 0.50
 estimator_stale_timeout_s: 1.5
 max_estimator_variance_span: 0.002
 minimum_estimator_sample_count: 5

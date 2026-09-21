@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
+import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +22,13 @@ from .protocol_models import (
     decode_message,
     encode_message,
 )
-from .telemetry import ReadinessPolicy
+from .telemetry import (
+    DEFAULT_MAX_RELIABLE_ZRANGE_M,
+    DEFAULT_MIN_RELIABLE_ZRANGE_M,
+    DEFAULT_RANGE_GROUND_ADVISORY_M,
+    ReadinessPolicy,
+    ReadinessStage,
+)
 
 DEFAULT_FRAME_ORIGIN_MAX_AGE_S = 300.0
 DEFAULT_FRAME_ORIGIN_ALLOWED_CLOCK_SKEW_S = 5.0
@@ -73,6 +80,44 @@ class BridgeProtocolServer:
         robot_uri = _config_string(config, "robot_uri")
         snapshot_path = _config_path(config, "capability_snapshot_path")
         snapshot_max_age_s = _config_float(config, "capability_snapshot_max_age_s", 3600.0, minimum=0.0, inclusive=False)
+        if "min_startup_zrange_m" in config:
+            # Deliberately ignored rather than mapped onto a new key: the former value was
+            # often lowered to a few millimetres to force a ground reading through, and
+            # reusing it as the airborne reliable floor would declare a vehicle that never
+            # left the ground to be valid.
+            warnings.warn(
+                "min_startup_zrange_m is deprecated and ignored. It applied a near-field "
+                "plausibility check to a quantity the down-range sensor cannot measure "
+                "reliably below ~4 cm. Use range_ground_advisory_m (ground advisory) and "
+                "min_reliable_zrange_m (airborne reliable floor) instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        max_reliable_default = DEFAULT_MAX_RELIABLE_ZRANGE_M
+        if "max_startup_zrange_m" in config:
+            # Pure rename, so the legacy value is still honoured - but only when the new key
+            # is absent. If both are present the new key wins outright, and that shadowing is
+            # announced so a stale local override cannot silently win.
+            warnings.warn(
+                "max_startup_zrange_m is deprecated; use max_reliable_zrange_m instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if "max_reliable_zrange_m" in config:
+                warnings.warn(
+                    "both max_startup_zrange_m and max_reliable_zrange_m are set; "
+                    "max_reliable_zrange_m takes precedence and max_startup_zrange_m is ignored.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+            else:
+                max_reliable_default = _config_float(
+                    config,
+                    "max_startup_zrange_m",
+                    DEFAULT_MAX_RELIABLE_ZRANGE_M,
+                    minimum=0.0,
+                    inclusive=False,
+                )
         readiness_policy = ReadinessPolicy(
             minimum_acceptable_pose_rate_hz=_config_float(
                 config, "minimum_acceptable_pose_rate_hz", 8.0, minimum=0.0, inclusive=False
@@ -81,8 +126,15 @@ class BridgeProtocolServer:
             max_abs_velocity_mps=_config_float(config, "max_abs_velocity_mps", 0.05, minimum=0.0),
             max_speed_mps=_config_float(config, "max_speed_mps", 0.08, minimum=0.0),
             range_stale_timeout_s=_config_float(config, "range_stale_timeout_s", 0.75, minimum=0.0, inclusive=False),
-            min_startup_zrange_m=_config_float(config, "min_startup_zrange_m", 0.02, minimum=0.0),
-            max_startup_zrange_m=_config_float(config, "max_startup_zrange_m", 0.50, minimum=0.0, inclusive=False),
+            range_ground_advisory_m=_config_float(
+                config, "range_ground_advisory_m", DEFAULT_RANGE_GROUND_ADVISORY_M, minimum=0.0
+            ),
+            min_reliable_zrange_m=_config_float(
+                config, "min_reliable_zrange_m", DEFAULT_MIN_RELIABLE_ZRANGE_M, minimum=0.0
+            ),
+            max_reliable_zrange_m=_config_float(
+                config, "max_reliable_zrange_m", max_reliable_default, minimum=0.0, inclusive=False
+            ),
             estimator_stale_timeout_s=_config_float(
                 config, "estimator_stale_timeout_s", 1.5, minimum=0.0, inclusive=False
             ),
@@ -90,8 +142,10 @@ class BridgeProtocolServer:
             max_estimator_variance_span=_config_float(config, "max_estimator_variance_span", 0.002, minimum=0.0),
             minimum_estimator_sample_count=_config_int(config, "minimum_estimator_sample_count", 5, minimum=1),
         )
-        if readiness_policy.max_startup_zrange_m <= readiness_policy.min_startup_zrange_m:
-            raise ValueError("max_startup_zrange_m must be greater than min_startup_zrange_m")
+        if readiness_policy.max_reliable_zrange_m <= readiness_policy.min_reliable_zrange_m:
+            raise ValueError("max_reliable_zrange_m must be greater than min_reliable_zrange_m")
+        if readiness_policy.min_reliable_zrange_m <= readiness_policy.range_ground_advisory_m:
+            raise ValueError("min_reliable_zrange_m must be greater than range_ground_advisory_m")
         self._frame_origin_policy = FrameOriginPolicy(
             max_age_s=_config_float(
                 config,
@@ -370,8 +424,15 @@ class BridgeProtocolServer:
                 )
                 readiness = getattr(self._hardware_adapter, "readiness_payload", {"issues": []})
                 for issue in readiness.get("issues", []):
-                    if isinstance(issue, dict):
-                        _append_unique_issue(issues, issue)
+                    if not isinstance(issue, dict):
+                        continue
+                    # Ground launch safety must not depend on optical-flow or near-field
+                    # measurements, which are only meaningful after takeoff. Those issues
+                    # remain visible via get_telemetry with stage="airborne" and are
+                    # enforced by the post-takeoff stabilization gate instead.
+                    if issue.get("stage") == ReadinessStage.AIRBORNE.value:
+                        continue
+                    _append_unique_issue(issues, issue)
                 if not hasattr(self._hardware_adapter, "readiness_payload"):
                     _append_legacy_hardware_readiness_issues(robot, self._hardware_adapter, issues)
         passed = not any(issue["blocking"] for issue in issues)
@@ -712,13 +773,17 @@ def _append_unique_issue(issues: list[dict[str, Any]], issue: dict[str, Any]) ->
         return
     message = issue.get("message")
     blocking = issue.get("blocking", True)
-    issues.append(
-        {
-            "code": code,
-            "message": message if isinstance(message, str) else code,
-            "blocking": bool(blocking),
-        }
-    )
+    entry: dict[str, Any] = {
+        "code": code,
+        "message": message if isinstance(message, str) else code,
+        "blocking": bool(blocking),
+    }
+    # Preserve the readiness stage when present so consumers can tell a ground advisory
+    # apart from an airborne-only blocking issue.
+    stage = issue.get("stage")
+    if isinstance(stage, str):
+        entry["stage"] = stage
+    issues.append(entry)
 
 
 def _append_legacy_hardware_readiness_issues(

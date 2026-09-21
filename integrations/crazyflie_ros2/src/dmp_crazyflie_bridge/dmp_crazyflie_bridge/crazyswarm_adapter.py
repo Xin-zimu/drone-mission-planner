@@ -12,7 +12,6 @@ from uuid import uuid4
 from .capability_probe import (
     CAPABILITY_SOURCE_CFLIB,
     CAPABILITY_SOURCE_ROS,
-    CapabilitySnapshotValidation,
     default_snapshot_path,
     load_capability_snapshot,
 )
@@ -153,6 +152,15 @@ class Crazyswarm2Adapter:
 
     This adapter intentionally does not implement flight commands. It only subscribes
     to Crazyswarm2 telemetry topics and reads deck capability parameters.
+
+    Capability freshness is **session-scoped**, not a recurring cache TTL:
+    ``capability_snapshot_max_age_s`` is evaluated exactly once per hardware telemetry
+    session, when a verdict is granted, and that verdict is then immutable for the rest of
+    the session (see ``_refresh_positioning_capabilities``). It also never owns the radio:
+    it does not start a firmware parameter probe, and it never stops or restarts
+    Crazyswarm2. When live deck parameters are unavailable and no fresh capability snapshot
+    exists it fails closed (``positioning_mode = unknown``) instead of seizing the
+    Crazyradio.
     """
 
     robot_id: str = "cf231"
@@ -188,6 +196,9 @@ class Crazyswarm2Adapter:
     _capability_source: str | None = None
     _capability_captured_at: str | None = None
     _session_id: str | None = None
+    # Session the currently granted capability verdict belongs to. ``None`` means the
+    # current session has no granted verdict yet (unknown / not authoritative).
+    _capability_pin_session_id: str | None = None
 
     def __post_init__(self) -> None:
         self._collector = TelemetryCollector(
@@ -266,11 +277,13 @@ class Crazyswarm2Adapter:
                 self._record_diagnostic(f"ROS 2 shutdown warning: {exc}")
         self._connected = False
         self._session_id = None
+        self._clear_session_capability(
+            "hardware session capability invalidated: adapter disconnected"
+        )
 
     def capabilities(self) -> BridgeRobot:
         self._refresh_positioning_capabilities()
         snapshot = self._collector.snapshot()
-        self._sync_session_from_snapshot(snapshot)
         status = snapshot.status
         pose = snapshot.pose
         return BridgeRobot(
@@ -312,7 +325,6 @@ class Crazyswarm2Adapter:
     ) -> dict[str, Any]:
         self._refresh_positioning_capabilities()
         snapshot = self._collector.snapshot()
-        self._sync_session_from_snapshot(snapshot)
         return snapshot.to_telemetry_payload(
             mission_id=mission_id,
             active_waypoint_index=active_waypoint_index,
@@ -420,15 +432,47 @@ class Crazyswarm2Adapter:
         if snapshot.connected:
             if self._session_id is None:
                 self._session_id = str(uuid4())
+                # A new session starts with no capability at all: freshness is judged from
+                # scratch, never inherited from the previous session.
+                self._clear_session_capability(
+                    "hardware session capability invalidated: new hardware telemetry session"
+                )
                 self._record_diagnostic("hardware telemetry session started from fresh status")
+            elif self._capability_pin_session_id not in (None, self._session_id):
+                self._clear_session_capability(
+                    "hardware session capability invalidated: hardware telemetry session changed"
+                )
             return
         if self._session_id is not None:
             self._session_id = None
+            self._clear_session_capability(
+                "hardware session capability invalidated: status telemetry is stale"
+            )
             self._record_diagnostic("hardware telemetry session invalidated because status is stale")
 
     def _refresh_positioning_capabilities(self) -> None:
+        """Resolve the positioning capability for the current hardware session.
+
+        Freshness of the capability snapshot is judged **once per session**, at the moment a
+        verdict is granted, and the granted verdict is then fixed for the rest of that
+        session (requirement: a wall-clock TTL must never withdraw capability mid-session).
+        A session that has not been granted a verdict yet keeps retrying (rate limited), so a
+        parameter service that comes up late can still be used -- but a snapshot that was
+        already stale stays stale, because its age only grows, and is therefore rejected at
+        every attempt. The adapter never starts a firmware probe and never restarts
+        Crazyswarm2 to refresh anything.
+        """
+        self._sync_session_from_snapshot(self._collector.snapshot())
+        if self._session_id is None:
+            self._clear_session_capability(
+                "no fresh hardware telemetry session: positioning capability unknown"
+            )
+            return
+        if self._capability_pin_session_id == self._session_id:
+            # Granted and pinned for this session: never re-read, never downgraded.
+            return
         if self._parameter_client is None:
-            self._set_unknown_positioning("crazyflie_server parameter client is unavailable")
+            self._fallback_to_snapshot("crazyflie_server parameter client is unavailable")
             return
         now = time.monotonic()
         if now - self._last_capability_read_s < self._capability_read_interval_s:
@@ -436,12 +480,12 @@ class Crazyswarm2Adapter:
         self._last_capability_read_s = now
         try:
             if not self._parameter_client.wait_for_services(timeout_sec=0.05):
-                self._set_unknown_positioning(f"{self.crazyflie_server_node} parameter service unavailable")
+                self._fallback_to_snapshot(f"{self.crazyflie_server_node} parameter service unavailable")
                 return
             names_by_deck = self._discover_deck_parameter_names()
             missing = tuple(name for name in DECK_PARAMETER_NAMES if name not in names_by_deck)
             if missing:
-                self._set_unknown_positioning(
+                self._fallback_to_snapshot(
                     "deck parameters not listed by "
                     f"{self.crazyflie_server_node}: missing {', '.join(missing)}"
                 )
@@ -449,12 +493,12 @@ class Crazyswarm2Adapter:
             names = tuple(names_by_deck[name] for name in DECK_PARAMETER_NAMES)
             future = self._parameter_client.get_parameters(names)
             if not self._wait_for_future(future, timeout_s=0.5):
-                self._set_unknown_positioning("deck parameter read timed out")
+                self._fallback_to_snapshot("deck parameter read timed out")
                 return
             result = future.result()
             parameter_values = tuple(getattr(result, "values", ()))
             if len(parameter_values) != len(DECK_PARAMETER_NAMES):
-                self._set_unknown_positioning(
+                self._fallback_to_snapshot(
                     "deck parameter values unavailable from "
                     f"{self.crazyflie_server_node}: expected {len(DECK_PARAMETER_NAMES)}, "
                     f"received {len(parameter_values)}"
@@ -465,7 +509,7 @@ class Crazyswarm2Adapter:
                 if not _parameter_is_set(value)
             )
             if unset:
-                self._set_unknown_positioning(
+                self._fallback_to_snapshot(
                     "deck parameters are listed but unset by "
                     f"{self.crazyflie_server_node}: {', '.join(unset)}"
                 )
@@ -474,12 +518,77 @@ class Crazyswarm2Adapter:
                 full_name: _parameter_value(value)
                 for full_name, value in zip(names, parameter_values, strict=True)
             }
-            self._collector.set_positioning(positioning_from_deck_params(values))
-            self._capability_source = CAPABILITY_SOURCE_ROS
-            self._capability_captured_at = None
-            self._capability_diagnostics = ()
+            self._grant_session_capability(
+                positioning_from_deck_params(values),
+                source=CAPABILITY_SOURCE_ROS,
+                captured_at=None,
+            )
         except Exception as exc:
-            self._set_unknown_positioning(f"deck parameter read failed: {type(exc).__name__}: {exc}")
+            self._fallback_to_snapshot(f"deck parameter read failed: {type(exc).__name__}: {exc}")
+
+    def _fallback_to_snapshot(self, diagnostic: str) -> None:
+        """Grant capability from a snapshot that is fresh *now*, else stay fail-closed."""
+        path = self.capability_snapshot_path or default_snapshot_path(self.robot_id)
+        validation = load_capability_snapshot(
+            path,
+            robot_id=self.robot_id,
+            uri=self.robot_uri,
+            max_age_s=self.capability_snapshot_max_age_s,
+        )
+        if validation.valid and validation.snapshot is not None:
+            self._grant_session_capability(
+                positioning_from_deck_params(validation.snapshot.deck_values),
+                source=CAPABILITY_SOURCE_CFLIB,
+                captured_at=validation.snapshot.captured_at_utc,
+                diagnostic=diagnostic,
+            )
+            return
+        diagnostics: tuple[str, ...] = (diagnostic,)
+        if validation.diagnostic is not None:
+            diagnostics += (validation.diagnostic,)
+        self._withhold_session_capability(diagnostics)
+
+    def _grant_session_capability(
+        self,
+        capabilities: PositioningCapabilities,
+        *,
+        source: str,
+        captured_at: str | None,
+        diagnostic: str | None = None,
+    ) -> None:
+        """Pin an authoritative verdict to the current session (write once per session)."""
+        self._capability_pin_session_id = self._session_id
+        self._capability_source = source
+        self._capability_captured_at = captured_at
+        self._capability_diagnostics = () if diagnostic is None else (diagnostic,)
+        self._collector.set_positioning(capabilities)
+        self._collector.set_diagnostics(self._combined_diagnostics())
+
+    def _withhold_session_capability(self, diagnostics: tuple[str, ...]) -> None:
+        """Report unknown (fail closed) and stay unresolved so a later attempt may succeed."""
+        self._capability_pin_session_id = None
+        self._capability_source = None
+        self._capability_captured_at = None
+        self._capability_diagnostics = diagnostics
+        self._collector.set_positioning(
+            PositioningCapabilities(
+                mode=UNKNOWN_POSITIONING.mode,
+                xy_available=UNKNOWN_POSITIONING.xy_available,
+                z_available=UNKNOWN_POSITIONING.z_available,
+                pose_available=UNKNOWN_POSITIONING.pose_available,
+                relative=UNKNOWN_POSITIONING.relative,
+                diagnostics=UNKNOWN_POSITIONING.diagnostics + diagnostics,
+            )
+        )
+        self._collector.set_diagnostics(self._combined_diagnostics())
+
+    def _clear_session_capability(self, diagnostic: str) -> None:
+        """Drop any granted verdict: the session it was pinned to no longer exists."""
+        self._capability_pin_session_id = None
+        self._capability_source = None
+        self._capability_captured_at = None
+        self._capability_diagnostics = (diagnostic,)
+        self._collector.set_positioning(UNKNOWN_POSITIONING)
         self._collector.set_diagnostics(self._combined_diagnostics())
 
     def _discover_deck_parameter_names(self) -> dict[str, str]:
@@ -507,42 +616,6 @@ class Crazyswarm2Adapter:
         while not future.done() and time.monotonic() < deadline:
             time.sleep(0.01)
         return bool(future.done())
-
-    def _set_unknown_positioning(self, diagnostic: str) -> None:
-        snapshot = self._load_snapshot_capabilities()
-        if snapshot.valid and snapshot.snapshot is not None:
-            self._collector.set_positioning(positioning_from_deck_params(snapshot.snapshot.deck_values))
-            self._capability_source = CAPABILITY_SOURCE_CFLIB
-            self._capability_captured_at = snapshot.snapshot.captured_at_utc
-            self._capability_diagnostics = (diagnostic,)
-            self._collector.set_diagnostics(self._combined_diagnostics())
-            return
-        diagnostics: tuple[str, ...] = (diagnostic,)
-        if snapshot.diagnostic is not None:
-            diagnostics += (snapshot.diagnostic,)
-        self._capability_source = None
-        self._capability_captured_at = None
-        self._capability_diagnostics = diagnostics
-        self._collector.set_positioning(
-            PositioningCapabilities(
-                mode=UNKNOWN_POSITIONING.mode,
-                xy_available=UNKNOWN_POSITIONING.xy_available,
-                z_available=UNKNOWN_POSITIONING.z_available,
-                pose_available=UNKNOWN_POSITIONING.pose_available,
-                relative=UNKNOWN_POSITIONING.relative,
-                diagnostics=UNKNOWN_POSITIONING.diagnostics + diagnostics,
-            )
-        )
-        self._collector.set_diagnostics(self._combined_diagnostics())
-
-    def _load_snapshot_capabilities(self) -> CapabilitySnapshotValidation:
-        path = self.capability_snapshot_path or default_snapshot_path(self.robot_id)
-        return load_capability_snapshot(
-            path,
-            robot_id=self.robot_id,
-            uri=self.robot_uri,
-            max_age_s=self.capability_snapshot_max_age_s,
-        )
 
     def _combined_diagnostics(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys((*self._diagnostics, *self._capability_diagnostics)))

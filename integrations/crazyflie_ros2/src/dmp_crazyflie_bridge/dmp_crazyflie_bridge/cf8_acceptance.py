@@ -4,9 +4,11 @@ import asyncio
 import math
 import time
 from dataclasses import asdict, dataclass, field
+from itertools import pairwise
 from typing import Any, Protocol
 
 from .execution_state import BridgeExecutionState
+from .telemetry import ReadinessStage
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +28,226 @@ class CF8AcceptancePolicy:
     poll_interval_s: float = 0.05
     explicit_arm_required: bool = False
     arm_timeout_s: float = 2.0
+    # --- Post-takeoff stabilization gate ------------------------------------------------
+    # The ground preflight recheck deliberately ignores every airborne-stage readiness
+    # issue, so this gate is the only place where flow- and near-field-derived quality is
+    # enforced. It is anchored on the monotonic timestamp of `takeoff_target_reached` and
+    # keeps its own post-anchor sample window; see AirborneStabilizationWindow.
+    minimum_airborne_observation_s: float = 5.0
+    stabilization_window_s: float = 3.0
+    stabilization_timeout_s: float = 10.0
+    stabilization_min_zrange_m: float = 0.10
+    stabilization_max_zrange_m: float = 0.50
+    stabilization_max_abs_velocity_mps: float = 0.05
+    stabilization_max_speed_mps: float = 0.08
+    stabilization_max_xy_span_m: float = 0.03
+    stabilization_max_xy_displacement_m: float = 0.03
+    stabilization_max_sample_gap_s: float = 0.5
+    stabilization_max_pose_age_s: float = 0.75
+
+
+# Blocking airborne-stage readiness codes that the stabilization gate consumes from the
+# telemetry readiness payload instead of recomputing. They are all anchored to the live
+# vehicle or to a single fresh sample, so pre-takeoff ground samples cannot poison them.
+#
+# Deliberately excluded, and recomputed by the runner from post-anchor samples only:
+#   * pose_stability_observation_missing / pose_stability_failed
+#       TelemetryCollector._pose_samples is a 200-sample deque (~20 s at 10 Hz), so right
+#       after liftoff it still contains ground samples and would fail every window.
+#   * velocity_not_settled / range_invalid
+#       The runner enforces the strict-max velocity window and the zrange band itself,
+#       with a single source of truth (CF8AcceptancePolicy stabilization_* fields).
+STABILIZATION_READINESS_CODES: frozenset[str] = frozenset(
+    {
+        "range_unavailable",
+        "range_stale",
+        "velocity_unavailable",
+        "velocity_stale",
+        "estimator_not_converged",
+        "supervisor_cannot_fly",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AirborneStabilizationSample:
+    """One post-takeoff observation fed to the CF8 stabilization window.
+
+    ``ok`` is the per-sample verdict; the numeric fields are carried through even when the
+    sample already failed so the eventual timeout report can explain what was wrong.
+    """
+
+    monotonic_s: float
+    ok: bool
+    reason: str | None = None
+    x_m: float | None = None
+    y_m: float | None = None
+    z_m: float | None = None
+    zrange_m: float | None = None
+    vx_mps: float | None = None
+    vy_mps: float | None = None
+    vz_mps: float | None = None
+    speed_mps: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AirborneStabilizationReport:
+    """Strict-max evidence over the continuous post-anchor stabilization window."""
+
+    anchor_s: float
+    observed_s: float
+    window_s: float
+    window_start_s: float | None
+    sample_count: int
+    ok: bool
+    reason: str | None
+    last_sample_reason: str | None = None
+    min_zrange_m: float | None = None
+    max_zrange_m: float | None = None
+    max_abs_vx_mps: float | None = None
+    max_abs_vy_mps: float | None = None
+    max_abs_vz_mps: float | None = None
+    max_speed_mps: float | None = None
+    xy_span_m: float | None = None
+    xy_displacement_m: float | None = None
+    max_sample_gap_s: float | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "anchor_s": self.anchor_s,
+            "observed_s": self.observed_s,
+            "window_s": self.window_s,
+            "window_start_s": self.window_start_s,
+            "sample_count": self.sample_count,
+            "ok": self.ok,
+            "reason": self.reason,
+            "last_sample_reason": self.last_sample_reason,
+            "min_zrange_m": self.min_zrange_m,
+            "max_zrange_m": self.max_zrange_m,
+            "max_abs_vx_mps": self.max_abs_vx_mps,
+            "max_abs_vy_mps": self.max_abs_vy_mps,
+            "max_abs_vz_mps": self.max_abs_vz_mps,
+            "max_speed_mps": self.max_speed_mps,
+            "xy_span_m": self.xy_span_m,
+            "xy_displacement_m": self.xy_displacement_m,
+            "max_sample_gap_s": self.max_sample_gap_s,
+        }
+
+
+class AirborneStabilizationWindow:
+    """Post-takeoff stabilization evidence collected after the CF8 liftoff anchor.
+
+    Deliberately independent of ``TelemetryCollector._pose_samples``: that deque holds 200
+    samples (~20 s at 10 Hz), so for the first ~20 s of flight it still mixes pre-takeoff
+    ground samples into any pose-stability verdict. This window only ever sees samples
+    observed after ``takeoff_target_reached``, which is also why the ground gate is allowed
+    to skip ``pose_stability_*`` instead of relaxing it.
+
+    The window is satisfied only when, on top of ``minimum_airborne_observation_s`` of
+    airborne samples, the *most recent continuous* ``stabilization_window_s`` is entirely
+    covered by healthy samples. Any unhealthy sample resets the continuous stretch, so a
+    single velocity spike re-arms the whole window.
+    """
+
+    def __init__(self, policy: CF8AcceptancePolicy, *, anchor_s: float) -> None:
+        self.policy = policy
+        self.anchor_s = anchor_s
+        self._samples: list[AirborneStabilizationSample] = []
+        self._continuous_since_s: float | None = None
+        self._last_reason: str | None = None
+
+    @property
+    def continuous_since_s(self) -> float | None:
+        return self._continuous_since_s
+
+    def observe(self, sample: AirborneStabilizationSample) -> AirborneStabilizationReport:
+        self._samples.append(sample)
+        self._last_reason = sample.reason
+        if not sample.ok:
+            self._continuous_since_s = None
+        elif self._continuous_since_s is None:
+            self._continuous_since_s = sample.monotonic_s
+        cutoff = (
+            sample.monotonic_s
+            - self.policy.stabilization_window_s
+            - self.policy.stabilization_max_sample_gap_s
+        )
+        # Samples older than the window plus one allowed sample gap can never belong to the
+        # most recent continuous window again, so the buffer stays bounded on a long wait.
+        self._samples = [kept for kept in self._samples if kept.monotonic_s >= cutoff]
+        return self.report(sample.monotonic_s)
+
+    def report(self, now_s: float) -> AirborneStabilizationReport:
+        observed = max(0.0, now_s - self.anchor_s)
+        start = self._continuous_since_s
+        window = [] if start is None else [s for s in self._samples if s.monotonic_s >= start]
+        gaps = [later.monotonic_s - earlier.monotonic_s for earlier, later in pairwise(window)]
+        max_gap = max(gaps) if gaps else None
+        zranges = [s.zrange_m for s in window if s.zrange_m is not None]
+        xs = [s.x_m for s in window if s.x_m is not None]
+        ys = [s.y_m for s in window if s.y_m is not None]
+        speeds = [s.speed_mps for s in window if s.speed_mps is not None]
+        min_zrange = min(zranges) if zranges else None
+        max_zrange = max(zranges) if zranges else None
+        xy_span = None
+        xy_displacement = None
+        if len(xs) >= 2 and len(xs) == len(ys):
+            xy_span = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+            xy_displacement = math.hypot(xs[-1] - xs[0], ys[-1] - ys[0])
+
+        reasons: list[str] = []
+        if observed < self.policy.minimum_airborne_observation_s:
+            reasons.append("airborne_observation_too_short")
+        if start is None:
+            reasons.append("no_continuous_stabilization")
+        elif now_s - start < self.policy.stabilization_window_s:
+            reasons.append("stabilization_window_incomplete")
+        if max_gap is not None and max_gap > self.policy.stabilization_max_sample_gap_s:
+            reasons.append("stabilization_sample_gap_exceeded")
+        if min_zrange is not None and min_zrange < self.policy.stabilization_min_zrange_m:
+            reasons.append("stabilization_range_below_band")
+        if max_zrange is not None and max_zrange > self.policy.stabilization_max_zrange_m:
+            reasons.append("stabilization_range_above_band")
+        if window and not all(sample.ok for sample in window):
+            reasons.append("stabilization_sample_unhealthy")
+        # Strict max semantics: no percentile, no mean, no trimmed aggregate. The whole
+        # continuous window must stay inside the static acceptance band.
+        vx_values = [abs(sample.vx_mps) for sample in window if sample.vx_mps is not None]
+        vy_values = [abs(sample.vy_mps) for sample in window if sample.vy_mps is not None]
+        vz_values = [abs(sample.vz_mps) for sample in window if sample.vz_mps is not None]
+        max_abs_vx = max(vx_values) if vx_values else None
+        max_abs_vy = max(vy_values) if vy_values else None
+        max_abs_vz = max(vz_values) if vz_values else None
+        for axis, peak in (("vx", max_abs_vx), ("vy", max_abs_vy), ("vz", max_abs_vz)):
+            if peak is not None and peak > self.policy.stabilization_max_abs_velocity_mps:
+                reasons.append(f"stabilization_{axis}_exceeded")
+        max_speed = max(speeds) if speeds else None
+        if max_speed is not None and max_speed > self.policy.stabilization_max_speed_mps:
+            reasons.append("stabilization_speed_exceeded")
+        if xy_span is not None and xy_span > self.policy.stabilization_max_xy_span_m:
+            reasons.append("stabilization_xy_span_exceeded")
+        if xy_displacement is not None and xy_displacement > self.policy.stabilization_max_xy_displacement_m:
+            reasons.append("stabilization_xy_displacement_exceeded")
+
+        return AirborneStabilizationReport(
+            anchor_s=self.anchor_s,
+            observed_s=observed,
+            window_s=self.policy.stabilization_window_s,
+            window_start_s=start,
+            sample_count=len(window),
+            ok=not reasons,
+            reason=None if not reasons else ",".join(reasons),
+            last_sample_reason=self._last_reason,
+            min_zrange_m=min_zrange,
+            max_zrange_m=max_zrange,
+            max_abs_vx_mps=max_abs_vx,
+            max_abs_vy_mps=max_abs_vy,
+            max_abs_vz_mps=max_abs_vz,
+            max_speed_mps=max_speed,
+            xy_span_m=xy_span,
+            xy_displacement_m=xy_displacement,
+            max_sample_gap_s=max_gap,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +289,7 @@ class CF8AcceptanceMetrics:
     max_status_age_s: float = 0.0
     max_pose_age_s: float = 0.0
     supervisor_transitions: list[dict[str, Any]] = field(default_factory=list)
+    stabilization: dict[str, Any] | None = None
     _last_supervisor_raw: int | None = None
 
     def update(
@@ -111,6 +334,7 @@ class CF8AcceptanceMetrics:
             "max_status_age_s": self.max_status_age_s,
             "max_pose_age_s": self.max_pose_age_s,
             "supervisor_transitions": list(self.supervisor_transitions),
+            "stabilization": self.stabilization,
         }
 
 
@@ -253,7 +477,23 @@ class HardwareFlightAcceptanceRunner:
                 target_z_m=self._target_z_m,
                 timeout_s=self.policy.takeoff_timeout_s,
             )
+            # The liftoff anchor is the monotonic timestamp of this event; the airborne
+            # stabilization window below only accepts samples observed after it.
+            takeoff_target_reached_s = self.clock()
             self._event("takeoff_target_reached")
+
+            self.state = BridgeExecutionState.STABILIZING
+            self._event(
+                "stabilization_started",
+                minimum_airborne_observation_s=self.policy.minimum_airborne_observation_s,
+                stabilization_window_s=self.policy.stabilization_window_s,
+                stabilization_timeout_s=self.policy.stabilization_timeout_s,
+            )
+            await self._stabilize(
+                origin=origin,
+                target_z_m=self._target_z_m,
+                anchor_s=takeoff_target_reached_s,
+            )
 
             self.state = BridgeExecutionState.HOVERING
             self._event("hover_started")
@@ -286,7 +526,14 @@ class HardwareFlightAcceptanceRunner:
         if session_id is None:
             issues.append(_issue("hardware_session_missing", "fresh hardware telemetry session is missing"))
         for issue in readiness.get("issues", []):
-            if isinstance(issue, dict) and issue.get("blocking", True):
+            if not isinstance(issue, dict):
+                continue
+            # Ground launch safety only consumes altitude/flow-independent evidence.
+            # Flow- and near-field-derived issues (pose stability, velocity settle, range
+            # plausibility) are enforced by the post-takeoff stabilization gate instead.
+            if issue.get("stage") == ReadinessStage.AIRBORNE.value:
+                continue
+            if issue.get("blocking", True):
                 issues.append(dict(issue))
         health_issue = self._inflight_health_issue(telemetry, session_id=session_id, origin=None, target_z_m=None)
         if health_issue is not None:
@@ -367,6 +614,144 @@ class HardwareFlightAcceptanceRunner:
                 settled_since = None
             await asyncio.sleep(self.policy.poll_interval_s)
         raise CF8AcceptanceError(f"{phase}_motion_timeout", f"{phase} did not settle before timeout")
+
+    async def _stabilize(
+        self,
+        *,
+        origin: CF8AcceptanceOrigin,
+        target_z_m: float,
+        anchor_s: float,
+    ) -> None:
+        """Enforce the post-takeoff stabilization gate.
+
+        Hard health faults (battery, lost status/pose, changed hardware session, locked /
+        tumbled / crashed / deck fault, ``can_fly`` revoked, XY drift) raise immediately and
+        go straight to the controlled-landing path. Measurement-quality shortfalls (range
+        band, velocity, pose span, estimator) are soft: the gate keeps waiting until
+        ``stabilization_timeout_s`` and only then fails into the same controlled landing.
+        """
+        window = AirborneStabilizationWindow(self.policy, anchor_s=anchor_s)
+        deadline = anchor_s + self.policy.stabilization_timeout_s
+        while True:
+            now = self.clock()
+            if self._abort_requested:
+                raise CF8AcceptanceError("operator_abort", "operator requested controlled abort")
+            if now >= deadline:
+                report = window.report(now)
+                self.metrics.stabilization = report.to_payload()
+                self._event("stabilization_timeout", **report.to_payload())
+                raise CF8AcceptanceError(
+                    "stabilization_timeout",
+                    (
+                        "airborne stabilization did not converge within "
+                        f"{self.policy.stabilization_timeout_s:g} s: {report.reason}"
+                    ),
+                )
+            telemetry = self._telemetry()
+            self._check_health_or_raise(telemetry, origin=origin, target_z_m=target_z_m)
+            report = window.observe(self._stabilization_sample(telemetry, now_s=now))
+            if report.ok:
+                self.metrics.stabilization = report.to_payload()
+                self._event("stabilization_satisfied", **report.to_payload())
+                return
+            await asyncio.sleep(min(self.policy.poll_interval_s, max(0.0, deadline - now)))
+
+    def _stabilization_sample(
+        self,
+        telemetry: dict[str, Any],
+        *,
+        now_s: float,
+    ) -> AirborneStabilizationSample:
+        issues: list[str] = []
+        pose_age = _float_or_none(telemetry.get("pose_age_s"))
+        if pose_age is None or pose_age > self.policy.stabilization_max_pose_age_s:
+            issues.append("pose_not_fresh")
+        x = _float_or_none(telemetry.get("x_m"))
+        y = _float_or_none(telemetry.get("y_m"))
+        z = _float_or_none(telemetry.get("z_m"))
+        if x is None or y is None or z is None:
+            issues.append("pose_invalid")
+
+        range_payload = telemetry.get("range")
+        zrange_m = (
+            _float_or_none(range_payload.get("zrange_m"))
+            if isinstance(range_payload, dict)
+            else None
+        )
+        if zrange_m is None:
+            issues.append("range_unavailable")
+        elif not (
+            self.policy.stabilization_min_zrange_m
+            <= zrange_m
+            <= self.policy.stabilization_max_zrange_m
+        ):
+            issues.append("range_out_of_band")
+
+        velocity = telemetry.get("velocity")
+        vx = vy = vz = speed = None
+        if isinstance(velocity, dict):
+            vx = _float_or_none(velocity.get("vx_mps"))
+            vy = _float_or_none(velocity.get("vy_mps"))
+            vz = _float_or_none(velocity.get("vz_mps"))
+            speed = _float_or_none(velocity.get("speed_mps"))
+        if vx is None or vy is None or vz is None:
+            issues.append("velocity_unavailable")
+        else:
+            if max(abs(vx), abs(vy), abs(vz)) > self.policy.stabilization_max_abs_velocity_mps:
+                issues.append("velocity_exceeded")
+            speed = math.sqrt(vx * vx + vy * vy + vz * vz) if speed is None else speed
+            if speed > self.policy.stabilization_max_speed_mps:
+                issues.append("speed_exceeded")
+
+        variance = telemetry.get("estimator_variance")
+        if not isinstance(variance, dict) or any(
+            _float_or_none(variance.get(key)) is None for key in ("var_x", "var_y", "var_z")
+        ):
+            issues.append("estimator_not_converged")
+        airborne_codes = self._airborne_readiness_codes(telemetry)
+        if airborne_codes is None:
+            issues.append("readiness_unavailable")
+        else:
+            issues.extend(sorted(airborne_codes & STABILIZATION_READINESS_CODES))
+
+        return AirborneStabilizationSample(
+            monotonic_s=now_s,
+            ok=not issues,
+            reason=None if not issues else ",".join(issues),
+            x_m=x,
+            y_m=y,
+            z_m=z,
+            zrange_m=zrange_m,
+            vx_mps=vx,
+            vy_mps=vy,
+            vz_mps=vz,
+            speed_mps=speed,
+        )
+
+    def _airborne_readiness_codes(self, telemetry: dict[str, Any]) -> set[str] | None:
+        """Blocking airborne-stage readiness codes, or None when the payload is missing.
+
+        Returns ``None`` rather than an empty set so a missing readiness payload fails
+        closed instead of silently dropping the estimator/freshness half of the gate.
+        """
+        readiness = telemetry.get("readiness")
+        if not isinstance(readiness, dict):
+            return None
+        raw_issues = readiness.get("issues")
+        if not isinstance(raw_issues, list):
+            return None
+        codes: set[str] = set()
+        for issue in raw_issues:
+            if not isinstance(issue, dict):
+                continue
+            if not issue.get("blocking", True):
+                continue
+            if issue.get("stage") != ReadinessStage.AIRBORNE.value:
+                continue
+            code = issue.get("code")
+            if isinstance(code, str):
+                codes.add(code)
+        return codes
 
     async def _hover(self, *, origin: CF8AcceptanceOrigin, target_z_m: float, start_s: float) -> None:
         hover_started_at = self.clock()
@@ -480,13 +865,19 @@ class HardwareFlightAcceptanceRunner:
             return CF8AcceptanceError("battery_critical", "battery reached critical threshold")
         supervisor = telemetry.get("supervisor")
         if isinstance(supervisor, dict):
-            for key, code in (
-                ("locked", "supervisor_locked"),
-                ("tumbled", "supervisor_tumbled"),
-                ("crashed", "supervisor_crashed"),
-                ("deck_fault", "deck_fault"),
-            ):
+            # Hard health faults: go to the controlled-landing path immediately, never wait
+            # for the stabilization timeout.
+            #
+            # `can_fly` is the handover-independent "the supervisor refuses to fly" bit and
+            # is fail-closed on both the ground recheck and the airborne gates.
+            if supervisor.get("can_fly") is False:
+                return CF8AcceptanceError(
+                    "supervisor_cannot_fly",
+                    "supervisor revoked the flyable state",
+                )
+            for key in ("locked", "tumbled", "crashed", "deck_fault"):
                 if supervisor.get(key) is True:
+                    code = "deck_fault" if key == "deck_fault" else f"supervisor_{key}"
                     return CF8AcceptanceError(code, f"supervisor reports {key}")
         x = _float_or_none(telemetry.get("x_m"))
         y = _float_or_none(telemetry.get("y_m"))

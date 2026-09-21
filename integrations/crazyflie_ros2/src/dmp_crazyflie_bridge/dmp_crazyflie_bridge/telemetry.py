@@ -6,8 +6,10 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from itertools import pairwise
 from threading import Lock
+from types import MappingProxyType
 from typing import Any
 
 DEFAULT_STATUS_STALE_TIMEOUT_S = 2.5
@@ -17,6 +19,14 @@ DEFAULT_MINIMUM_ACCEPTABLE_POSE_RATE_HZ = 8.0
 DEFAULT_VELOCITY_STALE_TIMEOUT_S = 0.75
 DEFAULT_RANGE_STALE_TIMEOUT_S = 0.75
 DEFAULT_ESTIMATOR_STALE_TIMEOUT_S = 1.5
+# The VL53L1x down-range sensor is unreliable closer than roughly 4 cm, so a ground
+# reading below this is advisory only, never a blocking plausibility failure.
+DEFAULT_RANGE_GROUND_ADVISORY_M = 0.04
+# Lower edge of the band in which the down-range sensor is actually trustworthy.
+DEFAULT_MIN_RELIABLE_ZRANGE_M = 0.10
+# Upper edge of that band. Beyond it the VL53L1x loses the target and the optical-flow
+# velocity model (v = flow * h / k) amplifies height-dependent noise.
+DEFAULT_MAX_RELIABLE_ZRANGE_M = 0.50
 DMP_READINESS_LOG_TOPIC = "dmp_readiness"
 DMP_READINESS_LOG_VARIABLES = (
     "range.zrange",
@@ -180,11 +190,30 @@ class SupervisorInfo:
     deck_fault: bool
 
     @property
+    def arming_ready(self) -> bool:
+        """Whether the supervisor reports a state a supervised flight may start from.
+
+        Auto-arm firmware parks on the ground reporting ``armed=True`` together with
+        ``can_be_armed=False`` (raw ``526``). That is its normal standby state, so
+        ``can_be_armed`` alone must not be treated as the only arming precondition.
+        """
+        return self.can_be_armed or (self.auto_arm and self.armed)
+
+    @property
+    def unexpectedly_armed(self) -> bool:
+        """Armed without auto-arm: an explicit arm that was never disarmed.
+
+        Deliberately strict: in explicit-arm builds an armed vehicle on the ground is
+        an anomaly, and only ``auto_arm`` firmware is allowed to be armed at standby.
+        """
+        return self.armed and not self.auto_arm
+
+    @property
     def safe_for_preflight(self) -> bool:
         return (
-            self.can_be_armed
+            self.arming_ready
             and self.can_fly
-            and not self.armed
+            and not self.unexpectedly_armed
             and not self.flying
             and not self.tumbled
             and not self.locked
@@ -219,12 +248,67 @@ class ReadinessPolicy:
     max_abs_velocity_mps: float = 0.05
     max_speed_mps: float = 0.08
     range_stale_timeout_s: float = DEFAULT_RANGE_STALE_TIMEOUT_S
-    min_startup_zrange_m: float = 0.02
-    max_startup_zrange_m: float = 0.50
+    range_ground_advisory_m: float = DEFAULT_RANGE_GROUND_ADVISORY_M
+    min_reliable_zrange_m: float = DEFAULT_MIN_RELIABLE_ZRANGE_M
+    # Renamed from `max_startup_zrange_m`: the band describes where the down-range sensor is
+    # reliable, which is an airborne property, not a startup plausibility bound.
+    max_reliable_zrange_m: float = DEFAULT_MAX_RELIABLE_ZRANGE_M
     estimator_stale_timeout_s: float = DEFAULT_ESTIMATOR_STALE_TIMEOUT_S
     max_estimator_variance: float | None = None
     max_estimator_variance_span: float = 0.002
     minimum_estimator_sample_count: int = 5
+
+
+class ReadinessStage(StrEnum):
+    """Which gate consumes a readiness issue.
+
+    Ground launch safety may only rely on evidence that is independent of altitude and
+    optical-flow quality; anything derived from flow or from near-field ranging is only
+    meaningful once the vehicle has actually left the ground.
+    """
+
+    GROUND = "ground"
+    AIRBORNE = "airborne"
+    BOTH = "both"
+
+
+# Declared stage classification for every supervisor/deck issue code this module can emit.
+# These sets are the single source of truth for the Step 2.5 supervisor stage audit and are
+# asserted exhaustively against all 2**12 raw supervisor bit patterns by the regression
+# tests, so a newly decoded supervisor bit cannot silently inherit the wrong stage.
+GROUND_ONLY_SUPERVISOR_ISSUE_CODES: frozenset[str] = frozenset(
+    {
+        # Arming/handover state of a vehicle that has not taken off yet.
+        "supervisor_not_flyable",
+        "supervisor_armed",
+        "supervisor_flying",
+        "supervisor_high_level_active",
+    }
+)
+AIRBORNE_ONLY_SUPERVISOR_ISSUE_CODES: frozenset[str] = frozenset(
+    {
+        # `can_fly` is the handover-independent "the supervisor refuses to fly" bit.
+        "supervisor_cannot_fly",
+    }
+)
+BOTH_STAGE_SUPERVISOR_ISSUE_CODES: frozenset[str] = frozenset(
+    {
+        # Telemetry availability plus vehicle-terminal states: the vehicle may neither
+        # start nor continue a supervised flight.
+        "supervisor_missing",
+        "supervisor_locked",
+        "supervisor_tumbled",
+        "supervisor_crashed",
+        "deck_fault",
+    }
+)
+SUPERVISOR_ISSUE_STAGE: Mapping[str, ReadinessStage] = MappingProxyType(
+    {
+        **{code: ReadinessStage.GROUND for code in GROUND_ONLY_SUPERVISOR_ISSUE_CODES},
+        **{code: ReadinessStage.AIRBORNE for code in AIRBORNE_ONLY_SUPERVISOR_ISSUE_CODES},
+        **{code: ReadinessStage.BOTH for code in BOTH_STAGE_SUPERVISOR_ISSUE_CODES},
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,9 +316,17 @@ class ReadinessIssue:
     code: str
     message: str
     blocking: bool = True
+    # Default to BOTH so a newly added, unclassified issue is never silently dropped by
+    # either gate (fail-closed).
+    stage: ReadinessStage = ReadinessStage.BOTH
 
     def to_payload(self) -> dict[str, Any]:
-        return {"code": self.code, "message": self.message, "blocking": self.blocking}
+        return {
+            "code": self.code,
+            "message": self.message,
+            "blocking": self.blocking,
+            "stage": self.stage.value,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,9 +338,37 @@ class FlightReadiness:
     range: RangeTelemetry | None
     estimator_variance: EstimatorVarianceTelemetry | None
 
+    @property
+    def ground_issues(self) -> tuple[ReadinessIssue, ...]:
+        return tuple(
+            issue
+            for issue in self.issues
+            if issue.stage in (ReadinessStage.BOTH, ReadinessStage.GROUND)
+        )
+
+    @property
+    def airborne_issues(self) -> tuple[ReadinessIssue, ...]:
+        return tuple(
+            issue
+            for issue in self.issues
+            if issue.stage in (ReadinessStage.BOTH, ReadinessStage.AIRBORNE)
+        )
+
+    @property
+    def ground_passed(self) -> bool:
+        """Ground launch safety: only altitude/flow-independent evidence."""
+        return not any(issue.blocking for issue in self.ground_issues)
+
+    @property
+    def airborne_passed(self) -> bool:
+        """Post-takeoff stabilization: measurement quality is judged in the air."""
+        return not any(issue.blocking for issue in self.airborne_issues)
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "passed": self.passed,
+            "ground_passed": self.ground_passed,
+            "airborne_passed": self.airborne_passed,
             "issues": [issue.to_payload() for issue in self.issues],
             "supervisor": None if self.supervisor is None else self.supervisor.to_payload(),
             "velocity": None if self.velocity is None else _velocity_payload(self.velocity),
@@ -896,15 +1016,23 @@ def _flight_readiness(
             )
         )
     if supervisor is None:
-        issues.append(ReadinessIssue("supervisor_missing", "supervisor telemetry is unavailable"))
+        issues.append(
+            ReadinessIssue(
+                "supervisor_missing",
+                "supervisor telemetry is unavailable",
+                stage=ReadinessStage.BOTH,
+            )
+        )
     else:
         issues.extend(_supervisor_issues(supervisor))
     if not pose_stability.observed:
+        # Static XY/Z span comes from optical flow, which is only valid once airborne.
         reason = pose_stability.reason or "unknown"
         issues.append(
             ReadinessIssue(
                 "pose_stability_observation_missing",
                 f"pose stability observation incomplete: {reason}",
+                stage=ReadinessStage.AIRBORNE,
             )
         )
     elif not pose_stability.stable:
@@ -916,6 +1044,7 @@ def _flight_readiness(
                     f"xy_span={pose_stability.xy_span_m:.3f} m, "
                     f"z_span={pose_stability.z_span_m:.3f} m"
                 ),
+                stage=ReadinessStage.AIRBORNE,
             )
         )
     if velocity is None:
@@ -928,27 +1057,55 @@ def _flight_readiness(
         or abs(velocity.vz_mps) > policy.max_abs_velocity_mps
         or velocity.speed_mps > policy.max_speed_mps
     ):
+        # Flow-derived velocity is only meaningful once the vehicle is airborne.
         issues.append(
             ReadinessIssue(
                 "velocity_not_settled",
                 f"estimated speed {velocity.speed_mps:.3f} m/s exceeds static preflight policy",
+                stage=ReadinessStage.AIRBORNE,
             )
         )
     if zrange is None:
         issues.append(ReadinessIssue("range_unavailable", "down range telemetry is unavailable"))
     elif range_age_s is None or range_age_s > policy.range_stale_timeout_s:
         issues.append(ReadinessIssue("range_stale", "down range telemetry is stale"))
-    elif (
-        not math.isfinite(zrange.zrange_m)
-        or zrange.zrange_m < policy.min_startup_zrange_m
-        or zrange.zrange_m > policy.max_startup_zrange_m
-    ):
-        issues.append(
-            ReadinessIssue(
-                "range_invalid",
-                f"down range {zrange.zrange_m:g} m is outside plausible startup bounds",
+    elif not math.isfinite(zrange.zrange_m):
+        issues.append(ReadinessIssue("range_unavailable", "down range telemetry is not finite"))
+    else:
+        # A ground reading cannot validate a sensor whose reliable band starts near 4 cm,
+        # so the plausibility band is enforced airborne and the ground gate only reports
+        # the near-field reading as a non-blocking advisory.
+        if zrange.zrange_m > policy.max_reliable_zrange_m:
+            issues.append(
+                ReadinessIssue(
+                    "range_invalid",
+                    f"down range {zrange.zrange_m:g} m is above the reliable down-range band",
+                    stage=ReadinessStage.AIRBORNE,
+                )
             )
-        )
+        elif zrange.zrange_m < policy.min_reliable_zrange_m:
+            issues.append(
+                ReadinessIssue(
+                    "range_invalid",
+                    (
+                        f"down range {zrange.zrange_m:g} m is below the reliable down-range band "
+                        f"({policy.min_reliable_zrange_m:g} m)"
+                    ),
+                    stage=ReadinessStage.AIRBORNE,
+                )
+            )
+        if zrange.zrange_m < policy.range_ground_advisory_m:
+            issues.append(
+                ReadinessIssue(
+                    "range_ground_nearfield_unreliable",
+                    (
+                        f"down range {zrange.zrange_m:g} m is inside the {policy.range_ground_advisory_m:g} m "
+                        "near-field where the down-range sensor is not trustworthy"
+                    ),
+                    blocking=False,
+                    stage=ReadinessStage.GROUND,
+                )
+            )
     if estimator_variance is None:
         issues.append(ReadinessIssue("estimator_not_converged", "Kalman variance telemetry is unavailable"))
     elif estimator_variance_age_s is None or estimator_variance_age_s > policy.estimator_stale_timeout_s:
@@ -967,27 +1124,92 @@ def _flight_readiness(
 
 def _supervisor_issues(supervisor: SupervisorInfo) -> list[ReadinessIssue]:
     issues: list[ReadinessIssue] = []
-    if not supervisor.can_be_armed or not supervisor.can_fly:
-        issues.append(ReadinessIssue("supervisor_not_flyable", "supervisor does not report can_be_armed and can_fly"))
-    if supervisor.armed:
-        issues.append(ReadinessIssue("supervisor_armed", "supervisor reports the Crazyflie is already armed"))
+    # -- Ground-only arming-state checks ------------------------------------------------
+    # These describe the supervisor's *handover* state, i.e. whether a supervised flight
+    # may start from here. They must never be re-used as an airborne criterion: a vehicle
+    # that is legitimately under way reports armed=True, flying=True, can_be_armed=False
+    # (manual explicit-arm builds) and often active high-level control. Re-using
+    # `supervisor_not_flyable` in the air would therefore fault every normal flight.
+    if not supervisor.arming_ready or not supervisor.can_fly:
+        issues.append(
+            ReadinessIssue(
+                "supervisor_not_flyable",
+                (
+                    "supervisor does not report a ground arming state that may start "
+                    "a supervised flight"
+                ),
+                stage=ReadinessStage.GROUND,
+            )
+        )
+    if supervisor.unexpectedly_armed:
+        issues.append(
+            ReadinessIssue(
+                "supervisor_armed",
+                "supervisor reports the Crazyflie is already armed",
+                stage=ReadinessStage.GROUND,
+            )
+        )
     if supervisor.flying:
-        issues.append(ReadinessIssue("supervisor_flying", "supervisor reports the Crazyflie is already flying"))
-    if supervisor.locked:
-        issues.append(ReadinessIssue("supervisor_locked", "supervisor reports locked state"))
-    if supervisor.tumbled:
-        issues.append(ReadinessIssue("supervisor_tumbled", "supervisor reports tumbled state"))
-    if supervisor.crashed:
-        issues.append(ReadinessIssue("supervisor_crashed", "supervisor reports crashed state"))
+        issues.append(
+            ReadinessIssue(
+                "supervisor_flying",
+                "supervisor reports the Crazyflie is already flying",
+                stage=ReadinessStage.GROUND,
+            )
+        )
     if supervisor.high_level_control_active:
         issues.append(
             ReadinessIssue(
                 "supervisor_high_level_active",
                 "supervisor reports high-level control is already active",
+                stage=ReadinessStage.GROUND,
+            )
+        )
+    # -- Airborne-only supervision checks ----------------------------------------------
+    # `can_fly` is the only handover-independent safety bit: it means the supervisor
+    # itself refuses to fly. On the ground it is already covered by
+    # `supervisor_not_flyable`; in the air it needs its own explicitly named code.
+    if not supervisor.can_fly:
+        issues.append(
+            ReadinessIssue(
+                "supervisor_cannot_fly",
+                "supervisor reports the Crazyflie cannot fly",
+                stage=ReadinessStage.AIRBORNE,
+            )
+        )
+    # -- Vehicle-terminal states: never survivable on the ground or in the air ---------
+    if supervisor.locked:
+        issues.append(
+            ReadinessIssue(
+                "supervisor_locked",
+                "supervisor reports locked state",
+                stage=ReadinessStage.BOTH,
+            )
+        )
+    if supervisor.tumbled:
+        issues.append(
+            ReadinessIssue(
+                "supervisor_tumbled",
+                "supervisor reports tumbled state",
+                stage=ReadinessStage.BOTH,
+            )
+        )
+    if supervisor.crashed:
+        issues.append(
+            ReadinessIssue(
+                "supervisor_crashed",
+                "supervisor reports crashed state",
+                stage=ReadinessStage.BOTH,
             )
         )
     if supervisor.deck_fault:
-        issues.append(ReadinessIssue("deck_fault", "supervisor reports a deck hardware fault"))
+        issues.append(
+            ReadinessIssue(
+                "deck_fault",
+                "supervisor reports a deck hardware fault",
+                stage=ReadinessStage.BOTH,
+            )
+        )
     return issues
 
 
