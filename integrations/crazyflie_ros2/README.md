@@ -169,7 +169,9 @@ is the only place flow- and near-field-derived quality is enforced:
 
 Progress and events are visible in `get_cf8_acceptance`, and
 `metrics.stabilization` carries the strict-max window evidence
-(`min_zrange_m`, `max_abs_vx_mps`, `max_speed_mps`, `xy_span_m`, ...).
+(`min_zrange_m`, `max_abs_vx_mps`, `max_speed_mps`, `xy_span_m`, ...). A hard
+fault additionally stores the telemetry it fired on in `failure_telemetry`; see
+"Failure telemetry" below.
 
 `hardware_flight_enabled` is deliberately checked in as `false`. With that
 default, even a `run_cf8_acceptance` request cannot create an arm, takeoff or
@@ -332,6 +334,53 @@ The CF8 protocol is intentionally separate from mission execution:
 `cf8_acceptance_result`. The runner records an event timeline, origin pose,
 target Z, landing target, service-dispatch events, drift/error/speed/battery
 metrics and final telemetry.
+
+## Failure telemetry (`failure_telemetry`)
+
+When the in-flight health check detects a hard fault, the result also carries
+`failure_telemetry`: a compact snapshot of the telemetry at the instant the fault
+fired, so a superseded hardware attempt does not have to be repeated merely to
+learn what tripped it.
+
+```json
+"failure_telemetry": {
+  "captured_at_unix_s": 1790001038.35,
+  "battery_voltage": 3.69,
+  "battery_critical": true,
+  "battery_critical_voltage": 3.7,
+  "pm_state": 0,
+  "z_m": 0.004, "x_m": 0.59, "y_m": -1.75,
+  "velocity": {"vx_mps": 0.0, "vy_mps": 0.0, "vz_mps": 0.0, "speed_mps": 0.0},
+  "supervisor_info_raw": 526,
+  "supervisor": {"armed": true, "can_fly": true, "locked": false, "...": "..."},
+  "status_age_s": 0.31, "pose_age_s": 0.02,
+  "estimator_variance": {"kind": "velocity_covariance", "source": "kalman.varPX/PY/PZ",
+                         "var_px": 0.0001, "var_py": 0.0001, "var_pz": 0.0002},
+  "range": {"zrange_m": 0.0},
+  "positioning_mode": "flow", "connected": true, "pose_stream_available": true
+}
+```
+
+Contract:
+
+- **Observability only.** The snapshot is taken *after* a fault has already been
+  detected, so it cannot influence any verdict. No threshold, the
+  `battery_critical` rule, the controlled-landing path, the CF8 state machine and
+  the retry semantics are unchanged by it.
+- Every key is always present. A value that was unavailable at the triggering
+  instant is `null` rather than omitted, so a `status_lost` or `pose_lost` fault
+  still carries whatever telemetry was left.
+- The **first** fault of a run wins. A later detection does not overwrite it —
+  the landing loop deliberately tolerates a battery fault it re-detects while
+  descending, and reporting that partly-descended sample would hide the numbers
+  the run actually failed on.
+- A passing run always reports `failure_telemetry: null`, including the case
+  where a battery fault was tolerated during the landing phase.
+
+`metrics.min_battery_voltage` is *not* the same number: the failure returns from
+the health check before the metrics update, so it holds the last sample recorded
+before the fault, not the faulting one. Read `failure_telemetry.battery_voltage`
+for the triggering value.
 
 Takeoff and land heights are absolute Crazyswarm2/Crazyflie high-level
 commander heights. CF8 captures an acceptance-only origin at start and computes:

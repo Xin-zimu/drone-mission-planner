@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -896,6 +898,280 @@ def test_cf8_controlled_land_is_sent_once_and_never_emergency(
     assert "hover_started" not in _event_names(result)
 
 
+# --- Observability: telemetry snapshot taken at the triggering fault ------------------
+#
+# `failure_telemetry` exists so the single authorised hardware attempt does not have to be
+# repeated merely to learn the numbers that tripped a hard fault. It is observability only:
+# these tests pin both what it records and that recording it changes nothing else.
+
+#: Keys every snapshot must carry; extra keys are allowed so the schema may grow.
+REQUIRED_FAILURE_TELEMETRY_KEYS = frozenset(
+    {
+        "captured_at_unix_s",
+        "battery_voltage",
+        "battery_critical",
+        "battery_critical_voltage",
+        "pm_state",
+        "z_m",
+        "x_m",
+        "y_m",
+        "velocity",
+        "supervisor_info_raw",
+        "supervisor",
+        "status_age_s",
+        "pose_age_s",
+        "estimator_variance",
+        "range",
+        "positioning_mode",
+        "connected",
+        "pose_stream_available",
+    }
+)
+
+#: `_stabilizing_policy` lifts the vehicle to origin z (0.02) + 0.25, so the airborne
+#: snapshot must show 0.27 m rather than the ground origin.
+_FAKE_AIRBORNE_Z_M = 0.27
+
+
+def _run_cf8_with_stabilizing_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault: Callable[[Any], None],
+) -> tuple[Any, Any]:
+    """Run CF8 into STABILIZING, inject `fault` on the fake adapter, return (result, adapter)."""
+    clock = FakeClock()
+    adapter = FakeAcceptanceAdapter()
+    runner = cf8_acceptance.HardwareFlightAcceptanceRunner(
+        adapter,
+        policy=_stabilizing_policy(),
+        clock=clock,
+    )
+    original = adapter.telemetry_payload
+
+    def telemetry(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("flight_state") == "stabilizing":
+            fault(adapter)
+        return original(**kwargs)
+
+    monkeypatch.setattr(adapter, "telemetry_payload", telemetry)
+    monkeypatch.setattr(cf8_acceptance.asyncio, "sleep", clock.sleep)
+    return asyncio.run(runner.run()), adapter
+
+
+def test_cf8_battery_critical_failure_telemetry_saves_the_triggering_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The snapshot must hold the voltage that actually fired, not the threshold constant."""
+
+    def fault(adapter: Any) -> None:
+        # A deliberately distinctive value: nothing in the policy is 3.604 V.
+        adapter.battery_voltage = 3.604
+        adapter.battery_critical = True
+
+    result, adapter = _run_cf8_with_stabilizing_fault(monkeypatch, fault)
+
+    assert result.failure_code == "battery_critical"
+    snapshot = result.failure_telemetry
+    assert snapshot is not None
+    assert set(snapshot) >= REQUIRED_FAILURE_TELEMETRY_KEYS
+    assert snapshot["battery_voltage"] == pytest.approx(3.604)
+    assert snapshot["battery_critical"] is True
+    assert snapshot["battery_critical_voltage"] == pytest.approx(3.7)
+    assert snapshot["pm_state"] == 0
+    # The rest of the fault instant is preserved next to it.
+    assert snapshot["z_m"] == pytest.approx(_FAKE_AIRBORNE_Z_M)
+    assert snapshot["velocity"]["speed_mps"] == pytest.approx(0.0)
+    assert snapshot["supervisor"]["can_fly"] is True
+    assert snapshot["estimator_variance"]["var_px"] == pytest.approx(0.0001)
+    assert snapshot["range"]["zrange_m"] == pytest.approx(_FAKE_AIRBORNE_Z_M)
+    assert snapshot["positioning_mode"] == "flow"
+    # Observability only: the controlled-landing path is unchanged.
+    assert len(adapter.land_calls) == 1
+    assert adapter.emergency_calls == 0
+    # ...and it reaches the wire.
+    assert result.to_payload()["failure_telemetry"]["battery_voltage"] == pytest.approx(3.604)
+
+
+def test_cf8_supervisor_fault_failure_telemetry_records_available_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supervisor hard fault also stores supervisor raw + decoded flags and freshness."""
+
+    def fault(adapter: Any) -> None:
+        adapter.locked = True
+        adapter.status_age_s = 0.42
+        adapter.pose_age_s = 0.03
+
+    result, adapter = _run_cf8_with_stabilizing_fault(monkeypatch, fault)
+
+    assert result.failure_code == "supervisor_locked"
+    snapshot = result.failure_telemetry
+    assert snapshot is not None
+    assert set(snapshot) >= REQUIRED_FAILURE_TELEMETRY_KEYS
+    # can_be_armed|armed|can_fly|flying|locked, i.e. the fake's bitfield at that instant.
+    assert snapshot["supervisor_info_raw"] == 0x0001 | 0x0002 | 0x0008 | 0x0010 | 0x0040
+    assert snapshot["supervisor"]["locked"] is True
+    assert snapshot["supervisor"]["can_fly"] is True
+    assert snapshot["supervisor"]["tumbled"] is False
+    assert snapshot["status_age_s"] == pytest.approx(0.42)
+    assert snapshot["pose_age_s"] == pytest.approx(0.03)
+    assert snapshot["battery_voltage"] == pytest.approx(3.95)
+    assert snapshot["battery_critical"] is False
+    assert snapshot["z_m"] == pytest.approx(_FAKE_AIRBORNE_Z_M)
+    assert len(adapter.land_calls) == 1
+    assert adapter.emergency_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected_code", "lost_flag"),
+    [
+        pytest.param(
+            lambda adapter: setattr(adapter, "pose_stream_available", False),
+            "pose_lost",
+            "pose_stream_available",
+            id="pose_lost",
+        ),
+        pytest.param(
+            lambda adapter: setattr(adapter, "connected", False),
+            "status_lost",
+            "connected",
+            id="status_lost",
+        ),
+    ],
+)
+def test_cf8_stream_loss_failure_telemetry_keeps_the_available_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+    fault: Callable[[Any], None],
+    expected_code: str,
+    lost_flag: str,
+) -> None:
+    """A lost pose/status stream must still record whatever telemetry was left."""
+    result, adapter = _run_cf8_with_stabilizing_fault(monkeypatch, fault)
+
+    assert result.failure_code == expected_code
+    snapshot = result.failure_telemetry
+    assert snapshot is not None
+    assert set(snapshot) >= REQUIRED_FAILURE_TELEMETRY_KEYS
+    assert snapshot[lost_flag] is False
+    # The telemetry that was still available at that instant is kept, not dropped.
+    assert snapshot["battery_voltage"] == pytest.approx(3.95)
+    assert snapshot["z_m"] == pytest.approx(_FAKE_AIRBORNE_Z_M)
+    assert snapshot["x_m"] == pytest.approx(1.0)
+    assert snapshot["y_m"] == pytest.approx(2.0)
+    assert snapshot["velocity"]["vz_mps"] == pytest.approx(0.0)
+    assert snapshot["estimator_variance"]["var_pz"] == pytest.approx(0.0001)
+    assert snapshot["range"]["zrange_m"] == pytest.approx(_FAKE_AIRBORNE_Z_M)
+    assert snapshot["supervisor_info_raw"] is not None
+    assert len(adapter.land_calls) == 1
+    assert adapter.emergency_calls == 0
+
+
+def test_cf8_failure_telemetry_recording_does_not_change_the_failure_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A/B: swapping the snapshot builder must not move any decision or service call."""
+
+    def lock(adapter: Any) -> None:
+        adapter.locked = True
+
+    baseline, baseline_adapter = _run_cf8_with_stabilizing_fault(monkeypatch, lock)
+
+    monkeypatch.setattr(
+        cf8_acceptance,
+        "_failure_telemetry_snapshot",
+        lambda telemetry, *, wall_clock: {"synthetic": True},
+    )
+    patched, patched_adapter = _run_cf8_with_stabilizing_fault(monkeypatch, lock)
+
+    assert patched.failure_code == baseline.failure_code == "supervisor_locked"
+    assert [event.name for event in patched.events] == [event.name for event in baseline.events]
+    assert [event.monotonic_s for event in patched.events] == pytest.approx(
+        [event.monotonic_s for event in baseline.events]
+    )
+    assert len(patched_adapter.takeoff_calls) == len(baseline_adapter.takeoff_calls) == 1
+    assert len(patched_adapter.land_calls) == len(baseline_adapter.land_calls) == 1
+    assert patched_adapter.emergency_calls == baseline_adapter.emergency_calls == 0
+    assert patched_adapter.go_to_calls == baseline_adapter.go_to_calls == []
+    assert patched.failure_telemetry == {"synthetic": True}
+    assert baseline.failure_telemetry is not None
+    assert baseline.failure_telemetry["supervisor"]["locked"] is True
+
+
+def test_cf8_passing_run_has_no_failure_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The normal PASS path must not invent a fault snapshot."""
+    clock = FakeClock()
+    adapter = FakeAcceptanceAdapter()
+    runner = cf8_acceptance.HardwareFlightAcceptanceRunner(
+        adapter,
+        policy=_stabilizing_policy(),
+        clock=clock,
+    )
+    monkeypatch.setattr(cf8_acceptance.asyncio, "sleep", clock.sleep)
+
+    result = asyncio.run(runner.run())
+
+    assert result.passed is True
+    assert result.failure_code is None
+    assert result.failure_telemetry is None
+    assert result.to_payload()["failure_telemetry"] is None
+    assert len(adapter.land_calls) == 1
+    assert adapter.emergency_calls == 0
+
+
+def test_cf8_landing_tolerated_battery_fault_never_becomes_a_failure_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The landing loop deliberately ignores a battery fault; a PASS must stay clean.
+
+    This is the leak the `_pass()` contract guards: `_inflight_health_issue()` is reached
+    while descending, but that detection neither fails the run nor belongs in its result.
+    """
+    clock = FakeClock()
+    adapter = FakeAcceptanceAdapter()
+    runner = cf8_acceptance.HardwareFlightAcceptanceRunner(
+        adapter,
+        policy=_stabilizing_policy(),
+        clock=clock,
+    )
+    original = adapter.telemetry_payload
+
+    def telemetry(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("flight_state") == "landing":
+            adapter.battery_critical = True
+        return original(**kwargs)
+
+    monkeypatch.setattr(adapter, "telemetry_payload", telemetry)
+    monkeypatch.setattr(cf8_acceptance.asyncio, "sleep", clock.sleep)
+
+    result = asyncio.run(runner.run())
+
+    assert adapter.battery_critical is True
+    assert result.passed is True
+    assert result.failure_code is None
+    assert result.failure_telemetry is None
+    assert result.to_payload()["failure_telemetry"] is None
+    assert len(adapter.land_calls) == 1
+    assert adapter.emergency_calls == 0
+    assert "landed_confirmed" in _event_names(result)
+
+
+def test_cf8_failure_telemetry_survives_an_unknown_or_absent_telemetry_block() -> None:
+    """A snapshot taken from a sparse payload keeps its shape instead of raising."""
+    snapshot = cf8_acceptance._failure_telemetry_snapshot({"connected": False}, wall_clock=lambda: 1234.5)
+
+    assert set(snapshot) >= REQUIRED_FAILURE_TELEMETRY_KEYS
+    assert snapshot["captured_at_unix_s"] == pytest.approx(1234.5)
+    assert snapshot["connected"] is False
+    assert snapshot["battery_voltage"] is None
+    assert snapshot["z_m"] is None
+    assert snapshot["velocity"] is None
+    assert snapshot["supervisor"] is None
+    assert snapshot["supervisor_info_raw"] is None
+    assert snapshot["estimator_variance"] is None
+    assert snapshot["range"] is None
+    assert snapshot["battery_critical"] is None
+    assert json.loads(json.dumps(snapshot)) == snapshot
+
+
 def test_cf8_airborne_readiness_cannot_fly_breaks_stabilization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1146,6 +1422,16 @@ class FakeAcceptanceAdapter:
         self.vz_mps = 0.0
         self.speed_mps = 0.0
         self.pose_age_s = 0.0
+        self.status_age_s = 0.0
+        self.connected = True
+        self.pose_stream_available = True
+        # None means "derive from battery_critical": a healthy pack reads 3.95 V, a critical
+        # flag reads just under the threshold. Tests that care about the exact triggering
+        # value pin it explicitly.
+        self.battery_voltage: float | None = None
+        self.battery_critical_voltage = 3.7
+        self.pm_state = 0
+        self.positioning_mode = "flow"
         # None means "derive from the height": near field on the ground, real range airborne.
         self.zrange_m: float | None = None
         self.estimator_converged = True
@@ -1181,19 +1467,25 @@ class FakeAcceptanceAdapter:
     def disconnect(self) -> None:
         return None
 
+    def reported_battery_voltage(self) -> float:
+        """Self-consistent battery reading: an explicit value wins, otherwise derive it."""
+        if self.battery_voltage is not None:
+            return self.battery_voltage
+        return self.battery_critical_voltage - 0.01 if self.battery_critical else 3.95
+
     def capabilities(self) -> Any:
         return protocol_server.BridgeRobot(
             robot_id="cf231",
             connected=True,
-            positioning_mode="flow",
+            positioning_mode=self.positioning_mode,
             xy_positioning_available=True,
             z_positioning_available=True,
             pose_stream_available=True,
             pose_rate_hz=10.0,
             status_rate_hz=1.0,
-            battery_voltage=3.95,
-            battery_critical=False,
-            battery_critical_voltage=3.7,
+            battery_voltage=self.reported_battery_voltage(),
+            battery_critical=self.battery_critical,
+            battery_critical_voltage=self.battery_critical_voltage,
             status_age_s=0.0,
             pose_age_s=0.0,
             x_m=self.x_m,
@@ -1259,14 +1551,17 @@ class FakeAcceptanceAdapter:
         return {
             "type": "telemetry",
             "robot_id": "cf231",
-            "connected": True,
-            "pose_stream_available": True,
+            "connected": self.connected,
+            "pose_stream_available": self.pose_stream_available,
             "x_m": self.x_m,
             "y_m": self.y_m,
             "z_m": self.z_m,
-            "battery_voltage": 3.95,
+            "battery_voltage": self.reported_battery_voltage(),
             "battery_critical": self.battery_critical,
-            "status_age_s": 0.0,
+            "battery_critical_voltage": self.battery_critical_voltage,
+            "pm_state": self.pm_state,
+            "positioning_mode": self.positioning_mode,
+            "status_age_s": self.status_age_s,
             "pose_age_s": self.pose_age_s,
             "velocity": {
                 "vx_mps": self.vx_mps,

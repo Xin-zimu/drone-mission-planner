@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from itertools import pairwise
 from typing import Any, Protocol
@@ -353,6 +354,9 @@ class CF8AcceptanceResult:
     events: tuple[CF8AcceptanceEvent, ...]
     metrics: CF8AcceptanceMetrics
     final_telemetry: dict[str, Any] | None = None
+    #: Telemetry snapshot captured at the instant the first hard health fault was detected.
+    #: Observability only; ``None`` on a passing run.
+    failure_telemetry: dict[str, Any] | None = None
 
     def to_payload(self, *, request_id: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -371,6 +375,7 @@ class CF8AcceptanceResult:
             "events": [event.to_payload() for event in self.events],
             "metrics": self.metrics.to_payload(),
             "final_telemetry": self.final_telemetry,
+            "failure_telemetry": self.failure_telemetry,
         }
         return payload
 
@@ -416,6 +421,7 @@ class HardwareFlightAcceptanceRunner:
         self._landing_target_z_m: float | None = None
         self._preflight: dict[str, Any] = {}
         self._final_result: CF8AcceptanceResult | None = None
+        self._failure_telemetry: dict[str, Any] | None = None
 
     @property
     def final_result(self) -> CF8AcceptanceResult | None:
@@ -441,6 +447,8 @@ class HardwareFlightAcceptanceRunner:
 
     async def run(self) -> CF8AcceptanceResult:
         start = self.clock()
+        # A run never inherits a previous run's fault snapshot.
+        self._failure_telemetry = None
         try:
             self._event("cf8_preflight_started")
             preflight = self._preflight_recheck()
@@ -863,6 +871,37 @@ class HardwareFlightAcceptanceRunner:
         origin: CF8AcceptanceOrigin | None,
         target_z_m: float | None,
     ) -> CF8AcceptanceError | None:
+        """Detect a hard in-flight health fault and record what triggered it.
+
+        Observability wrapper: the detection rules below are unchanged, and the snapshot is
+        taken only *after* a fault has been detected, so it can never influence the verdict.
+
+        The **first** fault of a run wins. Later detections must not overwrite the
+        triggering instant: the landing loop deliberately tolerates a battery fault it sees
+        again while descending, and reporting that later, partly-descended sample would hide
+        the telemetry the fault actually fired on.
+        """
+        error = self._detect_inflight_health_issue(
+            telemetry,
+            session_id=session_id,
+            origin=origin,
+            target_z_m=target_z_m,
+        )
+        if error is not None and self._failure_telemetry is None:
+            self._failure_telemetry = _failure_telemetry_snapshot(
+                telemetry,
+                wall_clock=self.wall_clock,
+            )
+        return error
+
+    def _detect_inflight_health_issue(
+        self,
+        telemetry: dict[str, Any],
+        *,
+        session_id: str | None,
+        origin: CF8AcceptanceOrigin | None,
+        target_z_m: float | None,
+    ) -> CF8AcceptanceError | None:
         if self.adapter.session_id != session_id:
             return CF8AcceptanceError("hardware_session_changed", "hardware telemetry session changed")
         if not telemetry.get("connected", False):
@@ -946,6 +985,9 @@ class HardwareFlightAcceptanceRunner:
             events=tuple(self.events),
             metrics=self.metrics,
             final_telemetry=final_telemetry,
+            # A passing run must never carry a fault snapshot: `_land` tolerates a battery
+            # fault it re-detects while descending, which is not a failure of this run.
+            failure_telemetry=None,
         )
 
     def _fail(
@@ -973,6 +1015,7 @@ class HardwareFlightAcceptanceRunner:
             events=tuple(self.events),
             metrics=self.metrics,
             final_telemetry=final_telemetry,
+            failure_telemetry=self._failure_telemetry,
         )
 
 
@@ -988,6 +1031,86 @@ def _float_or_none(value: Any) -> float | None:
         return None
     parsed = float(value)
     return parsed if math.isfinite(parsed) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return value
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _sub_payload(source: Any, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    """Rebuild a nested telemetry block key by key, or ``None`` when it is absent.
+
+    Missing keys become ``None`` instead of disappearing, so a snapshot taken because a
+    stream went stale still has a stable, complete shape.
+    """
+    if not isinstance(source, dict):
+        return None
+    rebuilt: dict[str, Any] = {}
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, bool) or value is None or isinstance(value, str):
+            rebuilt[key] = value
+        else:
+            rebuilt[key] = _float_or_none(value)
+    return rebuilt
+
+
+def _failure_telemetry_snapshot(
+    telemetry: Mapping[str, Any],
+    *,
+    wall_clock: Callable[[], float],
+) -> dict[str, Any]:
+    """Compact, fixed-key snapshot of the telemetry that triggered a hard health fault.
+
+    Observability only: nothing here feeds a decision, and building it cannot raise or
+    change the outcome of ``_inflight_health_issue``. Every key is always present; a value
+    that was unavailable at the triggering instant (a stale status stream, an invalid pose,
+    a missing estimator payload) is recorded as ``None`` rather than omitted.
+    """
+    supervisor = telemetry.get("supervisor")
+    return {
+        "captured_at_unix_s": wall_clock(),
+        "battery_voltage": _float_or_none(telemetry.get("battery_voltage")),
+        "battery_critical": _bool_or_none(telemetry.get("battery_critical")),
+        "battery_critical_voltage": _float_or_none(telemetry.get("battery_critical_voltage")),
+        "pm_state": _int_or_none(telemetry.get("pm_state")),
+        "z_m": _float_or_none(telemetry.get("z_m")),
+        "x_m": _float_or_none(telemetry.get("x_m")),
+        "y_m": _float_or_none(telemetry.get("y_m")),
+        "velocity": _sub_payload(
+            telemetry.get("velocity"),
+            ("vx_mps", "vy_mps", "vz_mps", "speed_mps"),
+        ),
+        "supervisor_info_raw": _int_or_none(telemetry.get("supervisor_info_raw")),
+        # The decoded flag set exactly as the bridge decoded it from supervisor_info.
+        "supervisor": (
+            {str(key): value for key, value in supervisor.items()}
+            if isinstance(supervisor, dict)
+            else None
+        ),
+        "status_age_s": _float_or_none(telemetry.get("status_age_s")),
+        "pose_age_s": _float_or_none(telemetry.get("pose_age_s")),
+        "estimator_variance": _sub_payload(
+            telemetry.get("estimator_variance"),
+            ("kind", "source", "var_px", "var_py", "var_pz"),
+        ),
+        "range": _sub_payload(telemetry.get("range"), ("zrange_m",)),
+        "positioning_mode": (
+            telemetry.get("positioning_mode")
+            if isinstance(telemetry.get("positioning_mode"), str)
+            else None
+        ),
+        # Stream health at the triggering instant, so a fault caused by a lost stream is
+        # distinguishable from a fault caused by a bad value on a healthy stream.
+        "connected": _bool_or_none(telemetry.get("connected")),
+        "pose_stream_available": _bool_or_none(telemetry.get("pose_stream_available")),
+    }
 
 
 def _supervisor_bool(telemetry: dict[str, Any], key: str) -> bool:
