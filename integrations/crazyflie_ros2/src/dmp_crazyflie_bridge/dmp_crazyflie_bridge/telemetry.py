@@ -28,18 +28,35 @@ DEFAULT_MIN_RELIABLE_ZRANGE_M = 0.10
 # velocity model (v = flow * h / k) amplifies height-dependent noise.
 DEFAULT_MAX_RELIABLE_ZRANGE_M = 0.50
 DMP_READINESS_LOG_TOPIC = "dmp_readiness"
+# NOTE (CF8.1 step 3.6): these are the Bitcraze Kalman **velocity** covariance variables
+# (kalman.varPX/varPY/varPZ). The official cflib helper ``wait_for_position_estimator()``
+# gates on exactly these. They used to be kalman.varX/varY/varZ, which are the *position*
+# covariance: with flow-only positioning that quantity grows to the firmware's
+# MAX_COVARIANCE ceiling and then sits there with a zero span, so a span-based convergence
+# test degenerated into "always converged". The block layout and byte size are unchanged.
 DMP_READINESS_LOG_VARIABLES = (
     "range.zrange",
-    "kalman.varX",
-    "kalman.varY",
-    "kalman.varZ",
+    "kalman.varPX",
+    "kalman.varPY",
+    "kalman.varPZ",
 )
 DMP_READINESS_RANGE_MM_INDEX = 0
-DMP_READINESS_VAR_X_INDEX = 1
-DMP_READINESS_VAR_Y_INDEX = 2
-DMP_READINESS_VAR_Z_INDEX = 3
+DMP_READINESS_VAR_PX_INDEX = 1
+DMP_READINESS_VAR_PY_INDEX = 2
+DMP_READINESS_VAR_PZ_INDEX = 3
 DMP_READINESS_LOG_BLOCK_BYTES = 14
 CRAZYFLIE_LOG_MAX_BYTES = 26
+# Explicit wire-contract markers so a consumer can never silently read velocity covariance
+# as if it were position covariance.
+DMP_ESTIMATOR_COVARIANCE_KIND = "velocity_covariance"
+DMP_ESTIMATOR_COVARIANCE_SOURCE = "kalman.varPX/PY/PZ"
+DMP_ESTIMATOR_LOG_VARIABLES = ("kalman.varPX", "kalman.varPY", "kalman.varPZ")
+# The Crazyflie Kalman estimator clamps its covariance diagonal at MAX_COVARIANCE. A value
+# pinned near that ceiling means "no aiding", not "converged", so a stable saturated value
+# must fail closed. The guard is deliberately loose (half the ceiling): healthy velocity
+# covariance measured on cf231 is 1.2e-4 .. 2.4e-4, five orders of magnitude below it.
+DEFAULT_ESTIMATOR_MAX_COVARIANCE = 100.0
+DEFAULT_ESTIMATOR_SATURATION_FRACTION = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,18 +176,41 @@ class RangeTelemetry:
 
 @dataclass(frozen=True, slots=True)
 class EstimatorVarianceTelemetry:
+    """Kalman **velocity** covariance sample (kalman.varPX/varPY/varPZ)."""
+
     monotonic_s: float
-    var_x: float
-    var_y: float
-    var_z: float
+    var_px: float
+    var_py: float
+    var_pz: float
+
+    @property
+    def peak(self) -> float:
+        return max(self.var_px, self.var_py, self.var_pz)
 
 
 @dataclass(frozen=True, slots=True)
 class DmpReadinessLogSample:
     zrange_m: float
-    var_x: float
-    var_y: float
-    var_z: float
+    var_px: float
+    var_py: float
+    var_pz: float
+
+
+def estimator_covariance_payload(variance: EstimatorVarianceTelemetry) -> dict[str, Any]:
+    """Serialise Kalman covariance with an explicit kind/source contract.
+
+    ``var_x`` / ``var_y`` / ``var_z`` are deliberately **not** emitted: those names carried
+    position-covariance semantics and reusing them for velocity covariance would silently
+    change their meaning for any consumer.
+    """
+    return {
+        "kind": DMP_ESTIMATOR_COVARIANCE_KIND,
+        "source": DMP_ESTIMATOR_COVARIANCE_SOURCE,
+        "variables": list(DMP_ESTIMATOR_LOG_VARIABLES),
+        "var_px": variance.var_px,
+        "var_py": variance.var_py,
+        "var_pz": variance.var_pz,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +297,11 @@ class ReadinessPolicy:
     max_estimator_variance: float | None = None
     max_estimator_variance_span: float = 0.002
     minimum_estimator_sample_count: int = 5
+    # Saturation fail-closed: values at or above
+    # ``estimator_max_covariance * estimator_saturation_fraction`` are never "converged",
+    # however stable they look. This only catches the degenerate "stably saturated" case.
+    estimator_max_covariance: float = DEFAULT_ESTIMATOR_MAX_COVARIANCE
+    estimator_saturation_fraction: float = DEFAULT_ESTIMATOR_SATURATION_FRACTION
 
 
 class ReadinessStage(StrEnum):
@@ -375,11 +420,7 @@ class FlightReadiness:
             "range": None if self.range is None else {"zrange_m": self.range.zrange_m},
             "estimator_variance": None
             if self.estimator_variance is None
-            else {
-                "var_x": self.estimator_variance.var_x,
-                "var_y": self.estimator_variance.var_y,
-                "var_z": self.estimator_variance.var_z,
-            },
+            else estimator_covariance_payload(self.estimator_variance),
         }
 
 
@@ -497,11 +538,7 @@ class TelemetrySnapshot:
             "range": None if self.range is None else {"zrange_m": self.range.zrange_m},
             "estimator_variance": None
             if self.estimator_variance is None
-            else {
-                "var_x": self.estimator_variance.var_x,
-                "var_y": self.estimator_variance.var_y,
-                "var_z": self.estimator_variance.var_z,
-            },
+            else estimator_covariance_payload(self.estimator_variance),
             "telemetry_sources": {
                 "status": self.status_source,
                 "pose": self.pose_source,
@@ -607,17 +644,18 @@ class TelemetryCollector:
 
     def record_estimator_variance(
         self,
-        var_x: float,
-        var_y: float,
-        var_z: float,
+        var_px: float,
+        var_py: float,
+        var_pz: float,
         *,
         source: str | None = None,
     ) -> None:
+        """Record one Kalman **velocity** covariance sample (kalman.varPX/varPY/varPZ)."""
         sample = EstimatorVarianceTelemetry(
             monotonic_s=self.clock(),
-            var_x=float(var_x),
-            var_y=float(var_y),
-            var_z=float(var_z),
+            var_px=float(var_px),
+            var_py=float(var_py),
+            var_pz=float(var_pz),
         )
         with self._lock:
             self._latest_estimator_variance = sample
@@ -635,9 +673,9 @@ class TelemetryCollector:
         range_sample = RangeTelemetry(monotonic_s=monotonic_s, zrange_m=sample.zrange_m)
         variance_sample = EstimatorVarianceTelemetry(
             monotonic_s=monotonic_s,
-            var_x=sample.var_x,
-            var_y=sample.var_y,
-            var_z=sample.var_z,
+            var_px=sample.var_px,
+            var_py=sample.var_py,
+            var_pz=sample.var_pz,
         )
         log_source = source or f"/{self.robot_id}/{DMP_READINESS_LOG_TOPIC}"
         with self._lock:
@@ -811,18 +849,20 @@ def parse_dmp_readiness_log_values(values: Sequence[Any]) -> DmpReadinessLogSamp
     if not all(math.isfinite(value) for value in parsed):
         raise ValueError(f"{DMP_READINESS_LOG_TOPIC} contains NaN or infinite values")
     zrange_mm = parsed[DMP_READINESS_RANGE_MM_INDEX]
-    var_x = parsed[DMP_READINESS_VAR_X_INDEX]
-    var_y = parsed[DMP_READINESS_VAR_Y_INDEX]
-    var_z = parsed[DMP_READINESS_VAR_Z_INDEX]
+    var_px = parsed[DMP_READINESS_VAR_PX_INDEX]
+    var_py = parsed[DMP_READINESS_VAR_PY_INDEX]
+    var_pz = parsed[DMP_READINESS_VAR_PZ_INDEX]
     if zrange_mm < 0.0:
         raise ValueError(f"{DMP_READINESS_LOG_TOPIC} range.zrange must be non-negative millimeters")
-    if var_x < 0.0 or var_y < 0.0 or var_z < 0.0:
-        raise ValueError(f"{DMP_READINESS_LOG_TOPIC} Kalman variances must be non-negative")
+    if var_px < 0.0 or var_py < 0.0 or var_pz < 0.0:
+        raise ValueError(
+            f"{DMP_READINESS_LOG_TOPIC} Kalman velocity covariances must be non-negative"
+        )
     return DmpReadinessLogSample(
         zrange_m=zrange_mm / 1000.0,
-        var_x=var_x,
-        var_y=var_y,
-        var_z=var_z,
+        var_px=var_px,
+        var_py=var_py,
+        var_pz=var_pz,
     )
 
 
@@ -1107,9 +1147,25 @@ def _flight_readiness(
                 )
             )
     if estimator_variance is None:
-        issues.append(ReadinessIssue("estimator_not_converged", "Kalman variance telemetry is unavailable"))
+        issues.append(
+            ReadinessIssue(
+                "estimator_not_converged",
+                (
+                    "Kalman velocity covariance telemetry is unavailable "
+                    f"({DMP_ESTIMATOR_COVARIANCE_SOURCE})"
+                ),
+            )
+        )
     elif estimator_variance_age_s is None or estimator_variance_age_s > policy.estimator_stale_timeout_s:
-        issues.append(ReadinessIssue("estimator_not_converged", "Kalman variance telemetry is stale"))
+        issues.append(
+            ReadinessIssue(
+                "estimator_not_converged",
+                (
+                    "Kalman velocity covariance telemetry is stale "
+                    f"({DMP_ESTIMATOR_COVARIANCE_SOURCE})"
+                ),
+            )
+        )
     else:
         issues.extend(_estimator_variance_issues(estimator_variance_samples, policy))
     return FlightReadiness(
@@ -1217,27 +1273,56 @@ def _estimator_variance_issues(
     samples: tuple[EstimatorVarianceTelemetry, ...],
     policy: ReadinessPolicy,
 ) -> list[ReadinessIssue]:
+    """Judge Kalman **velocity** covariance convergence (kalman.varPX/varPY/varPZ).
+
+    Three independent ways to fail closed, checked in this order:
+
+    1. **Saturation** - a value at or above ``estimator_max_covariance *
+       estimator_saturation_fraction`` is refused no matter how stable it looks. The
+       firmware clamps its covariance diagonal, so a pinned value near the ceiling means
+       "the filter is receiving no aiding", not "the filter converged". This is checked
+       before the span test precisely because a saturated value has span 0.
+    2. **Span** - ``max(span) > max_estimator_variance_span`` means the covariance is not
+       settling.
+    3. **Absolute ceiling** - optional ``max_estimator_variance``, unset by default.
+    """
     if len(samples) < policy.minimum_estimator_sample_count:
-        return [ReadinessIssue("estimator_not_converged", "not enough Kalman variance samples")]
-    xs = [sample.var_x for sample in samples]
-    ys = [sample.var_y for sample in samples]
-    zs = [sample.var_z for sample in samples]
-    all_values = (*xs, *ys, *zs)
+        return [ReadinessIssue("estimator_not_converged", "not enough Kalman covariance samples")]
+    pxs = [sample.var_px for sample in samples]
+    pys = [sample.var_py for sample in samples]
+    pzs = [sample.var_pz for sample in samples]
+    all_values = (*pxs, *pys, *pzs)
     if not all(math.isfinite(value) and value >= 0.0 for value in all_values):
-        return [ReadinessIssue("estimator_not_converged", "Kalman variance contains invalid values")]
-    max_span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+        return [
+            ReadinessIssue("estimator_not_converged", "Kalman velocity covariance is invalid")
+        ]
+    peak = max(all_values)
+    saturation_limit = policy.estimator_max_covariance * policy.estimator_saturation_fraction
+    if peak >= saturation_limit:
+        return [
+            ReadinessIssue(
+                "estimator_not_converged",
+                (
+                    f"Kalman velocity covariance {peak:g} is at or above the saturation guard "
+                    f"{saturation_limit:g} "
+                    f"({policy.estimator_saturation_fraction:g} of the firmware ceiling "
+                    f"{policy.estimator_max_covariance:g}): saturated, not converged"
+                ),
+            )
+        ]
+    max_span = max(max(pxs) - min(pxs), max(pys) - min(pys), max(pzs) - min(pzs))
     if max_span > policy.max_estimator_variance_span:
         return [
             ReadinessIssue(
                 "estimator_not_converged",
-                f"Kalman variance span {max_span:g} exceeds DMP stability policy",
+                f"Kalman velocity covariance span {max_span:g} exceeds DMP stability policy",
             )
         ]
-    if policy.max_estimator_variance is not None and max(all_values) > policy.max_estimator_variance:
+    if policy.max_estimator_variance is not None and peak > policy.max_estimator_variance:
         return [
             ReadinessIssue(
                 "estimator_not_converged",
-                "Kalman variance exceeds configured maximum",
+                "Kalman velocity covariance exceeds configured maximum",
             )
         ]
     return []

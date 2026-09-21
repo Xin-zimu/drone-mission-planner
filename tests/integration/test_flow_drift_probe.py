@@ -133,7 +133,9 @@ def test_probe_readiness_report_converts_millimetres_and_spans() -> None:
     store = probe.ProbeStore()
     for index in range(6):
         store.readiness.append(
-            probe.LogSample(monotonic_s=index * 0.1, values=(8.0 + index, 100.0, 100.0, 3e-6))
+            probe.LogSample(
+                monotonic_s=index * 0.1, values=(8.0 + index, 1.2e-4, 1.3e-4, 1.7e-4)
+            )
         )
 
     report = probe._readiness_report(store)
@@ -142,9 +144,21 @@ def test_probe_readiness_report_converts_millimetres_and_spans() -> None:
     assert report["zrange_min_m"] == pytest.approx(0.008)
     assert report["zrange_max_m"] == pytest.approx(0.013)
     assert report["zrange_last_m"] == pytest.approx(0.013)
-    assert report["var_x_last"] == pytest.approx(100.0)
-    assert report["var_x_span"] == 0.0
-    assert report["var_z_span"] == 0.0
+    # Step 3.6: velocity covariance (varPX/PY/PZ), explicitly marked as such.
+    assert report["variables"] == [
+        "range.zrange",
+        "kalman.varPX",
+        "kalman.varPY",
+        "kalman.varPZ",
+    ]
+    assert report["estimator_covariance_kind"] == "velocity_covariance"
+    assert report["estimator_covariance_source"] == "kalman.varPX/PY/PZ"
+    assert report["var_px_last"] == pytest.approx(1.2e-4)
+    assert report["var_py_last"] == pytest.approx(1.3e-4)
+    assert report["var_pz_last"] == pytest.approx(1.7e-4)
+    assert report["var_px_span"] == pytest.approx(0.0)
+    assert report["var_pz_span"] == pytest.approx(0.0)
+    assert "var_x_last" not in report
 
 
 def test_probe_flow_report_parses_quality_and_motion_flags() -> None:

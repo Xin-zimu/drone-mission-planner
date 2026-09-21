@@ -12,13 +12,18 @@ all:
       odom:
         frequency: 10
     custom_topics:
+      # kalman.varPX/varPY/varPZ are the Kalman VELOCITY covariance, which is what the
+      # official cflib wait_for_position_estimator() gates on. kalman.varX/varY/varZ are
+      # the position covariance: under flow-only positioning they grow to the firmware
+      # MAX_COVARIANCE ceiling and then sit there with zero span, so they cannot be used
+      # as a convergence signal.
       dmp_readiness:
         frequency: 10
         vars:
           - range.zrange
-          - kalman.varX
-          - kalman.varY
-          - kalman.varZ
+          - kalman.varPX
+          - kalman.varPY
+          - kalman.varPZ
 
 robots:
   cf231:

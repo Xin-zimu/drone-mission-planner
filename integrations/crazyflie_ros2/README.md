@@ -200,13 +200,15 @@ all:
       odom:
         frequency: 10
     custom_topics:
+      # kalman.varPX/varPY/varPZ are the Kalman VELOCITY covariance — see the estimator
+      # convergence note below. Do NOT swap these back to kalman.varX/varY/varZ.
       dmp_readiness:
         frequency: 10
         vars:
           - range.zrange
-          - kalman.varX
-          - kalman.varY
-          - kalman.varZ
+          - kalman.varPX
+          - kalman.varPY
+          - kalman.varPZ
       # Optional local diagnostic: raw Flow deck v2 (PMW3901) quality/motion data.
       # Must stay on its OWN topic — see the block-size note below.
       dmp_flow:
@@ -220,7 +222,7 @@ all:
 
 A complete DMP-owned example is checked in at
 `config/crazyflies.dmp.example.yaml`. The `dmp_readiness` custom log block is 14 bytes
-(`range.zrange` as `uint16`, plus three `float32` Kalman variances), below the
+(`range.zrange` as `uint16`, plus three `float32` Kalman covariances), below the
 Crazyflie firmware log-block limit of 26 bytes.
 
 > **Do not add variables to `dmp_readiness`.** The bridge parses its `values` list
@@ -238,10 +240,54 @@ Live topic contract for `cf231`:
   `motion.deltaX`, `motion.deltaY`, `motion.motion`, `motion.squal`)
 
 The `dmp_readiness.values` order is exactly
-`range.zrange`, `kalman.varX`, `kalman.varY`, `kalman.varZ`. Firmware
+`range.zrange`, `kalman.varPX`, `kalman.varPY`, `kalman.varPZ`. Firmware
 `range.zrange` is millimeters; the bridge converts it to meters before applying
 startup down-range policy. Missing, stale, malformed, NaN/Inf or negative samples
 are ignored or reported as blocking readiness diagnostics rather than guessed.
+
+### Estimator convergence uses Kalman **velocity** covariance
+
+`estimator_not_converged` is judged from `kalman.varPX/varPY/varPZ`, the Kalman **velocity**
+covariance, which is the same source the official cflib `wait_for_position_estimator()`
+gates on. It is **not** `kalman.varX/varY/varZ`: those are the **position** covariance, and
+with flow-only positioning they grow to the firmware `MAX_COVARIANCE` ceiling and then sit
+there with a span of exactly zero. Measured on `cf231` the position covariance read
+`varX = varY = 99.9995` with `span = 0` while the velocity covariance read
+`varPX/PY ≈ 1.2e-4 .. 2.4e-4` — a span-based test on the former could only ever report
+"converged".
+
+Two independent fail-closed conditions are applied, in this order:
+
+1. **Saturation guard** — a value at or above
+   `estimator_max_covariance * estimator_saturation_fraction` (defaults `100.0 * 0.5 = 50.0`)
+   is refused *however stable it looks*. A clamped value pinned near the ceiling means "no
+   aiding is reaching the filter", not "the filter converged". This is checked before the
+   span test precisely because a saturated value has span 0. The guard is deliberately
+   loose: healthy velocity covariance is 5 orders of magnitude below it.
+2. **Span policy** — `max(varPX/varPY/varPZ span) > max_estimator_variance_span`
+   (default `0.002`, unchanged) means the covariance is not settling.
+3. Optionally, `max_estimator_variance` as an absolute ceiling — unset by default.
+
+`max_estimator_variance_span` was **not** retuned when the variable changed.
+
+#### Wire contract: `estimator_variance` is explicitly typed
+
+Because the underlying variables changed meaning, the telemetry payload no longer emits the
+ambiguous `var_x` / `var_y` / `var_z` keys. It now emits:
+
+```json
+"estimator_variance": {
+  "kind": "velocity_covariance",
+  "source": "kalman.varPX/PY/PZ",
+  "variables": ["kalman.varPX", "kalman.varPY", "kalman.varPZ"],
+  "var_px": 0.000152,
+  "var_py": 0.000153,
+  "var_pz": 0.000199
+}
+```
+
+The CF8 stabilization gate requires `kind == "velocity_covariance"` and finite
+`var_px`/`var_py`/`var_pz`; anything else fails closed as `estimator_not_converged`.
 
 ## Static Drift Diagnostics
 

@@ -23,6 +23,8 @@ from .protocol_models import (
     encode_message,
 )
 from .telemetry import (
+    DEFAULT_ESTIMATOR_MAX_COVARIANCE,
+    DEFAULT_ESTIMATOR_SATURATION_FRACTION,
     DEFAULT_MAX_RELIABLE_ZRANGE_M,
     DEFAULT_MIN_RELIABLE_ZRANGE_M,
     DEFAULT_RANGE_GROUND_ADVISORY_M,
@@ -140,6 +142,20 @@ class BridgeProtocolServer:
             ),
             max_estimator_variance=_config_optional_float(config, "max_estimator_variance", minimum=0.0),
             max_estimator_variance_span=_config_float(config, "max_estimator_variance_span", 0.002, minimum=0.0),
+            estimator_max_covariance=_config_float(
+                config,
+                "estimator_max_covariance",
+                DEFAULT_ESTIMATOR_MAX_COVARIANCE,
+                minimum=0.0,
+                inclusive=False,
+            ),
+            estimator_saturation_fraction=_config_float(
+                config,
+                "estimator_saturation_fraction",
+                DEFAULT_ESTIMATOR_SATURATION_FRACTION,
+                minimum=0.0,
+                inclusive=False,
+            ),
             minimum_estimator_sample_count=_config_int(config, "minimum_estimator_sample_count", 5, minimum=1),
         )
         if readiness_policy.max_reliable_zrange_m <= readiness_policy.min_reliable_zrange_m:

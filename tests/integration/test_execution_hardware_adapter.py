@@ -1257,21 +1257,213 @@ def test_readiness_payload_exposes_stage_and_partitioned_verdicts() -> None:
 
 def test_dmp_readiness_log_contract_order_and_unit_conversion() -> None:
     assert telemetry.DMP_READINESS_LOG_TOPIC == "dmp_readiness"
+    # Step 3.6: Kalman VELOCITY covariance (cflib wait_for_position_estimator source).
     assert telemetry.DMP_READINESS_LOG_VARIABLES == (
         "range.zrange",
-        "kalman.varX",
-        "kalman.varY",
-        "kalman.varZ",
+        "kalman.varPX",
+        "kalman.varPY",
+        "kalman.varPZ",
     )
+    assert telemetry.DMP_ESTIMATOR_LOG_VARIABLES == (
+        "kalman.varPX",
+        "kalman.varPY",
+        "kalman.varPZ",
+    )
+    assert telemetry.DMP_ESTIMATOR_COVARIANCE_KIND == "velocity_covariance"
+    assert telemetry.DMP_ESTIMATOR_COVARIANCE_SOURCE == "kalman.varPX/PY/PZ"
+    # The block is still 14 bytes: uint16 range + three float32 covariances.
     assert telemetry.DMP_READINESS_LOG_BLOCK_BYTES == 14
     assert telemetry.DMP_READINESS_LOG_BLOCK_BYTES <= telemetry.CRAZYFLIE_LOG_MAX_BYTES
+    assert telemetry.DMP_READINESS_RANGE_MM_INDEX == 0
+    assert telemetry.DMP_READINESS_VAR_PX_INDEX == 1
+    assert telemetry.DMP_READINESS_VAR_PY_INDEX == 2
+    assert telemetry.DMP_READINESS_VAR_PZ_INDEX == 3
 
     sample = telemetry.parse_dmp_readiness_log_values((300.0, 0.001, 0.002, 0.003))
 
     assert sample.zrange_m == 0.3
-    assert sample.var_x == 0.001
-    assert sample.var_y == 0.002
-    assert sample.var_z == 0.003
+    assert sample.var_px == 0.001
+    assert sample.var_py == 0.002
+    assert sample.var_pz == 0.003
+
+
+def test_estimator_covariance_payload_is_explicitly_velocity_not_position() -> None:
+    """Step 3.6: the wire payload must not reuse the old position-covariance names."""
+    variance = telemetry.EstimatorVarianceTelemetry(
+        monotonic_s=0.0, var_px=0.0001, var_py=0.0002, var_pz=0.0003
+    )
+
+    payload = telemetry.estimator_covariance_payload(variance)
+
+    assert payload["kind"] == "velocity_covariance"
+    assert payload["source"] == "kalman.varPX/PY/PZ"
+    assert payload["variables"] == ["kalman.varPX", "kalman.varPY", "kalman.varPZ"]
+    assert payload["var_px"] == pytest.approx(0.0001)
+    assert payload["var_py"] == pytest.approx(0.0002)
+    assert payload["var_pz"] == pytest.approx(0.0003)
+    # The legacy position-covariance names must be gone: keeping them would silently
+    # change their meaning for any consumer.
+    assert "var_x" not in payload
+    assert "var_y" not in payload
+    assert "var_z" not in payload
+    assert variance.peak == pytest.approx(0.0003)
+
+
+def test_telemetry_payload_marks_estimator_covariance_kind_and_source() -> None:
+    clock = FakeClock()
+    collector = _ready_collector(clock)
+    collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+    collector.record_readiness_log_values((HEALTHY_ZRANGE_MM, 0.0001, 0.0002, 0.0003))
+
+    payload = collector.snapshot().to_telemetry_payload()
+
+    assert payload["estimator_variance"]["kind"] == "velocity_covariance"
+    assert payload["estimator_variance"]["source"] == "kalman.varPX/PY/PZ"
+    assert payload["estimator_variance"]["var_px"] == pytest.approx(0.0001)
+    assert "var_x" not in payload["estimator_variance"]
+
+
+# --- Step 3.6 estimator convergence (kalman.varPX/varPY/varPZ) -------------------------
+#
+# The convergence check reads the Kalman VELOCITY covariance, i.e. the same source the
+# official cflib ``wait_for_position_estimator()`` gates on. On real hardware the position
+# covariance (varX/varY) saturates at the firmware ceiling with a zero span, so a
+# span-based test on those variables degenerated into "always converged".
+
+
+def _variance_samples(
+    *,
+    var_px: float,
+    var_py: float | None = None,
+    var_pz: float | None = None,
+    samples: int = 60,
+    step_s: float = 0.1,
+) -> tuple[Any, ...]:
+    py = var_px if var_py is None else var_py
+    pz = var_px if var_pz is None else var_pz
+    return tuple(
+        telemetry.EstimatorVarianceTelemetry(
+            monotonic_s=index * step_s, var_px=var_px, var_py=py, var_pz=pz
+        )
+        for index in range(samples)
+    )
+
+
+def _estimator_codes(samples: tuple[Any, ...]) -> list[str]:
+    return [
+        issue.code
+        for issue in telemetry._estimator_variance_issues(samples, telemetry.ReadinessPolicy())
+    ]
+
+
+def test_small_stable_velocity_covariance_is_converged() -> None:
+    """Healthy cf231 data: varP ~1.2e-4 .. 2.4e-4 with a tiny span -> PASS."""
+    samples = tuple(
+        telemetry.EstimatorVarianceTelemetry(
+            monotonic_s=index * 0.1,
+            var_px=0.00012 + index * 0.000002,
+            var_py=0.00013 + index * 0.000002,
+            var_pz=0.00017 + index * 0.000001,
+        )
+        for index in range(60)
+    )
+
+    assert _estimator_codes(samples) == []
+
+
+def test_velocity_covariance_span_above_policy_is_not_converged() -> None:
+    samples = tuple(
+        telemetry.EstimatorVarianceTelemetry(
+            monotonic_s=index * 0.1,
+            var_px=0.0001 + (0.003 if index % 2 else 0.0),
+            var_py=0.0001,
+            var_pz=0.0001,
+        )
+        for index in range(60)
+    )
+
+    assert _estimator_codes(samples) == ["estimator_not_converged"]
+
+
+def test_saturated_velocity_covariance_with_zero_span_fails_closed() -> None:
+    """Regression: stable saturation must never read as convergence.
+
+    This is the failure mode that made the old varX/varY check useless: the value sits at
+    the firmware ceiling with span exactly 0.
+    """
+    policy = telemetry.ReadinessPolicy()
+    saturated = policy.estimator_max_covariance  # 100.0, the firmware ceiling
+
+    codes = _estimator_codes(_variance_samples(var_px=saturated))
+    assert codes == ["estimator_not_converged"]
+
+    # ...including exactly at the saturation guard and just above it.
+    guard = saturated * policy.estimator_saturation_fraction
+    assert _estimator_codes(_variance_samples(var_px=guard)) == ["estimator_not_converged"]
+    assert _estimator_codes(_variance_samples(var_px=guard - 1e-6)) == []
+
+    issues = telemetry._estimator_variance_issues(
+        _variance_samples(var_px=saturated), policy
+    )
+    assert "saturated, not converged" in issues[0].message
+
+
+def test_stale_nan_and_infinite_velocity_covariance_fail_closed() -> None:
+    clock = FakeClock()
+    collector = _ready_collector(clock)
+    for _ in range(60):
+        collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+        collector.record_pose(FakePose(0.0, 0.0, HEALTHY_ZRANGE_M))
+        collector.record_odom(FakeOdom(0.0, 0.0, 0.0))
+        collector.record_readiness_log_values((HEALTHY_ZRANGE_MM, 0.0001, 0.0001, 0.0001))
+        clock.advance(0.1)
+    assert "estimator_not_converged" not in {
+        issue.code for issue in collector.snapshot().flight_readiness.issues
+    }
+
+    # Stale: the estimator sample is older than estimator_stale_timeout_s (1.5 s).
+    clock.advance(2.0)
+    stale_codes = {issue.code for issue in collector.snapshot().flight_readiness.issues}
+    assert "estimator_not_converged" in stale_codes
+
+    # NaN / infinite samples are dropped by the parser, so the stream goes stale/absent.
+    for bad in (
+        (float("nan"), 0.0001, 0.0001, 0.0001),
+        (HEALTHY_ZRANGE_MM, float("nan"), 0.0001, 0.0001),
+        (HEALTHY_ZRANGE_MM, 0.0001, float("inf"), 0.0001),
+        (HEALTHY_ZRANGE_MM, 0.0001, 0.0001, float("-inf")),
+    ):
+        with pytest.raises(ValueError, match="NaN or infinite"):
+            telemetry.parse_dmp_readiness_log_values(bad)
+
+    # A non-finite value that somehow reaches the policy layer is also refused.
+    poisoned = (
+        telemetry.EstimatorVarianceTelemetry(
+            monotonic_s=0.0, var_px=float("nan"), var_py=0.0001, var_pz=0.0001
+        ),
+        *_variance_samples(var_px=0.0001, samples=59),
+    )
+    assert _estimator_codes(poisoned) == ["estimator_not_converged"]
+
+
+def test_healthy_velocity_covariance_lets_the_airborne_estimator_gate_pass() -> None:
+    """varP healthy + pose/velocity/range healthy -> no airborne estimator blocker."""
+    clock = FakeClock()
+    collector = _ready_collector(clock)
+    for index in range(60):
+        collector.record_status(FakeStatus(3.95, 0, 37, 6, 10, 10, supervisor_info=0x0009))
+        collector.record_pose(FakePose(0.0, 0.0, HEALTHY_ZRANGE_M))
+        collector.record_odom(FakeOdom(0.0, 0.0, 0.0))
+        collector.record_readiness_log_values(
+            (HEALTHY_ZRANGE_MM, 0.00012 + index * 1e-6, 0.00013, 0.00017)
+        )
+        clock.advance(0.1)
+
+    readiness = collector.snapshot().flight_readiness
+
+    assert {issue.code for issue in readiness.issues} == set()
+    assert readiness.ground_passed is True
+    assert readiness.airborne_passed is True
 
 
 def test_dmp_readiness_log_rejects_bad_samples_without_replacing_last_good_value() -> None:

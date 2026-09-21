@@ -20,6 +20,15 @@ max_reliable_zrange_m: 0.50
 estimator_stale_timeout_s: 1.5
 max_estimator_variance_span: 0.002
 minimum_estimator_sample_count: 5
+# CF8.1 step 3.6: the estimator convergence check reads kalman.varPX/varPY/varPZ (Kalman
+# velocity covariance), the same source cflib's wait_for_position_estimator() uses.
+# These two keys are a fail-closed saturation guard only, not a tuning knob: a covariance
+# at or above estimator_max_covariance * estimator_saturation_fraction is refused no matter
+# how stable it looks, because the firmware clamps its covariance diagonal at
+# MAX_COVARIANCE. Healthy velocity covariance measured on cf231 is 1.2e-4 .. 2.4e-4, so
+# the 50.0 guard below sits five orders of magnitude away from real data.
+estimator_max_covariance: 100.0
+estimator_saturation_fraction: 0.5
 frame_origin_max_age_s: 300
 frame_origin_allowed_clock_skew_s: 5
 cf8_explicit_arm_required: false

@@ -29,7 +29,15 @@ from typing import Any
 
 DMP_READINESS_LOG_TOPIC = "dmp_readiness"
 DMP_FLOW_LOG_TOPIC = "dmp_flow"
-DMP_READINESS_LOG_VARIABLES = ("range.zrange", "kalman.varX", "kalman.varY", "kalman.varZ")
+# Bitcraze Kalman VELOCITY covariance (what cflib's wait_for_position_estimator() uses).
+DMP_READINESS_LOG_VARIABLES = (
+    "range.zrange",
+    "kalman.varPX",
+    "kalman.varPY",
+    "kalman.varPZ",
+)
+DMP_ESTIMATOR_COVARIANCE_KIND = "velocity_covariance"
+DMP_ESTIMATOR_COVARIANCE_SOURCE = "kalman.varPX/PY/PZ"
 DMP_FLOW_LOG_VARIABLES = ("motion.deltaX", "motion.deltaY", "motion.motion", "motion.squal")
 
 # Mirrors dmp_crazyflie_bridge.telemetry.PoseStabilityPolicy / ReadinessPolicy defaults.
@@ -199,15 +207,20 @@ def _odom_report(store: ProbeStore) -> dict[str, Any]:
 
 def _readiness_report(store: ProbeStore) -> dict[str, Any]:
     samples = store.readiness
-    report: dict[str, Any] = {"sample_count": len(samples), "variables": list(DMP_READINESS_LOG_VARIABLES)}
+    report: dict[str, Any] = {
+        "sample_count": len(samples),
+        "variables": list(DMP_READINESS_LOG_VARIABLES),
+        "estimator_covariance_kind": DMP_ESTIMATOR_COVARIANCE_KIND,
+        "estimator_covariance_source": DMP_ESTIMATOR_COVARIANCE_SOURCE,
+    }
     if not samples:
         report["reason"] = "no_readiness_samples"
         return report
 
     zranges = [sample.values[0] / 1000.0 for sample in samples if len(sample.values) >= 4]
-    var_xs = [sample.values[1] for sample in samples if len(sample.values) >= 4]
-    var_ys = [sample.values[2] for sample in samples if len(sample.values) >= 4]
-    var_zs = [sample.values[3] for sample in samples if len(sample.values) >= 4]
+    var_pxs = [sample.values[1] for sample in samples if len(sample.values) >= 4]
+    var_pys = [sample.values[2] for sample in samples if len(sample.values) >= 4]
+    var_pzs = [sample.values[3] for sample in samples if len(sample.values) >= 4]
 
     if zranges:
         report.update(
@@ -218,15 +231,17 @@ def _readiness_report(store: ProbeStore) -> dict[str, Any]:
                 "zrange_last_m": zranges[-1],
             }
         )
-    if var_xs:
+    if var_pxs:
+        # Velocity covariance (kalman.varPX/varPY/varPZ), NOT position covariance.
         report.update(
             {
-                "var_x_last": var_xs[-1],
-                "var_y_last": var_ys[-1],
-                "var_z_last": var_zs[-1],
-                "var_x_span": max(var_xs) - min(var_xs),
-                "var_y_span": max(var_ys) - min(var_ys),
-                "var_z_span": max(var_zs) - min(var_zs),
+                "var_px_last": var_pxs[-1],
+                "var_py_last": var_pys[-1],
+                "var_pz_last": var_pzs[-1],
+                "var_px_span": max(var_pxs) - min(var_pxs),
+                "var_py_span": max(var_pys) - min(var_pys),
+                "var_pz_span": max(var_pzs) - min(var_pzs),
+                "var_p_peak": max((*var_pxs, *var_pys, *var_pzs)),
             }
         )
     return report

@@ -1275,8 +1275,17 @@ class FakeAcceptanceAdapter:
                 "speed_mps": self.speed_mps,
             },
             "range": {"zrange_m": zrange_m},
+            # Step 3.6 contract: the CF8 stabilization gate requires the explicitly marked
+            # Kalman VELOCITY covariance payload, not the legacy position-covariance shape.
             "estimator_variance": (
-                {"var_x": 0.0001, "var_y": 0.0001, "var_z": 0.0001}
+                {
+                    "kind": "velocity_covariance",
+                    "source": "kalman.varPX/PY/PZ",
+                    "variables": ["kalman.varPX", "kalman.varPY", "kalman.varPZ"],
+                    "var_px": 0.0001,
+                    "var_py": 0.0001,
+                    "var_pz": 0.0001,
+                }
                 if self.estimator_converged
                 else None
             ),

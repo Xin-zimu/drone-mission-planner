@@ -8,7 +8,7 @@ from itertools import pairwise
 from typing import Any, Protocol
 
 from .execution_state import BridgeExecutionState
-from .telemetry import ReadinessStage
+from .telemetry import DMP_ESTIMATOR_COVARIANCE_KIND, ReadinessStage
 
 
 @dataclass(frozen=True, slots=True)
@@ -704,8 +704,16 @@ class HardwareFlightAcceptanceRunner:
                 issues.append("speed_exceeded")
 
         variance = telemetry.get("estimator_variance")
-        if not isinstance(variance, dict) or any(
-            _float_or_none(variance.get(key)) is None for key in ("var_x", "var_y", "var_z")
+        # Fail closed unless the payload is explicitly Kalman **velocity** covariance:
+        # ``var_x``/``var_y``/``var_z`` used to mean position covariance, so accepting that
+        # shape here would silently change the meaning of the stabilization gate.
+        if (
+            not isinstance(variance, dict)
+            or variance.get("kind") != DMP_ESTIMATOR_COVARIANCE_KIND
+            or any(
+                _float_or_none(variance.get(key)) is None
+                for key in ("var_px", "var_py", "var_pz")
+            )
         ):
             issues.append("estimator_not_converged")
         airborne_codes = self._airborne_readiness_codes(telemetry)
