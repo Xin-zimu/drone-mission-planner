@@ -21,6 +21,13 @@ CAPABILITY_SOURCE_CFLIB = "cflib_firmware_parameter_probe"
 CAPABILITY_SOURCE_ROS = "ros_runtime_parameter"
 CAPABILITY_SNAPSHOT_ALLOWED_CLOCK_SKEW_S = 5.0
 
+#: Snapshot payload versions.
+#:   1 (legacy): robot_id + uri + deck
+#:   2 (current): robot + observed_uri + capabilities (+ legacy mirrors for older readers)
+CAPABILITY_SNAPSHOT_SCHEMA_VERSION = 2
+
+_REQUIRED_CAPABILITY_KEYS = ("bcFlow2", "bcZRanger2", "bcLighthouse4", "bcLoco", "bcDWM1000")
+
 
 class CapabilityProbeError(RuntimeError):
     """Raised when the read-only capability probe cannot complete."""
@@ -28,6 +35,14 @@ class CapabilityProbeError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class HardwareCapabilitySnapshot:
+    """A deck census for one logical robot.
+
+    ``robot_id`` is the stable identity. ``uri`` is the address the census was taken through --
+    ``observed_uri`` in the payload -- and is evidence, not identity: rewriting the aircraft's
+    radio address does not change which decks are soldered to it. Whether a snapshot is still
+    applicable is therefore decided by the logical robot plus freshness, not by URI equality.
+    """
+
     robot_id: str
     uri: str
     flow2: bool
@@ -37,9 +52,12 @@ class HardwareCapabilitySnapshot:
     dwm1000: bool
     captured_at_utc: str
     source: str = CAPABILITY_SOURCE_CFLIB
+    #: True when the payload this came from used only the legacy spellings.
+    legacy_format: bool = False
 
     @property
     def deck_values(self) -> dict[str, int]:
+        """Deck flags keyed by their fully qualified firmware parameter names."""
         return {
             "deck.bcFlow2": int(self.flow2),
             "deck.bcZRanger2": int(self.zranger2),
@@ -49,54 +67,89 @@ class HardwareCapabilitySnapshot:
         }
 
     @property
+    def deck_flags(self) -> dict[str, int]:
+        """Deck flags keyed the way the schema 1 payload spelled them (``bcFlow2`` ...)."""
+        return {
+            "bcFlow2": int(self.flow2),
+            "bcZRanger2": int(self.zranger2),
+            "bcLighthouse4": int(self.lighthouse),
+            "bcLoco": int(self.loco),
+            "bcDWM1000": int(self.dwm1000),
+        }
+
+    @property
+    def capability_values(self) -> dict[str, bool]:
+        return {
+            "bcFlow2": self.flow2,
+            "bcZRanger2": self.zranger2,
+            "bcLighthouse4": self.lighthouse,
+            "bcLoco": self.loco,
+            "bcDWM1000": self.dwm1000,
+        }
+
+    @property
     def evidence(self) -> tuple[str, ...]:
         return tuple(f"{name}={value}" for name, value in sorted(self.deck_values.items()))
 
     def to_payload(self) -> dict[str, Any]:
+        """Serialise in the current schema, with legacy mirrors for older readers.
+
+        The legacy keys are kept for one transition: ``robot_id``/``uri``/``deck`` mean exactly
+        the same thing as ``robot``/``observed_uri``/``capabilities``. New readers prefer the new
+        spellings; old readers keep working. Once nothing reads the old spellings they can go.
+        """
         return {
+            "schema_version": CAPABILITY_SNAPSHOT_SCHEMA_VERSION,
+            "robot": self.robot_id,
+            "observed_uri": self.uri,
+            "capabilities": self.capability_values,
+            "captured_at_utc": self.captured_at_utc,
+            "observed_at": self.captured_at_utc,
+            "source": self.source,
+            # --- legacy mirrors (schema 1 spellings, byte-compatible) ---
             "robot_id": self.robot_id,
             "uri": self.uri,
-            "captured_at_utc": self.captured_at_utc,
-            "source": self.source,
-            "deck": {
-                "bcFlow2": int(self.flow2),
-                "bcZRanger2": int(self.zranger2),
-                "bcLighthouse4": int(self.lighthouse),
-                "bcLoco": int(self.loco),
-                "bcDWM1000": int(self.dwm1000),
-            },
+            "deck": self.deck_flags,
         }
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> HardwareCapabilitySnapshot:
+        capabilities = payload.get("capabilities")
         deck = payload.get("deck")
-        if not isinstance(deck, Mapping):
+        if capabilities is not None and not isinstance(capabilities, Mapping):
+            raise CapabilityProbeError("capability snapshot capabilities must be a mapping")
+        if deck is not None and not isinstance(deck, Mapping):
+            raise CapabilityProbeError("capability snapshot deck must be a mapping")
+        values: Mapping[str, Any] | None = capabilities if isinstance(capabilities, Mapping) else deck
+        if values is None:
             raise CapabilityProbeError("capability snapshot is missing deck values")
-        robot_id = payload.get("robot_id")
-        uri = payload.get("uri")
-        captured_at_utc = payload.get("captured_at_utc")
+
+        robot = payload.get("robot") or payload.get("robot_id")
+        observed_uri = payload.get("observed_uri") or payload.get("uri")
+        captured_at_utc = payload.get("captured_at_utc") or payload.get("observed_at")
         source = payload.get("source", CAPABILITY_SOURCE_CFLIB)
-        if not isinstance(robot_id, str) or not robot_id:
-            raise CapabilityProbeError("capability snapshot robot_id is invalid")
-        if not isinstance(uri, str) or not uri:
-            raise CapabilityProbeError("capability snapshot uri is invalid")
+        if not isinstance(robot, str) or not robot:
+            raise CapabilityProbeError("capability snapshot robot is invalid")
+        if not isinstance(observed_uri, str) or not observed_uri:
+            raise CapabilityProbeError("capability snapshot observed_uri is invalid")
         if not isinstance(captured_at_utc, str) or not captured_at_utc:
             raise CapabilityProbeError("capability snapshot timestamp is invalid")
         if source != CAPABILITY_SOURCE_CFLIB:
             raise CapabilityProbeError(f"unsupported capability snapshot source {source!r}")
-        missing = tuple(key for key in _REQUIRED_DECK_KEYS if key not in deck)
+        missing = tuple(key for key in _REQUIRED_CAPABILITY_KEYS if key not in values)
         if missing:
             raise CapabilityProbeError(f"capability snapshot missing deck keys: {', '.join(missing)}")
         return cls(
-            robot_id=robot_id,
-            uri=uri,
-            flow2=_deck_bool(deck["bcFlow2"], "bcFlow2"),
-            zranger2=_deck_bool(deck["bcZRanger2"], "bcZRanger2"),
-            lighthouse=_deck_bool(deck["bcLighthouse4"], "bcLighthouse4"),
-            loco=_deck_bool(deck["bcLoco"], "bcLoco"),
-            dwm1000=_deck_bool(deck["bcDWM1000"], "bcDWM1000"),
+            robot_id=robot,
+            uri=observed_uri,
+            flow2=_deck_bool(values["bcFlow2"], "bcFlow2"),
+            zranger2=_deck_bool(values["bcZRanger2"], "bcZRanger2"),
+            lighthouse=_deck_bool(values["bcLighthouse4"], "bcLighthouse4"),
+            loco=_deck_bool(values["bcLoco"], "bcLoco"),
+            dwm1000=_deck_bool(values["bcDWM1000"], "bcDWM1000"),
             captured_at_utc=captured_at_utc,
             source=source,
+            legacy_format="robot" not in payload or "observed_uri" not in payload,
         )
 
 
@@ -104,6 +157,9 @@ class HardwareCapabilitySnapshot:
 class CapabilitySnapshotValidation:
     snapshot: HardwareCapabilitySnapshot | None
     diagnostic: str | None = None
+    #: Non-fatal notes (e.g. the snapshot was taken through a different address). A warning
+    #: never makes a snapshot invalid, but it is surfaced so the change is visible in telemetry.
+    warning: str | None = None
 
     @property
     def valid(self) -> bool:
@@ -133,11 +189,23 @@ def load_capability_snapshot(
         )
     if uri is None or not uri:
         return CapabilitySnapshotValidation(None, "capability snapshot requires configured robot URI")
+
+    warning: str | None = None
     if snapshot.uri != uri:
-        return CapabilitySnapshotValidation(
-            None,
-            f"capability snapshot URI mismatch: expected {uri}, got {snapshot.uri}",
+        if snapshot.legacy_format:
+            # A legacy snapshot never recorded the stable identity, so the address is the only
+            # thing tying it to an aircraft. Keep the strict check for those.
+            return CapabilitySnapshotValidation(
+                None,
+                f"capability snapshot URI mismatch: expected {uri}, got {snapshot.uri}",
+            )
+        # The address is transport, not identity: a re-addressed aircraft still has the same
+        # decks. Accept it, but say so.
+        warning = (
+            f"capability snapshot observed_uri {snapshot.uri} differs from the runtime URI {uri}; "
+            f"identity {snapshot.robot_id} matches, so the deck census still applies"
         )
+
     age = _snapshot_age_s(snapshot)
     if age is None:
         return CapabilitySnapshotValidation(None, "capability snapshot timestamp is invalid")
@@ -150,7 +218,12 @@ def load_capability_snapshot(
             None,
             f"capability snapshot is stale: age {age:.0f} s exceeds {max_age_s:.0f} s",
         )
-    return CapabilitySnapshotValidation(snapshot)
+    if warning is None and snapshot.legacy_format:
+        warning = (
+            "capability snapshot uses the legacy robot_id/uri format; re-run the capability probe "
+            "to record the stable robot identity"
+        )
+    return CapabilitySnapshotValidation(snapshot, warning=warning)
 
 
 def save_capability_snapshot(snapshot: HardwareCapabilitySnapshot, path: Path) -> None:
@@ -277,7 +350,7 @@ def _snapshot_age_s(snapshot: HardwareCapabilitySnapshot) -> float | None:
     return (datetime.now(UTC) - captured.astimezone(UTC)).total_seconds()
 
 
-_REQUIRED_DECK_KEYS = ("bcFlow2", "bcZRanger2", "bcLighthouse4", "bcLoco", "bcDWM1000")
+_REQUIRED_DECK_KEYS = _REQUIRED_CAPABILITY_KEYS
 
 
 def _deck_bool(value: Any, key: str) -> bool:

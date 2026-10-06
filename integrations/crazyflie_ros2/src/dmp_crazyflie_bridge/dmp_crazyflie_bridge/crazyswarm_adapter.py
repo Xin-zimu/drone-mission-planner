@@ -540,7 +540,7 @@ class Crazyswarm2Adapter:
                 positioning_from_deck_params(validation.snapshot.deck_values),
                 source=CAPABILITY_SOURCE_CFLIB,
                 captured_at=validation.snapshot.captured_at_utc,
-                diagnostic=diagnostic,
+                diagnostic=_join_diagnostics(diagnostic, validation.warning),
             )
             return
         diagnostics: tuple[str, ...] = (diagnostic,)
@@ -646,6 +646,18 @@ def _parameter_is_set(parameter_value: Any) -> bool:
 
 def _dedupe(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
+
+
+def _join_diagnostics(diagnostic: str, warning: str | None) -> str:
+    """Append a non-fatal snapshot warning to the diagnostic that will be reported.
+
+    A capability snapshot taken through a previous radio address is still valid -- the address is
+    transport, the logical robot is identity -- but the mismatch stays visible in telemetry
+    instead of being silently swallowed.
+    """
+    if not warning:
+        return diagnostic
+    return f"{diagnostic} | {warning}"
 
 
 def _duration_msg(duration_msg_type: Any, seconds: float) -> Any:

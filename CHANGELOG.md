@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Capability snapshot format schema 2: payloads now carry the stable logical identity (`robot`) and the address the census went through (`observed_uri`, plus `observed_at` and a boolean `capabilities` map), instead of treating the radio URI as the identity (`robot_id` / `uri` / integer `deck`).
+- Migration for the format change: `HardwareCapabilitySnapshot.from_payload()` still reads schema 1 payloads, `to_payload()` still emits the schema 1 keys as mirrors, and `load_capability_snapshot()` keeps the strict URI-equality check for legacy payloads (which never recorded a stable identity) while accepting an address change for schema 2 payloads whose `robot` matches. A URI-only change no longer invalidates a fresh deck census, and the mismatch is surfaced as a snapshot warning rather than silently ignored.
+
 ## 1.2.0 - 2026-09-15
 
 - Completed the v1.2 real-mission planning foundation: authoritative 3D waypoints, cumulative scheduling, dependency and energy accounting, global multi-vehicle optimisation, conflict repair, georeferencing, GIS/DEM import, and target-aware route export validation.

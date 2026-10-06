@@ -473,7 +473,7 @@ def test_adapter_never_starts_a_probe_or_restarts_crazyswarm2(monkeypatch: Any, 
         assert forbidden not in source, f"adapter must not reference {forbidden!r}"
 
 
-def test_cflib_snapshot_rejects_robot_uri_stale_and_missing(tmp_path: Path) -> None:
+def test_cflib_snapshot_rejects_robot_stale_and_missing(tmp_path: Path) -> None:
     snapshot_path = tmp_path / "cf231_capabilities.json"
     _write_snapshot(snapshot_path, flow2=True, zranger2=True)
 
@@ -485,15 +485,6 @@ def test_cflib_snapshot_rejects_robot_uri_stale_and_missing(tmp_path: Path) -> N
     )
     assert not mismatch_robot.valid
     assert "robot mismatch" in mismatch_robot.diagnostic
-
-    mismatch_uri = capability_probe.load_capability_snapshot(
-        snapshot_path,
-        robot_id="cf231",
-        uri="radio://0/1/2M/E7E7E7E701",
-        max_age_s=3600.0,
-    )
-    assert not mismatch_uri.valid
-    assert "URI mismatch" in mismatch_uri.diagnostic
 
     stale_path = tmp_path / "stale.json"
     _write_snapshot(stale_path, captured_at_utc="2000-01-01T00:00:00Z")
@@ -516,6 +507,107 @@ def test_cflib_snapshot_rejects_robot_uri_stale_and_missing(tmp_path: Path) -> N
     assert "not found" in missing.diagnostic
 
 
+def test_cflib_snapshot_accepts_an_address_change_when_the_robot_matches(tmp_path: Path) -> None:
+    """The radio address is transport; the deck census belongs to the logical robot.
+
+    A re-addressed cf231 (e.g. after an nRF51 config reset) is still the same aircraft with the
+    same Flow Deck, so prepare must not fail the capability check just because the URI moved.
+    """
+    snapshot_path = tmp_path / "cf231_capabilities.json"
+    _write_snapshot(snapshot_path)
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert payload["robot"] == "cf231"
+    assert payload["observed_uri"] == CF231_URI
+    assert payload["capabilities"]["bcFlow2"] is True
+
+    moved = capability_probe.load_capability_snapshot(
+        snapshot_path,
+        robot_id="cf231",
+        uri="radio://0/1/2M/E7E7E7E701",
+        max_age_s=3600.0,
+    )
+    assert moved.valid
+    assert moved.warning is not None
+    assert "observed_uri" in moved.warning
+    assert moved.snapshot is not None
+    assert moved.snapshot.uri == CF231_URI
+
+    same = capability_probe.load_capability_snapshot(
+        snapshot_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert same.valid
+    assert same.warning is None
+
+
+def test_cflib_snapshot_still_requires_a_matching_uri_for_legacy_payloads(tmp_path: Path) -> None:
+    """Schema 1 never recorded a stable identity, so its address check stays strict (section 19)."""
+    legacy_path = tmp_path / "legacy.json"
+    captured = (datetime.now(UTC) - timedelta(seconds=1)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "robot_id": "cf231",
+                "uri": CF231_URI,
+                "captured_at_utc": captured,
+                "source": capability_probe.CAPABILITY_SOURCE_CFLIB,
+                "deck": {
+                    "bcFlow2": 1,
+                    "bcZRanger2": 1,
+                    "bcLighthouse4": 0,
+                    "bcLoco": 0,
+                    "bcDWM1000": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    moved = capability_probe.load_capability_snapshot(
+        legacy_path,
+        robot_id="cf231",
+        uri="radio://0/1/2M/E7E7E7E701",
+        max_age_s=3600.0,
+    )
+    assert not moved.valid
+    assert "URI mismatch" in moved.diagnostic
+
+    same = capability_probe.load_capability_snapshot(
+        legacy_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert same.valid
+    assert same.warning is not None
+    assert "legacy" in same.warning
+
+
+def test_capability_snapshot_payload_keeps_legacy_mirrors(tmp_path: Path) -> None:
+    """Schema 2 is the current format; the schema 1 spellings are still emitted for older readers."""
+    snapshot_path = tmp_path / "cf231_capabilities.json"
+    _write_snapshot(snapshot_path)
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+    assert payload["schema_version"] == 2
+    assert payload["robot"] == payload["robot_id"] == "cf231"
+    assert payload["observed_uri"] == payload["uri"] == CF231_URI
+    assert payload["observed_at"] == payload["captured_at_utc"]
+    assert payload["capabilities"]["bcZRanger2"] is True
+    assert payload["deck"]["bcZRanger2"] == 1
+
+    # A legacy-only payload still loads, and is marked as legacy.
+    legacy_only = {key: payload[key] for key in ("robot_id", "uri", "captured_at_utc", "source", "deck")}
+    parsed = capability_probe.HardwareCapabilitySnapshot.from_payload(legacy_only)
+    assert parsed.legacy_format is True
+    assert parsed.robot_id == "cf231"
+    assert parsed.uri == CF231_URI
+    assert parsed.flow2 is True
+
+
+
 def test_default_snapshot_path_is_package_runtime() -> None:
     path = capability_probe.default_snapshot_path("cf231")
 
@@ -529,6 +621,7 @@ def test_cflib_snapshot_rejects_missing_deck_key_invalid_source_future_and_max_a
     snapshot_path = tmp_path / "invalid.json"
     _write_snapshot(snapshot_path)
     payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    del payload["capabilities"]["bcDWM1000"]
     del payload["deck"]["bcDWM1000"]
     snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -544,6 +637,7 @@ def test_cflib_snapshot_rejects_missing_deck_key_invalid_source_future_and_max_a
     malformed_path = tmp_path / "malformed.json"
     malformed_payload = dict(payload)
     malformed_payload["deck"] = []
+    malformed_payload["capabilities"] = []
     malformed_path.write_text(json.dumps(malformed_payload), encoding="utf-8")
     malformed = capability_probe.load_capability_snapshot(
         malformed_path,
@@ -552,7 +646,24 @@ def test_cflib_snapshot_rejects_missing_deck_key_invalid_source_future_and_max_a
         max_age_s=3600.0,
     )
     assert not malformed.valid
-    assert "missing deck values" in malformed.diagnostic
+    assert "must be a mapping" in malformed.diagnostic
+
+    # A schema-1 payload that has only a malformed `deck` is still refused.
+    deck_only_path = tmp_path / "deck-only.json"
+    deck_only_payload = dict(payload)
+    deck_only_payload.pop("capabilities")
+    deck_only_payload.pop("robot")
+    deck_only_payload.pop("observed_uri")
+    deck_only_payload["deck"] = "not-a-mapping"
+    deck_only_path.write_text(json.dumps(deck_only_payload), encoding="utf-8")
+    deck_only = capability_probe.load_capability_snapshot(
+        deck_only_path,
+        robot_id="cf231",
+        uri=CF231_URI,
+        max_age_s=3600.0,
+    )
+    assert not deck_only.valid
+    assert "deck must be a mapping" in deck_only.diagnostic
 
     invalid_source_path = tmp_path / "source.json"
     _write_snapshot(invalid_source_path)
