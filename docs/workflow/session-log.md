@@ -12,9 +12,9 @@
 | 项 | 值 |
 |---|---|
 | 分支 | `codex/v1.3-crazyflie-execution` |
-| HEAD | `7c1d904` — v1.3 CF8.1: capability snapshot schema 2 — robot identity vs radio address |
-| push 状态 | **ahead 5，未 push**（默认不 push，除非用户明确要求） |
-| 工作树 | 干净；本次规范体系新增文件待提交（见 §5） |
+| HEAD | `250015a` — docs: establish session workflow system（本次规范体系提交；父提交 `7c1d904` v1.3 CF8.1 capability snapshot schema 2） |
+| push 状态 | **ahead 6，未 push**（默认不 push，除非用户明确要求） |
+| 工作树 | 干净（规范体系已提交；`_dsh_scratch` 与证据目录在仓库外，不进仓库） |
 
 ## 2. 安全不变量（当前值，违反即停）
 
@@ -48,10 +48,11 @@
 | 电台掉线 | WSL 空闲自动关机 → USB/IP 失效；`usbipd list` 仍显示 Attached 是陈旧状态；一律用 `_dsh_scratch/run_probe.sh` |
 | pytest | 必须 `--basetemp=.pytest-tmp-<新名>`（`.pytest-tmp` ACL 坏）；**不要重复 `-q`**（addopts 已含） |
 
-## 5. 本次规范体系改动（待提交）
+## 5. 本次规范体系改动（已提交 `250015a`）
 
 新增 `docs/workflow/`（session-protocol.md、session-log.md、cf8-operations.md、dev-workflow.md）；
-新增 `docs/archive/`（历史交接文档归档）；`AGENTS.md` 补充指向 `docs/workflow/` 的说明。
+新增 `docs/archive/`（6 份历史交接文档归档 + README）；`AGENTS.md` 新增规则 16；
+README 文档索引新增"会话工作流规范"一节。
 
 ## 6. 最近会话记录（新→旧）
 
@@ -68,5 +69,4 @@
 - [ ] Flow Deck 硬件确认：换已知正常 deck 对照测试（**用户物理操作**）
 - [ ] 电池充满到 ≥4.10 V 并静置复测（充电电流偏慢 ~0.04 A 需留意）
 - [ ] deck 恢复后：`./cf_prepare.sh` → 用户授权 → `./run_cf8_acceptance.sh`（一次且仅一次）
-- [ ] 本次规范体系提交（见 §5）
 - [ ] 软件研发线：M2（默认关闭的真机航点执行路径）见 `learning-plans/路线联动推进计划.md`
