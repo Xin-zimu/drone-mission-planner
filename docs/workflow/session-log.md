@@ -12,8 +12,8 @@
 | 项 | 值 |
 |---|---|
 | 分支 | `codex/v1.3-crazyflie-execution` |
-| HEAD | `250015a` — docs: establish session workflow system（本次规范体系提交；父提交 `7c1d904` v1.3 CF8.1 capability snapshot schema 2） |
-| push 状态 | **ahead 6，未 push**（默认不 push，除非用户明确要求） |
+| HEAD | `18784fc` — docs(workflow): reflect workflow-system commit in session log（父提交 `250015a` 规范体系、`7c1d904` CF8.1） |
+| push 状态 | **ahead 7，未 push**（默认不 push，除非用户明确要求） |
 | 工作树 | 干净（规范体系已提交；`_dsh_scratch` 与证据目录在仓库外，不进仓库） |
 
 ## 2. 安全不变量（当前值，违反即停）
