@@ -1,0 +1,122 @@
+================================================================================
+NEXT SESSION — CF8 CRAZYFLIE STARTUP PROMPT
+(把下面 START 与 END 之间的内容整段发给新的 DeepSeek Harness 会话)
+================================================================================
+
+--- START ---
+
+接手 CF8 Crazyflie 真机验收。**先读交接文档，再动手；不要重复历史诊断。**
+
+## 第 0 步：恢复上下文（必做，且只读）
+
+1. 完整阅读：
+   `D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main\CF8_Crazyflie_handoff_2026-09-22.md`
+   （这一份文件包含全部上下文：环境、git、安全不变量、硬件状态、两次 CF8 的事实、
+   电池 sag 结论、Flow Deck 故障/恢复签名、工具与证据清单、FAST PATH 流程、待决事项。）
+2. 需要时再补读证据：`D:\Deepseek WorkSpace\cf81_dryrun_evidence\`（清单见 handoff §11）。
+3. 检查仓库状态（只读）：
+   - `git status --short`
+   - `git log --oneline -4`
+   - 期望：branch `codex/v1.3-crazyflie-execution`，HEAD `21c668c`，工作树干净
+     （仅 2 个未跟踪交接文档），**未 push**。
+   - **不要** reset / checkout / 覆盖工作树；**不要** push。
+
+## 硬约束（违反即停）
+
+- `hardware_flight_enabled` 保持 **false**，除非用户**明确授权一次** CF8。
+- **不得**修改任何阈值 / gate / TTL / estimator 策略。
+  特别是 **`battery_critical_voltage = 3.7 V`**、`capability_snapshot_max_age_s = 3600`、
+  `max_estimator_variance_span = 0.002`、STABILIZING 的全部参数。
+- **不得**绕过 readiness gate；**不得**用 emergency stop 替代受控降落。
+- **不得**运行 CF9、硬件 `go_to`、硬件 `execute_mission`、`hello_world`。
+- **不得自动重试** CF8：一次授权 = 最多一次 `run_cf8_acceptance`。
+- cflib 探针与 Crazyswarm2 **不得同时占用 Crazyradio**。
+- 无明确授权时**绝不真实起飞**。
+
+## 第 1 步：等用户完成硬件工作（不要抢跑）
+
+**在用户明确说"硬件检查完成 / 现在上电"之前：不要上电、不要启动 Crazyswarm2、不要连接 cf231、不要跑任何 probe。**
+
+等待用户确认以下两项（handoff §5.3、§6.2）：
+
+1. **电池与供电**：电池本体 / 1S 插头 / 线材 / 焊点检查；
+   若沿用当前电池，需先验证**负载压降**。
+   背景：静置 4.043 V 的电池在起飞瞬间跌到 **3.457 V（sag 0.586 V）**，
+   这正是第二次 CF8 失败的**唯一直接原因**。静置电压达标**不等于**电池健康。
+2. **机体机械**：四个电机/机臂是否共面、桨叶是否变形、Flow Deck 与机体是否贴合。
+   背景：用户肉眼观察"起飞效果不好、没有明显垂直升高、低空快速水平移动"，
+   怀疑机体受挤压、结构轻微弯曲。**不要**用调控制参数去补偿机械变形。
+
+若用户未完成上述检查就要求飞行：**先提醒风险并请求确认**，不要直接执行。
+
+## 第 2 步：最短 FAST PATH（用户确认上电后）
+
+**不要**再跑历史那套 3 s / 30 s / capability / `pose_stability` 重复诊断。
+
+1. 只读核查无残留：`bash _dsh_scratch/check_idle_state.sh`
+2. capability snapshot：
+   - 若 `integrations/crazyflie_ros2/src/dmp_crazyflie_bridge/runtime/cf231_capabilities.json`
+     年龄 > 3600 s → 按 README 的**只读 cflib 流程**在电台空闲时刷新（**不改 TTL**）；
+   - 若仍 fresh → 直接使用，**不要重复 probe**。
+3. `bash _dsh_scratch/cf84_fast_path.sh`（一条命令完成）：
+   - 启动 recorder（先）
+   - 启动 Crazyswarm2
+   - 用 `cf84_counts_check.py` 确认 recorder **ACTIVE**
+     （ready-file counts vs 当前 counts，等约 1 s；**不要**比较 progress 首行/末行）
+   - 启动 Bridge，`hardware_flight_enabled` 保持 **false**
+   - 只跑**一次** `cf84_preflight.py`（约 2 s squal + Bridge 只读裁决）
+
+## 第 3 步：一次快速生产 preflight 的判定项
+
+必须全部满足：
+`connected=true`、`positioning_mode=flow`、`ground_passed=true`、无 `estimator_not_converged`、
+`supervisor.safe_for_preflight=true`、本次连接后**无持续** ESTKALMAN reset、
+`squal` 非零且未恒 0、静止 velocity 无 gross runaway、`battery ≥ 4.00 V`、无 ground/both blocking issue。
+
+**明确不检查 / 不使用**（airborne-only，由起飞后的 STABILIZING 重新验证）：
+`pose_stability_failed`、`velocity_not_settled`、`range_invalid`、`pose_stability.xy_span/xy_displacement`、
+绝对 XY、任何自造的 0.5 m pose 阈值、`run_preflight`/F3、重复 capability probe、重复 interlock。
+
+任一项 FAIL → **立即停止，不飞，不重试**，报告并等指示。
+
+**⚠️ 关键提醒**：即使 preflight 全 PASS，若电池未更换且未验证负载压降，
+请**先与用户确认是否值得消耗一次授权**（今晚已证明静置合格也会在起跳瞬间崩到 3.457 V）。
+
+## 第 4 步：仅在用户明确授权后
+
+1. `bash _dsh_scratch/cf82_bridge_true.sh` → 置 `hardware_flight_enabled=true` 并**重启 Bridge**
+   （该标志仅在构造时读取）。
+2. `python3 _dsh_scratch/cf8_live_run.py --out <证据路径>/cf8x-flight-result.json`
+   → 发送**一次且仅一次** `run_cf8_acceptance`（严格 JSON `confirm_real_flight: true`）。
+3. 落地后**立即** `bash _dsh_scratch/cf84_postflight.sh`：
+   `hardware_flight_enabled=false` → 停 Bridge/Crazyswarm2 → **SIGTERM 优雅停 recorder**（保证 timeline 落盘）
+   → 服务调用计数。
+4. 报告必须包含：结果 / `failure_code` / 完整事件时间线 / **`failure_telemetry`（真实触发值）** /
+   `max_z`、实际离地高度、最大 XY 漂移、最大速度、最低电池 / squal / varP / range / supervisor /
+   STABILIZING 是否进入 / service 调用次数 / 是否受控降落回退 / 最终安全状态。
+5. **分析 recorder 数据时必须截断 operator pickup 之后的样本**（用户会在 CF8 结束后用手拿起机体）。
+   handoff §8.1：`landed_confirmed` 之后约 t≈+13 s 起的数据受人工搬动污染，
+   **不得**当作"自主再次升空"的证据。
+
+## 报告与语言
+
+- 用**中文**报告。
+- 每个阶段报告：执行的命令、关键输出、改动文件（如有）、测试结果、就绪问题，
+  以及**明确 YES/NO**：是否真的发送了 arm / takeoff / land。
+- **不要只给建议**，要实际检查、修改、测试、推进；但**今晚这一轮的边界是"不飞"**，
+  除非用户明确授权。
+
+## 一句话记住
+
+**Flow Deck 已修复（当前正常）；唯一的硬阻断是电池负载压降（4.043 V → 3.457 V，sag 0.586 V）；
+机体还需做机械检查。下一次飞行前必须先解决电池与机体，再走最短 FAST PATH，且仍需明确授权。**
+
+--- END ---
+
+================================================================================
+备注（不属于提示词正文）
+- handoff: CF8_Crazyflie_handoff_2026-09-22.md（仓库根目录）
+- 证据目录: D:\Deepseek WorkSpace\cf81_dryrun_evidence\
+- 工具目录: D:\Deepseek WorkSpace\_dsh_scratch\
+- 本文件生成于 2026-09-22 夜间会话收尾；未 push、未改 product code。
+================================================================================

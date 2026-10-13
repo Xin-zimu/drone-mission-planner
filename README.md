@@ -132,6 +132,14 @@ The final suite covers geometry, rasterization, A*, smoothing, energy, assignmen
 - [后续功能开发计划（详细实施版）](docs/follow-up-development-plan.md)
 - [计划对齐与差距](docs/plan-alignment.md) · [流程优化总结](docs/workflow-optimization.md) · [新对话交接单](docs/handoff.md)
 
+### 会话工作流规范（每个新会话先读，替代散装 handoff）
+
+- [会话工作流协议](docs/workflow/session-protocol.md) — 会话启动/收尾节奏、报告格式、通用铁律
+- [会话日志](docs/workflow/session-log.md) — **唯一**当前状态页（git HEAD、硬件、阻断点、待办）
+- [CF8 真机操作规范](docs/workflow/cf8-operations.md) — 真机 SOP、已知故障库、工具索引、环境坑
+- [软件研发线工作流](docs/workflow/dev-workflow.md) — 开发循环、验证命令、提交纪律、环境坑
+- [历史交接归档](docs/archive/README.md) — 旧 handoff 只查历史，不作为事实基线
+
 CF8.1 hardens supervised hover acceptance: minimum hover duration and a continuous
 settle window must both complete before the total acceptance deadline. Hardware
 flight remains disabled by default; CF8 LIVE has not been run and CF9 is not opened.

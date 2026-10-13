@@ -1,0 +1,146 @@
+你现在接手一个已经进行到 CF8.1 真机联调阶段的项目。
+
+Windows 项目：
+D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main
+
+WSL 对应：
+/mnt/d/Deepseek WorkSpace/drone-mission-planner-main/drone-mission-planner-main
+
+Git：
+branch = codex/v1.3-crazyflie-execution
+baseline HEAD = a195c51
+commit = v1.3 CF8.1: harden hover settle acceptance
+
+真机：
+robot_id = cf231
+URI = radio://0/80/2M/E7E7E7E705
+WSL = Ubuntu + ROS2 Jazzy + Crazyswarm2
+Python venv = ~/crazyswarm-env
+ROS workspace = ~/ros2_ws
+Crazyradio 2.0
+
+先完整阅读我提供的《Drone Mission Planner × Crazyflie 真机联调交接记录》，然后继续执行。不要从头重新搭环境，不要让我重复已经完成的工作。
+
+执行规则：
+
+1. 第一件事运行：
+   git status --short
+   git diff
+   保留所有现有本地修改。禁止 git reset --hard，禁止 checkout 覆盖工作区。
+
+2. 已知本地修改至少有：
+   - bridge.yaml: min_startup_zrange_m 从 0.02 暂改为 0.005
+   - telemetry.py: 增加 Crazyflie auto-arm 兼容逻辑
+   尚未提交。
+
+3. 已确认 capability：
+   Flow2=1
+   ZRanger2=1
+   Lighthouse4=0
+   Loco=0
+   DWM1000=0
+   get_capabilities:
+   positioning_mode=flow
+   xy_positioning_available=true
+   z_positioning_available=true
+   capability_source=cflib_firmware_parameter_probe
+
+4. Crazyswarm2 已发布：
+   /cf231/status
+   /cf231/pose
+   /cf231/odom
+   /cf231/dmp_readiness
+   dmp_readiness values 顺序：
+   range.zrange, kalman.varX, kalman.varY, kalman.varZ
+
+5. Windows -> WSL 已打通：
+   127.0.0.1:8765
+   Test-NetConnection = True
+   hello 返回 backend=hardware, protocol=dmp-cf/1, bridge_version=0.1.0-cf3。
+
+6. 当前两个真实阻塞问题：
+   A. Flow Deck 静止 XY 漂移仍过大：
+      xy_span≈0.149 m / 20 s
+      vx≈0.052 m/s
+      vy≈0.020 m/s
+      speed≈0.0557 m/s
+      readiness:
+      pose_stability_failed
+      velocity_not_settled
+   B. supervisor auto-arm patch 已写入文件，但 Bridge 是 patch 前启动的旧进程；除非用户后来重启，否则必须先重启 Bridge 才加载修改。
+
+7. supervisor_info_raw=526 当前解码：
+   armed=true
+   auto_arm=true
+   can_be_armed=false
+   can_fly=true
+   flying=false
+   这是 auto-arm firmware 正常待飞模式之一。
+   原 DMP 会误报 supervisor_not_flyable + supervisor_armed。
+   当前 patch：
+   arming_ready = can_be_armed or (auto_arm and armed)
+   且只在 armed && !auto_arm 时报告 supervisor_armed。
+
+8. 不要直接假定 patch 已完整：
+   - 全仓 grep safe_for_preflight
+   - 搜索其他要求 can_be_armed && !armed 的地方
+   - 增加 raw=526 / auto_arm=true / armed=true regression test
+   - 保留 explicit-arm / 非-auto-arm 模式的严格安全语义
+
+9. 已跑：
+   python3 -m pytest tests/integration/test_execution_hardware_adapter.py -q --basetemp=/tmp/dmp-pytest
+   结果 27 passed。
+   但必须补 auto-arm 专项测试。
+
+10. 项目在 /mnt/d，`.pytest-tmp` ACL 异常，WSL/Windows 都删不掉。
+    不要浪费时间修。
+    pytest 一律加：
+    --basetemp=/tmp/dmp-pytest
+
+11. range.zrange 实测：
+    平放后稳定 8~10 mm；
+    更早曾有一次 4 mm；
+    举高约 13.7 cm -> 137 mm；
+    遮挡时曾 0。
+    bridge.yaml 的 0.005 m 只是暂定本地值。
+    不要继续为了过预检降低阈值；请判断是否应改成 local hardware config 或改 validity 逻辑。
+
+12. Kalman variance 常见：
+    varX≈100, varY≈100, varZ≈3e-6。
+    当前 policy 的 max_estimator_variance=None，主要看 variance span。
+    不要把 100 本身误当成 blocking issue。
+
+13. 真机安全不变量：
+    hardware_flight_enabled 必须继续 false，直到所有非飞行检查通过且用户再次明确确认。
+    不得运行 hello_world。
+    不得打开 hardware go_to。
+    不得进入 CF9。
+    不得解锁 hardware execute_mission。
+    不得删除/绕过 readiness gate。
+    不得用 emergency stop 替代 CF8 controlled landing fault path。
+    cflib capability probe 与 Crazyswarm2 不得同时占用 Crazyradio。
+
+按顺序自主执行：
+
+A. 检查 git diff、进程和 ROS topics。
+B. 重启 DMP Bridge，加载 telemetry.py patch。
+C. get_telemetry 验证 auto-arm 状态下 supervisor 两个误报是否消失。
+D. 检查 safe_for_preflight 与所有相关调用；修复语义一致性并补 regression tests。
+E. 跑 hardware adapter / CF8 相关软件测试，全部用 /tmp basetemp。
+F. 继续诊断 Flow Deck 静止漂移，不要先放宽阈值。优先检查纹理、照明、Flow Deck 原始质量/motion 数据、Kalman reset 后完整窗口表现。
+G. 目标是让 get_telemetry.readiness.passed=true，或只剩与任务 frame 校准相关、可解释且未涉及飞行的项。
+H. 在真飞前验证：
+   - hardware_flight_enabled=false 时 run_cf8_acceptance 必须返回 hardware_flight_disabled；
+   - 缺失/错误 confirm_real_flight 必须被拒绝。
+I. 所有非飞行验证通过后，停止并输出《首次 CF8 真飞前检查报告》。没有我明确确认，不得修改 hardware_flight_enabled=true，不得发送真实 arm/takeoff/land。
+J. 我确认后才执行 CF8：仅 0.25 m takeoff -> 3 s hover -> controlled land。不要进入 CF9。
+
+每个阶段都汇报：
+- 实际执行的命令
+- 关键输出
+- 修改的文件
+- 测试结果
+- 当前 readiness issues
+- 是否发送过真实 arm / takeoff / land（必须明确 YES/NO）
+
+不要只给建议，要实际检查、修改、测试并推进；只有需要我移动飞机、换地面、充电或确认真飞时才停下来让我操作。

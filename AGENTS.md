@@ -15,4 +15,5 @@
 13. Keep the application launchable and operable after every phase.
 14. Never hard-code planning results for a demonstration.
 15. Random behavior must accept a deterministic seed.
+16. Session workflow: every new session must first read `docs/workflow/session-protocol.md` and `docs/workflow/session-log.md`; hardware work additionally requires `docs/workflow/cf8-operations.md`. Never start from scratch against historical handoffs in `docs/archive/`.
 

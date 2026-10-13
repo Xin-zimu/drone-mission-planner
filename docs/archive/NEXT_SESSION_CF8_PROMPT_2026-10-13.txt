@@ -1,0 +1,147 @@
+================================================================================
+NEXT SESSION — CF8 CRAZYFLIE 交接提示词（2026-10-13 版）
+（把 START 与 END 之间的内容整段发给新的 DeepSeek Harness 会话）
+================================================================================
+
+--- START ---
+
+接手 CF8 Crazyflie 真机验收。**先读交接文档，再动手；不要重复历史诊断。**
+
+## 第 0 步：恢复上下文（必做，且只读）
+
+1. 完整阅读：`D:\dmp\CF8_handoff_2026-10-13.md`
+   （本文含全部上下文：环境、git、安全不变量、**本轮修掉的两个环境 bug**、
+   **Flow Deck 完全不被检测的决定性证据**、待办步骤、工具清单、证据目录。）
+2. 需要细节时再读：`D:\Deepseek WorkSpace\_dsh_scratch\CF8_DECK_BLOCKER_2026-10-13.md`
+   （完整证据链与命令记录）。
+3. 运行手册：`D:\Deepseek WorkSpace\_dsh_scratch\CF85_RUNBOOK.md`（09-28 版，两个命令的日常入口）。
+4. 检查仓库状态（只读）：
+   - `git -C "D:\dmp" status --short` / `git -C "D:\dmp" log --oneline -3`
+   - 期望：branch `codex/v1.3-crazyflie-execution`，HEAD **`7c1d904`**，
+     工作树干净（仅 4 个未跟踪交接文档），**未 push**。
+   - **不要** reset / checkout / 覆盖工作树；**不要** push。
+
+## 硬约束（违反即停）
+
+- `hardware_flight_enabled` 保持 **false**，除非用户**明确授权一次** CF8。
+- **不得**修改任何阈值 / gate / TTL / estimator 策略：
+  `battery_critical_voltage = 3.7 V`、`capability_snapshot_max_age_s = 3600`、
+  `max_estimator_variance_span = 0.002`、STABILIZING 全部参数。
+- **不得**绕过 readiness gate；**不得**用 emergency stop 替代受控降落。
+- **不得**运行 CF9、硬件 `go_to`、硬件 `execute_mission`、`hello_world`。
+- **不得自动重试** CF8：一次授权 = 最多一次 `run_cf8_acceptance`。
+- cflib 探针与 Crazyswarm2 **不得同时占用** Crazyradio。
+- 无明确授权时**绝不真实起飞**。
+
+## 第 1 步：现状（2026-10-13 结）
+
+**阻断点是 Flow Deck 完全不被检测**（不是电池，也不是固件）：
+
+- 实测 `motion.deltaX/deltaY/motion/squal` 与 `range.zrange` **全部恒 0**；
+  而 `pm.vbat`、`stateEstimate`、`supervisor=526` **全部正常**（机体健康）。
+- `deck.bcFlow2 = 0`、`bcZRanger2 = 0`（09-22 为 1）；
+  `TYPE_1W` deck 身份元素 **0 个**；`motion.motion` 计数器**恒 0**。
+- **与 09-22 的"冻结"是不同故障**：09-22 是"检测到了但数据冻结"（motion 计数 58、bcFlow2=1），
+  现在是"**根本没被检测到**"——故障在更早的发现/上电初始化阶段。
+  → **所以"重新插接就好"的老经验不一定适用。**
+- **固件未变**：实测 `revision0=0xA54F11EB`+`revision1=0x6D00` = `a54f11eb6d00`，
+  与 09-22 日志 `Build 0:a54f11eb6d00` **逐字节一致**。
+- **无软件修复路径**：`force_check.py` 证明所有 `deck.*` 都是**只读**、无 `force` 开关；
+  配置块里也没有 deck 键。→ 写参数/写 NVM 都不可能恢复。
+
+电池：充电中（**结时 3.959 V / 70%**，30%→50%→60%→70%），`pm.state=1`，
+但充电电流仅 **~0.04 A，偏慢**。
+
+## 第 2 步：等用户完成物理操作（不要抢跑）
+
+**在用户明确说"电已充满 / 可以上电"之前：不要上电、不要启动 Crazyswarm2、不要连 cf231。**
+（只读探针也需要电台空闲，但请等用户确认。）
+
+用户需要做，按顺序：
+
+1. **充满电**（充电偏慢，留意是否卡住；长时间不涨则怀疑电池/插头接触）。
+2. **软件电源循环**（不用拆机，先做这个）：
+   cflib 的 `PowerSwitch.stm_power_cycle()` 可经电台重启 STM32 **和扩展板**
+   ——**非飞行命令、不写 NVM**：
+   ```bash
+   wsl -d Ubuntu
+   cd "/mnt/d/Deepseek WorkSpace"
+   bash _dsh_scratch/run_probe.sh 3-1 deck_recover.py --power-cycle --confirm-power-cycle
+   # 或抓新的启动横幅，看固件这次有没有发现 deck：
+   bash _dsh_scratch/run_probe.sh 3-1 boot_banner.py --power-cycle --confirm-power-cycle
+   ```
+   判读：**恢复** → 是开机初始化一次性失败（供电/时序）；
+   **仍全 0** → 更可能是物理接触。
+3. 若无效：**断电，重新压紧 Flow Deck**（建议重插前后各测一次，以确认是哪一步修好的）。
+
+## 第 3 步：用户确认"电已充满、deck 已处理"之后
+
+1. 只读复测 deck（决定性）：
+   ```bash
+   bash _dsh_scratch/run_probe.sh 3-1 flow_deck_live.py --duration 5
+   ```
+   期望：`motion.squal` 非零且波动、`range.zrange` 有合理读数。
+2. 若 deck 恢复 → 走**唯一入口**：
+   ```bash
+   cd "/mnt/d/Deepseek WorkSpace"
+   ./cf_prepare.sh
+   ```
+   正常输出四行 + `READY_FOR_CF8`：
+   `Battery PASS` / `Radio PASS`（地址可能显示 `PASS (fallback)`，属正常）/
+   `Link PASS` / `Preflight PASS`。
+   - 注意：现在新增了 **Stage 2.75** 会先刷新 capability 快照；
+     若 deck 仍为 0，会**明确报 "Flow Deck v2 decks are missing"**（这是预期行为）。
+   - 电池门槛（会话级，非产品阈值）：`<4.00V` 禁飞、`4.00–4.10V` 仅诊断、`≥4.10V` 放行。
+3. `./cf_prepare.sh` 任何一步 FAIL → **立即停止、不重试**，报告并等指示。
+
+## 第 4 步：仅在用户明确授权后（一次且仅一次）
+
+```bash
+./run_cf8_acceptance.sh
+```
+- 它需要 `cf_prepare.sh` 签发的**一次性 READY token**（默认 900 s，绑定本次 runtime URI）。
+- 落地后立即按 runbook 收尾（恢复 flag=false → 停栈 → 优雅停 recorder → 服务计数）。
+- 报告须含：结果 / `failure_code` / 事件时间线 / `failure_telemetry`（真实触发值）/
+  `max_z` / 实际离地高度 / 最大 XY 漂移 / 最大速度 / 最低电池 / squal / varP / range /
+  supervisor / 是否进入 STABILIZING / service 调用次数 / 是否受控降落 / 最终安全状态。
+- 分析 recorder 数据时**必须截断 operator pickup 之后的样本**（用户会在结束后用手拿起机体）。
+
+## 环境坑（务必遵守）
+
+- 仓库真路径 `D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main`；
+  **`D:\dmp` 是 junction**。
+- cflib 在 WSL 的 venv `~/crazyswarm-env`（**系统 python3 没有**）；`.bashrc` 里 venv 激活那行
+  **被注释掉了**，必须显式激活。入口脚本的环境激活已由本轮修复。
+- **电台 busid 会随插拔变化**（曾 1-3 → 1-4 → **现为 3-1**）。已改为运行时解析；
+  手动命令请**先 `usbipd list` 确认**，不要照抄旧 busid。
+- ⚠️ **电台会反复掉线**：WSL 空闲会自动关机，USB/IP 挂载随之失效，
+  而 `usbipd list` 仍显示 `Attached`（陈旧状态）。
+  → 一律用 `_dsh_scratch/run_probe.sh`（**同一 WSL 会话内**先确保电台再跑探针）。
+- PowerShell 内联命令里不要写 `$`（会被提前展开）；shell 逻辑写进 `.sh` 文件。
+- pytest 必须加 `--basetemp`（仓库内 `.pytest-tmp` 的 ACL 已坏）；**不要再加 `-q`**（addopts 已含）。
+
+## 报告与语言
+
+- 用**中文**报告。
+- 每个阶段报告：执行的命令、关键输出、改动文件（如有）、测试结果、就绪问题，
+  以及**明确 YES/NO**：是否真的发送了 arm / takeoff / land。
+- **不要只给建议**，要实际检查、修改、测试、推进。
+
+## 一句话记住
+
+**软件侧已就绪（HEAD `7c1d904`，flag=false，未降任何阈值）；固件未变；
+唯一硬阻断是 Flow Deck 完全不被检测（bcFlow2=0、三路传感器全 0、TYPE_1W=0，
+而机体与遥测全部健康）。先充满电 → 软件电源循环 → 无效则重插 deck，
+再走 `./cf_prepare.sh` → 授权后 `./run_cf8_acceptance.sh`（一次且仅一次）。**
+
+--- END ---
+
+================================================================================
+备注（不属于提示词正文）
+- 交接文档: D:\dmp\CF8_handoff_2026-10-13.md（仓库根目录，未跟踪）
+- 证据链: D:\Deepseek WorkSpace\_dsh_scratch\CF8_DECK_BLOCKER_2026-10-13.md
+- 运行手册: D:\Deepseek WorkSpace\_dsh_scratch\CF85_RUNBOOK.md
+- 工具目录: D:\Deepseek WorkSpace\_dsh_scratch\
+- 证据目录: D:\Deepseek WorkSpace\cf_evidence_runs\ , cf81_dryrun_evidence\
+- 本文件生成于 2026-10-13 夜间会话收尾；未 push、未改 product code。
+================================================================================
