@@ -66,10 +66,11 @@
 | 项 | 值 |
 |---|---|
 | 分支 | `codex/v1.3-crazyflie-execution` |
-| HEAD | **`f3189f1`** — docs(cf85): consolidate project plans and establish evidence-based handoff |
-| push | **ahead 9，未 push**（默认不 push，除非用户明确要求） |
+| **验证基线** | **`f3189f1`**（文档体系重构完成、三项自检全绿的那次提交）。<br>**这不是"实时 HEAD"**——本字段只记录"最后一次经过验证的代码基线"，允许落后于 HEAD |
+| push | ahead 10，未 push（默认不 push，除非用户明确要求） |
 | 工作树 | **仍未提交**：2026-10-14 的电池判据分级（5 个产品文件 + 2 个测试）；根目录 3 份 10-14 报告（未跟踪）。`_dsh_scratch/` 与 `cf_evidence_runs/` 在**仓库外** |
 | 文档自检 | `python scripts/docs/cf85_{doc_consistency,stage_audit,handoff_sim}.py`（已入仓库，可移植） |
+| 证据可获取性 | 证据目录在仓库**外**（`D:\Deepseek WorkSpace\cf_evidence_runs\`）。**全新克隆不含证据**，届时自检会报"证据缺失"，那是正确行为，不是通过 |
 
 ---
 
