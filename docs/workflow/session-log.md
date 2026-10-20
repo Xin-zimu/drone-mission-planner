@@ -66,9 +66,10 @@
 | 项 | 值 |
 |---|---|
 | 分支 | `codex/v1.3-crazyflie-execution` |
-| HEAD | `a63fc7f` |
-| push | ahead 8，未 push（默认不 push） |
-| 工作树 | 有未提交改动：电池判据分级（产品代码 + 测试）、3 份报告、规范文档。`_dsh_scratch/` 与 `cf_evidence_runs/` 在**仓库外** |
+| HEAD | **`f3189f1`** — docs(cf85): consolidate project plans and establish evidence-based handoff |
+| push | **ahead 9，未 push**（默认不 push，除非用户明确要求） |
+| 工作树 | **仍未提交**：2026-10-14 的电池判据分级（5 个产品文件 + 2 个测试）；根目录 3 份 10-14 报告（未跟踪）。`_dsh_scratch/` 与 `cf_evidence_runs/` 在**仓库外** |
+| 文档自检 | `python scripts/docs/cf85_{doc_consistency,stage_audit,handoff_sim}.py`（已入仓库，可移植） |
 
 ---
 
