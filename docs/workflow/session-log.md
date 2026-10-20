@@ -1,72 +1,98 @@
-# 会话日志（当前状态唯一事实来源）
+# 会话日志（当前状态快照）
 
-> 这是**唯一**的当前状态页。任何新会话先读这里。
-> 状态有变化就更新本文件；本文件与 git 工作树不符时以本文件为准并立即核查。
+> **这是一份快照，不是编年史。** 只写"现在是什么"，不写"以前以为是什么"。
+> 历史过程见 `docs/archive/session-history-*.md`；本文件每次会话**重写**，不追加。
+> 新会话读完本文件即可开工；发现本文件与现实不符 → 先改本文件，再动手。
+>
+> **不在这里重复完成判据** —— 它们只在 `STAGE.md` §2，那里直接挂实测证据。
+> 本文件只回答：现在能不能飞、飞机是什么状态、环境有什么坑、下一步做什么。
 
-- 最近更新时间：2026-10-14 02:30（由本次"规范体系建立"会话写入）
-- 主线目标：**CF8 真机验收通过**（首次真机 hover 起飞→悬停→降落一次且仅一次）
-- 下一里程碑：M3（拿回飞机后恢复基础飞行能力）见 `learning-plans/路线联动推进计划.md`
+- 最近重写：2026-10-20 23:2x
+- 当前阶段：**CF8 单机真实 hover**（目标与判据见 `STAGE.md`）
+- **一句话状态：不可飞。** 四条判据中三条不成立、一条未测
 
-## 1. 仓库状态
+---
+
+## 1. 为什么现在不能飞
+
+判据原文与证据**只在 `STAGE.md` §2**，此处不复制数值。三条不成立的简述：
+
+| 判据 | 状态 | 一句话 |
+|---|---|---|
+| 电源 | ❌ | 本包 sag 超标，跌破固件硬断电 |
+| 链路 | ❌ | 起飞后约 2.6 s 开始丢包 |
+| 定位 | ❌ | 起飞后约 5 s EKF 发散，`z` 与 `zrange` 差一个量级 |
+
+**形变问题未触及**：以上任一条不成立，"飞控能否补偿形变"就无法判断——
+不是形变太严重，是别的问题先发生。三次翻倒（10-14 两次 + 10-20 一次）都不能再归因于
+"单一机械根因"。
+
+---
+
+## 2. 当前飞机与设备状态（实测）
+
+| 项 | 值 |
+|---|---|
+| 电池 | 官方 250 mAh 1S；**本包已劣化**（sag 1.081 V）。静置读数会回升，**静置正常不代表能飞** |
+| 电台 | Crazyradio 2.0 `1915:7777`，busid 会变（历史 1-3 → 1-4 → 3-1）；WSL 内需 USB/IP 转接 |
+| 固件 | `a54f11eb6d00`；`pm.lowVoltage=3.2`、`pm.criticalLowVoltage=3.0` |
+| Flow Deck | 正常（`bcFlow2=1`、`bcZRanger2=1`、`squal` 有数据）。**会因上电抖动掉枚举**，见 §5 F3 |
+| 机载控制 | `stabilizer.controller=1`(PID)、`estimator=2`(Kalman)、`motorPowerSet.enable=0` |
+| `commander.enHighLevel` | **仅由 Crazyswarm2 启动时写为 1**。单独探针读到 0 是固件默认，不是故障 |
+| 机架 | 用户确认：电机塑料支脚**固定歪斜、无裂纹**、可更换。倾斜量未测量 |
+| 最近姿态 | 静置 roll 2.77° / pitch 4.26°（加速度计与估计器大体一致） |
+
+---
+
+## 3. 安全不变量（违反即停）
+
+| 项 | 当前值 | 位置 |
+|---|---|---|
+| `hardware_flight_enabled` | **false** | `bridge.yaml` L7 |
+| `battery_critical_voltage` | **3.7 V**（地面/静置放行判据） | bridge.yaml |
+| `battery_critical_airborne_voltage` | **3.3 V**（空中/带载判据） | bridge.yaml |
+| `minimum_battery_critical_samples` | **3**（去抖） | bridge.yaml |
+| preflight `MIN_BATTERY_V` | **4.00 V**（飞行放行线） | `cf84_preflight.py` L41 |
+| 会话闸门 `BATTERY_FORBID_V` | **3.50 V**（地面诊断，**非**飞行放行线） | `cf_ops_lib.sh` + `cf85_lib.sh`（两处必须一致） |
+| 外电互锁 | `pm_state≠0` 或充电电流 >0.01 A → **一律禁飞**，电压不可覆盖 | `cf85_battery_policy.py` |
+
+**会话闸门 3.50 V 的边界**：它只放行**不起桨**的地面诊断。飞行仍由 preflight 4.00 V 和空中 3.3 V 把关。
+两个 lib 曾因只改一个导致子进程静默覆盖——`cf85_gate_check.sh` 用于防漂移。
+
+---
+
+## 4. 仓库状态
 
 | 项 | 值 |
 |---|---|
 | 分支 | `codex/v1.3-crazyflie-execution` |
-| HEAD | `18784fc` — docs(workflow): reflect workflow-system commit in session log（父提交 `250015a` 规范体系、`7c1d904` CF8.1） |
-| push 状态 | **ahead 7，未 push**（默认不 push，除非用户明确要求） |
-| 工作树 | 干净（规范体系已提交；`_dsh_scratch` 与证据目录在仓库外，不进仓库） |
+| HEAD | `a63fc7f` |
+| push | ahead 8，未 push（默认不 push） |
+| 工作树 | 有未提交改动：电池判据分级（产品代码 + 测试）、3 份报告、规范文档。`_dsh_scratch/` 与 `cf_evidence_runs/` 在**仓库外** |
 
-## 2. 安全不变量（当前值，违反即停）
+---
 
-| 项 | 值 | 位置 |
-|---|---|---|
-| `hardware_flight_enabled` | **false**（未改） | `integrations/crazyflie_ros2/src/dmp_crazyflie_bridge/dmp_crazyflie_bridge/config/bridge.yaml` L7 |
-| `battery_critical_voltage` | **3.7 V**（未改） | bridge.yaml L10 |
-| `capability_snapshot_max_age_s` | **3600**（未改） | bridge.yaml L9 |
-| `max_estimator_variance_span` | **0.002**（未改） | bridge.yaml L21 |
-| 电池会话政策 | `<4.00V` 禁飞；`4.00–4.10V` 仅诊断；`≥4.10V` 放行；"充满"但 `<3.90V` 判可疑电池 | 见 cf8-operations.md §4 |
-
-## 3. 硬件状态（cf231）
-
-| 项 | 状态（2026-10-14 01:50 结） |
-|---|---|
-| 电池 | **3.964 V，90%，已脱离外电、正在放电**，低于 4.00 V 会话禁飞线 |
-| 电台 | Crazyradio 2.0 `1915:7777`，busid **3-1**，拔插后链路已恢复（CRTP connect 2.8s） |
-| 固件 | `a54f11eb6d00`（与 09-22 逐字节一致，未变） |
-| **当前阻断点** | **Flow Deck 完全不被检测**：`deck.bcFlow2=0`、`bcZRanger2=0`、`TYPE_1W=0`、`TYPE_I2C=1`、三路传感器（deltaX/deltaY/squal/zrange）恒 0；`pm.vbat`/`stateEstimate`/`supervisor` 正常 → 机体健康，单 deck 子系统未起来 |
-| 已排除 | 充电（非充电中）、软件电源循环 `stm_power_cycle()`、物理重插 deck、整机+电台全拔重插 → 全部无效 |
-| 判定 | **deck 侧或板侧 1-wire 通路硬件故障**（不是固件、不是软件、不是环境） |
-| 下一步 | 用户找一块**已知正常的 Flow Deck v2** 换上去测：若 `TYPE_1W` 仍 0 → 板侧 header/pull-up 故障需维修；若恢复 → 原 deck 损坏 |
-
-## 4. 环境状态
+## 5. 环境事实（每坑只记一次）
 
 | 项 | 值 |
 |---|---|
 | 仓库真路径 | `D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main`；`D:\dmp` 是 junction |
-| WSL | Ubuntu 24.04，ROS 2 Jazzy；cflib 在 venv `~/crazyswarm-env`（系统 python3 没有）；`.bashrc` 里 venv 激活行被注释，入口脚本已自动激活（cf_ops_lib.sh `cf_ops_source_env()`） |
-| 电台 busid | 会随插拔变化（历史：1-3 → 1-4 → 3-1）；`cf_ops_radio_busid()` 运行时解析；手动命令先 `usbipd list` 确认 |
-| 电台掉线 | WSL 空闲自动关机 → USB/IP 失效；`usbipd list` 仍显示 Attached 是陈旧状态；一律用 `_dsh_scratch/run_probe.sh` |
-| pytest | 必须 `--basetemp=.pytest-tmp-<新名>`（`.pytest-tmp` ACL 坏）；**不要重复 `-q`**（addopts 已含） |
+| WSL | Ubuntu 24.04 + ROS 2 Jazzy；cflib/ruff/mypy 都在 venv `~/crazyswarm-env`（系统 python3 没有） |
+| 电台掉线 | WSL 空闲会关机 → USB/IP 失效；`usbipd list` 显示 Attached 可能是陈旧状态。**一律用 `run_probe.sh`** |
+| pytest | 必须 `--basetemp=<新目录>`；5 个 `test_ui_*.py` 因缺 PySide6 需 `--ignore` |
+| ROS 发现域 | 必须 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` |
+| **DDS 假 Link FAIL 真因** | **启动顺序**，不是发现域：recorder 先起 → 0/4 通过；Crazyswarm2 先起 → 4/4 通过 |
+| 探针与栈互斥 | cflib 探针与 Crazyswarm2 **永不同时占电台** |
+| cflib `get_value()` | 返回**字符串**（如 `'1'`），`== 1` 恒 False。判定前必须数值归一化 |
 
-## 5. 本次规范体系改动（已提交 `250015a`）
+---
 
-新增 `docs/workflow/`（session-protocol.md、session-log.md、cf8-operations.md、dev-workflow.md）；
-新增 `docs/archive/`（6 份历史交接文档归档 + README）；`AGENTS.md` 新增规则 16；
-README 文档索引新增"会话工作流规范"一节。
+## 6. 下一步
 
-## 6. 最近会话记录（新→旧）
+**推进顺序只在 `STAGE.md` §5**，此处不复制。当前卡在第 1 步：换健康电池、复测 sag。
 
-| 日期 | 会话 | 结论 |
-|---|---|---|
-| 2026-10-14 凌晨 | CF8 交接文档与 Flow Deck 排障 | 三种补救耗尽：deck 仍不被检测 → 判硬件故障；期间电台链路曾坏（自伤：后台探针占电台），拔插修复；电池掉到 3.964 V |
-| 2026-10-13 | 换新电池上电 | 首次新电池上电；修复 cf_prepare.sh 两个环境 bug（venv 未激活、busid 写死）；确认 Flow Deck 完全不被检测（决定性证据）；提交 `7c1d904` |
-| 2026-09-28 | CF8.5 脚本修复 | 离线验证两个入口（cf_prepare.sh / run_cf8_acceptance.sh）+ RUNBOOK |
-| 2026-09-22 | CF8 真机联调 | 全天排障：电池掉压 → 电台链路（nRF51 应答、STM32 无应答）→ 全断电冷启动恢复；收尾交接 |
-| 2026-09-21 | 首次 CF8 | 两次真实尝试均 `battery_critical` 受控降落；修 estimator convergence 用错变量；observability 修复 |
+本阶段之外的待办（不阻塞 CF8）：
 
-## 7. 待办（跨会话）
-
-- [ ] Flow Deck 硬件确认：换已知正常 deck 对照测试（**用户物理操作**）
-- [ ] 电池充满到 ≥4.10 V 并静置复测（充电电流偏慢 ~0.04 A 需留意）
-- [ ] deck 恢复后：`./cf_prepare.sh` → 用户授权 → `./run_cf8_acceptance.sh`（一次且仅一次）
-- [ ] 软件研发线：M2（默认关闭的真机航点执行路径）见 `learning-plans/路线联动推进计划.md`
+- [ ] `FALLBACK_ADDRESS_IN_USE`：机体答 `E7E7E7E7E7`，`cf_identity.yaml` 偏好 `...E705` 无应答
+- [ ] 提交未提交改动（产品代码与规范文档分开提交）
+- [ ] 软件线 M2（真机航点执行，默认关闭）—— 阶段启动时再展开，见 `PLAN.md` §4

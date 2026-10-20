@@ -9,10 +9,21 @@
 | `CF8_1_Crazyflie_handoff_2026-09-21.md` | 2026-09-21 | 首次 CF8 尝试（电池掉压）交接 |
 | `CF8_Crazyflie_handoff_2026-09-22.md` | 2026-09-22 | 全天排障（电池/电台/冷启动）交接 |
 | `CF8_handoff_2026-10-13.md` | 2026-10-13 | 新电池上电、环境 bug 修复、Flow Deck 不被检测证据 |
+| `session-history-2026-10-20.md` | 2026-10-20 | **旧版 session-log 全文**（追加式编年史 317 行）。含当日所有推理过程与已作废结论 |
 | `DeepSeekHarness_CF8_1_prompt_v2.txt` | 2026-09-21 | CF8.1 阶段提示词 |
 | `NEXT_SESSION_CF8_PROMPT.txt` | 2026-09-22 | 旧版下一会话提示词 |
 | `NEXT_SESSION_CF8_PROMPT_2026-10-13.txt` | 2026-10-13 | 旧版下一会话提示词（已被 `docs/workflow/` 体系替代） |
+| `NEXT_SESSION_CF8_PROMPT_2026-10-14.txt` | 2026-10-14 | 旧版下一会话提示词（"把这段贴给新会话"，已被三层文档体系替代） |
 
 **归档原因**：这些文件互相引用、重复、漂移（例如交接单声称的唯一运行手册与脚本实际行为
 不符），已由 2026-10-14 建立的规范体系（`docs/workflow/`）取代。证据链仍在
 `D:\Deepseek WorkSpace\_dsh_scratch\CF8_DECK_BLOCKER_*.md` 与 `cf_evidence_runs/`。
+
+## 为什么会有 `session-history-*.md`
+
+2026-10-20 的 reorganize 发现：`session-log.md` 被当成追加式编年史使用，同一页里并存
+**互相矛盾的活结论**（例如"已离地"与"未离地"），新会话读到哪条全看运气，直接导致重复犯错。
+
+现在的规则（见 `docs/workflow/session-protocol.md` §0.1）：
+**`session-log.md` 是快照，每次收尾重写；过程叙事进本目录。**
+被推翻的结论**从当前文档删除**，不是加一句"以上作废"。

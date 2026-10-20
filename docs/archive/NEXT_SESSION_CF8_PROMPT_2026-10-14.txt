@@ -1,0 +1,138 @@
+--- START ---
+
+# CF8 真机任务 — 新会话提示词
+
+把下面整段（含 START/END 标记之内）贴给新会话即可。
+
+## 0. 你的身份与铁律
+
+你是这个无人机项目的编码代理。工作目录 `D:\Deepseek WorkSpace`，项目在
+`D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main`（`D:\dmp` 是它的 junction）。
+
+**开工前必读（仓库 AGENTS.md 规则 16 强制）**，按顺序：
+1. `docs/workflow/session-protocol.md`
+2. `docs/workflow/session-log.md` ← **唯一事实来源，先读这个**
+3. `docs/workflow/cf8-operations.md`（真机线必读，含故障库与硬约束）
+
+**硬约束（违反即停）**：
+- 不改任何阈值/gate/TTL/estimator 参数（唯一例外已在 2026-10-14 由用户授权完成，见 §3）
+- `hardware_flight_enabled` 保持 `false`，除非用户**明确单次授权**真机
+- 一次授权 = 最多一次 `run_cf8_acceptance`，**不自动重试**
+- 不跑 CF9 / 硬件 `go_to` / `execute_mission`
+- cflib 探针与 Crazyswarm2 **不同时占用电台**
+- push / merge / commit 需用户明确要求（**当前有未提交改动，等用户发话**）
+
+## 1. 当前状态（2026-10-14 16:35 结）
+
+| 项 | 值 |
+|---|---|
+| 分支 / HEAD | `codex/v1.3-crazyflie-execution` / `a63fc7f`，**ahead 8 未 push** |
+| 工作树 | **有未提交改动**（10 改 + 2 新增报告）—— 见 §3 |
+| 电池 | 4.165 V / 90%，**正在充电（`pm_state=1`）** |
+| 电池 | 4.186 V / 90%，**正在充电（`pm_state=1`）** |
+| 飞机姿态 | **不水平**：估计器 roll −35.0° / pitch −65.7°；**加速度计独立验证 tilt 84.8°**（`acc=(-0.956,-0.249,-0.090)`）。两者一致 → 机体确实侧着，但**手握/侧放充电即可解释，不是损伤证据** |
+| 固件锁存 | `supervisor.info = 676` = `auto_arm` + **`tumbled`** + **`crashed`**，且 **`can_fly = NO`** |
+| 电台 | Crazyradio 2.0，busid **3-1**（会变，运行时解析） |
+| Flow Deck | 正常（`bcFlow2=1`、`bcZRanger2=1`） |
+| 固件 | `a54f11eb6d00`（未变）；`pm.lowVoltage=3.2`、`pm.criticalLowVoltage=3.0` |
+
+**当前阻断点（都要物理操作）**：
+1. 飞机仍在充电 → 必须拔线（现在有硬互锁会拦，见 §3）
+2. 固件 `tumbled` + `crashed` 双锁存，`can_fly=NO` → 先试**摆平在桌面**；若锁存仍在，
+   需**真正断开电池再上电**（重启 ROS 栈无效）
+3. 姿态不水平 → 摆正水平
+
+## 2. 你的第一个任务
+
+**先跑只读体检**，确认阻断点是否已解除。**不要直接起飞**：
+
+```bash
+# 1. 姿态（加速度计独立验证，不看估计器）+ 供电 + supervisor 锁存
+wsl -d Ubuntu bash -lc 'bash "/mnt/d/Deepseek WorkSpace/_dsh_scratch/run_probe.sh" 3-1 cf85_level_check.py'
+```
+
+判据（**加速度计那句话才是姿态的真相**，`stabilizer.roll/pitch` 是估计器输出，可能飘）：
+- 加速度计报 **LEVEL**（tilt < 20°）
+- `pm.state = 0`（不在充电）
+- `supervisor.info` **不含** `tumbled`(0x20) 和 `crashed`(0x80)，且 **`can_fly` = YES**（干净时应是 **526**）
+- `pm.vbat ≥ 4.00 V`
+
+然后请用户确认物理前提（螺旋桨无裂、周围 ≥2m 空地、全程盯机），再：
+```bash
+wsl -d Ubuntu bash -lc 'cd "/mnt/d/Deepseek WorkSpace" && ./cf_prepare.sh'
+```
+到 `READY_FOR_CF8` 后**停下来向用户报告**，等用户明确授权才跑 `./run_cf8_acceptance.sh`。
+
+> **切勿在飞机挂在充电器上时起飞。** 2026-10-14 就是这么出的事故（见 §3.2 第 3 条）。
+> 现在有硬互锁，但别依赖它 —— 互锁是兜底，不是许可证。
+
+## 3. 本会话（上一轮）做了什么
+
+### 3.1 产品代码：电池判据分级（**唯一被授权的阈值修改**）
+
+原来拿**带载瞬时电压**比 **3.7 V 静置标称值** → 官方电池必 sag 0.5 V → 健康电池也必然失败。
+拆成两个阈值：
+
+| 键 | 值 | 作用 |
+|---|---|---|
+| `battery_critical_voltage` | 3.7 V（**未改**） | 地面/静置放行 |
+| `battery_critical_airborne_voltage` | **3.3 V（新增）** | 空中/带载，驱动受控降落 |
+| `minimum_battery_critical_samples` | **3（新增）** | 去抖：连续 N 个低样本才触发 |
+
+依据：固件自身 `pm.lowVoltage=3.2` / `pm.criticalLowVoltage=3.0`（3.3 高于告警 0.1、高于硬断电 0.3）。
+改动文件：`telemetry.py`、`cf8_acceptance.py`、`protocol_server.py`、`config/bridge.yaml` + 2 个测试文件。
+**验证**：ruff 全过；mypy 前后均 19 个既有错误（逐条 diff 一致）；`tests/integration` **247 passed**。
+
+### 3.2 三个根因修复（真机阻塞）
+
+1. **DDS 间歇失败真因 = 启动顺序**（我上一轮误判为 `LOCALHOST`，**已纠正**）：
+   recorder 先起 = **0/4 通过**；Crazyswarm2 先起 = **4/4 通过**。
+   → 改 `cf85_bringup_health.sh`：先起 Crazyswarm2 并等 `Memories:`，再起 recorder。真机 **3/3 通过**。
+2. **ready 文件竞态**：recorder 只要 pose+status 就写 ready，但校验方要求**五路全非零** → 误判。
+   → 改 `cf8_flight_recorder.py`：五路全到齐才宣布 ready。
+3. **外电（充电）起飞硬互锁** —— **16:03 真实事故**：飞机挂在充电器上仍被批准起飞，
+   固件锁 `tumbled`+`crashed`，表观位移 7.9 m、峰值 4.06 m/s、受控降落失败。**飞机经检查无损。**
+   根因：`pm_state=1` / `charging_current_a=0.213` **就写在 `battery.json` 里，但判据只看电压**。
+   → 新增 `cf85_battery_policy.py`（判据唯一实现，外电检查最优先）→ `FORBIDDEN_TETHERED`，**电压不可覆盖**；
+   `cf_ops_lib.sh` 显式拒绝。**回归测试 9/9，含真实事故 payload 回放。**
+
+### 3.3 报告（未提交）
+
+- `CF8_FLIGHT_REPORT_2026-10-14.md` — 14:58 那次尝试的完整分析（**结论是"中止的起飞"，飞机只升到 2.7 cm，不是飞行**）
+- `INCIDENT_2026-10-14_tethered_takeoff.md` — 16:03 外电起飞事故
+
+## 4. 环境坑（会浪费你很多时间，务必先看）
+
+| 坑 | 处理 |
+|---|---|
+| **PowerShell 会吃掉内联 `$`** | shell 逻辑一律写进 `_dsh_scratch/*.sh`，PowerShell 只传路径/参数 |
+| **`pkill -f 'ros2 launch'` 会杀掉自己** | 用括号避免自匹配：`pkill -9 -f "ros2 launc[h]"` |
+| WSL 空闲关机 → USB/IP 掉 | `usbipd list` 显示 Attached 是陈旧状态；用 `run_probe.sh`（同一会话内确保电台） |
+| 电台 busid 会变 | 先 `usbipd list`；脚本内 `cf_ops_radio_busid()` 运行时解析 |
+| pytest | 必须 `--basetemp=<新目录>`；**不要加 `-q`**（addopts 已含） |
+| ruff / mypy / cflib 都在 venv | `source ~/crazyswarm-env/bin/activate`（裸 python3 没有） |
+| 5 个 `test_ui_*.py` 缺 PySide6 | 跑测试时 `--ignore` 掉，与本线无关 |
+| 仓库真路径有空格 | 用 `D:\dmp`（junction） |
+
+## 5. 关键工具（都在 `_dsh_scratch/`，仓库外）
+
+| 工具 | 用途 |
+|---|---|
+| `run_probe.sh <busid> <probe.py>` | 同一 WSL 会话内"确保电台 + 跑只读探针" |
+| `cf85_incident_check.py` | 事故后/起飞前只读体检：pm.state / 姿态 / supervisor |
+| `cf85_battery_policy_test.py` | 电池/外电判据回归（9 项，离线可跑） |
+| `cf85_incident_check.py` / `pm_probe.py` | 机体状态 / 固件电池阈值 |
+| `order_test.sh` / `verify_order_fix.sh` | 启动顺序 A/B 与修复验证 |
+| `cf85_verify_incident_fix.sh` | 语法 + 门链 + 互锁状态一键自检 |
+| `cf85_shm_state.sh --clear` | 查看/清理 `/dev/shm/fastrtps_*`（仅无存活节点时） |
+
+两个入口只有这两个：`./cf_prepare.sh`（准备，不飞）、`./run_cf8_acceptance.sh`（真飞，需 READY token）。
+
+## 6. 建议的下一步优先级
+
+1. 等用户完成三个物理操作（拔线 / 断电重启 / 摆正），跑体检确认
+2. 确认后跑 `cf_prepare.sh` → 用户授权 → 飞
+3. **飞成功后**：请用户确认是否提交本轮改动（产品代码与规范文档**分开提交**）
+4. 遗留待办：`FALLBACK_ADDRESS_IN_USE`（机体答 `E7E7E7E7E7`，`cf_identity.yaml` 偏好 `...E705` 无应答）
+
+--- END ---

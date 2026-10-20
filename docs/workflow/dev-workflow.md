@@ -2,7 +2,8 @@
 
 > 写产品代码（`src/`、`integrations/`、`tests/`）前必读。
 > 铁律以仓库根 `AGENTS.md` 的 15 条为准，本文件把它们落成可执行步骤并补充踩过的坑。
-> 经验来源：`docs/handoff.md`、`docs/workflow-optimization.md`、`docs/plan-alignment.md`。
+> 经验来源：`docs/handoff.md`、`docs/workflow-optimization.md`、
+> `docs/archive/plans-2026-09/plan-alignment.md`（已归档）。
 
 ## 1. 标准改动循环
 
@@ -70,10 +71,35 @@ D:/dmp/.venv/Scripts/python.exe -m mypy --config-file D:/dmp/pyproject.toml D:/d
    `start = max(arrival, earliest_start, 前置)` 的唯一实现。
 3. **Qt 坐标轴只在 UI 边界转换**：领域层 `y = north`；不要在规划/持久化/导出层交换 x/y。
 
-## 6. 计划文档与进度文档的定位（防"文档爆炸"）
+## 6. 文档更新规则（单一事实源，强制）
 
-- 大计划文档（`follow-up-development-plan.md`、`v1.2-real-mission-planning-plan.md`、
-  `v1.3-crazyflie-execution-plan.md`）只做**阶段索引**，开工时读对应小节，不全文重读。
-- 进度事实以 `docs/v1.3-crazyflie-progress.md`（仓库内）+ `docs/workflow/session-log.md` 为准；
-  新阶段完成时在 progress 文档追加一节，**不新开平行文档**。
+**旧做法（已废止）**：大计划文档做阶段索引 + 单独的 progress 文档追加记录。
+结果：五个计划文档一个月未更新，`execution-progress.md` 自己变成了编年史。
+
+**现行三层（见 `session-protocol.md` §0）**：
+
+| 层 | 文件 | 只负责 | 更新触发条件 |
+|---|---|---|---|
+| 战略 | `docs/workflow/PLAN.md` | 项目总体目标、范围、最终验收标准 | **只有**项目方向或总体验收标准变化时 |
+| 验证 | `docs/workflow/STAGE.md` | 阶段判据、实测证据、决策记录 | **两种情况分开**：<br>· 获得有效实测 → 立即更新对应判据行（含条件+证据路径）<br>· 阶段目标/范围变化 → 才改阶段定义 |
+| 执行 | `docs/workflow/session-log.md` | 当前状态、阻塞点、下一步操作 | **每轮结束重写** |
+
+**单一事实源原则**：
+
+1. 同一事实**只在一个位置维护**。其他文档可以引用它，但**不复制一套需要独立更新的状态**。
+   - 判据状态 → 只在 `STAGE.md`
+   - 当前阻断 → 只在 `session-log.md`
+   - 项目目标 → 只在 `PLAN.md`
+   - 故障判据/操作步骤 → 只在 `cf8-operations.md`
+2. 引用时写"见 `STAGE.md` §2"，不写"实测 1.081 V"（那会立刻过期）。
+3. **实验历史不靠文档保存**：原始数据在 `_dsh_scratch/` 与
+   `D:\Deepseek WorkSpace\cf_evidence_runs\<时间戳>-<阶段>\`，
+   文档只留**当前结论 + 测试条件 + 证据路径**三条。
+4. **结论必须带条件**：写"在 X 条件下 Y 未达预期"，不写"Y 无效"。条件一旦改变必须重测。
+5. **被推翻的结论从当前文档删除**，过程进 `docs/archive/`，不是加一句"以上作废"。
+
+**收尾自检（三跑）**：`cf85_doc_consistency.py`（形式）→ `cf85_stage_audit.py`（事实）
+→ `cf85_handoff_sim.py`（交接）。三者全绿仅代表文档自洽可交接，**不代表物理结论成立**。
+
+- 详细设计与历史版本已归档到 `docs/archive/plans-2026-09/`，**只查历史，不作为事实基线**。
 - 流程优化结论在 `docs/workflow-optimization.md`；新结论追加，不新开文件。
