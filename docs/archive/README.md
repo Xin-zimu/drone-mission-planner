@@ -14,6 +14,11 @@
 | `NEXT_SESSION_CF8_PROMPT.txt` | 2026-09-22 | 旧版下一会话提示词 |
 | `NEXT_SESSION_CF8_PROMPT_2026-10-13.txt` | 2026-10-13 | 旧版下一会话提示词（已被 `docs/workflow/` 体系替代） |
 | `NEXT_SESSION_CF8_PROMPT_2026-10-14.txt` | 2026-10-14 | 旧版下一会话提示词（"把这段贴给新会话"，已被三层文档体系替代） |
+| `CF8_FLIGHT_REPORT_2026-10-14.md` | 2026-10-14 | 14:58 那次尝试的完整分析（结论是**中止的起飞**，只升到 2.7 cm，不是飞行） |
+| `INCIDENT_2026-10-14_tethered_takeoff.md` | 2026-10-14 | 16:03 外电起飞事故：飞机还在 USB 充电器上就放行了起飞 |
+| `INCIDENT_2026-10-14_tumble_crash.md` | 2026-10-14 | 16:32 真起飞翻倒事故：机架形变导致推力轴倾斜，`tumbled`+`crashed` |
+| `session-history-2026-10-26-before-mechanical.md` | 2026-10-26 | **旧版 session-log 全文**（机械基线轮之前） |
+| `session-history-2026-10-29-before-pid2b-offline.md` | 2026-10-29 | **旧版 session-log 全文**（2b 离线准备之前） |
 
 **归档原因**：这些文件互相引用、重复、漂移（例如交接单声称的唯一运行手册与脚本实际行为
 不符），已由 2026-10-14 建立的规范体系（`docs/workflow/`）取代。证据链仍在
