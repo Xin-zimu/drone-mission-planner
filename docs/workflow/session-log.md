@@ -65,10 +65,12 @@
 ## 6. 仓库与运行注意
 
 - 分支 `codex/v1.3-crazyflie-execution`；最后一次记录的验证基线仍为 `f3189f1`，不是实时 HEAD。
-- 工作树已有历史产品代码、测试、文档与未跟踪报告改动；本轮只改离线工具和相关文档，没有提交或 push。
+- **2026-10-29 已清空积压并推送**：工作树此前积压的 12 个改动 + 5 个未跟踪文件分成三个提交（产品代码 `3630259`、文档 `f281f59`、归档报告 `9d61814`），已 push 到 `origin`，工作树干净。
+- **推送要靠代理**：`~/.gitconfig` 的 `http.proxy` 指 `127.0.0.1:7890`（FlClash），直连 GitHub 时通时断。仓库内已固化 `http.proxy`/`https.proxy` 指向该代理；推送失败先看代理是否在跑，别怀疑凭据（凭据在 Windows 凭据管理器里）。
 - 仓库真路径 `D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main`，`D:\dmp` 为 junction。
 - `_dsh_scratch/` 和 `cf_evidence_runs/` 在仓库外，全新克隆不含工具与证据；缺失应如实报错。
 - WSL Ubuntu 24.04 / ROS 2 Jazzy；Python、cflib、ruff、mypy 在 `~/crazyswarm-env`。ROS 发现域须为 `LOCALHOST`；Crazyswarm2 先起，再启动 recorder。
 - cflib 探针与 Crazyswarm2 不同时占用电台；`get_value()` 返回字符串，比较前归一化。
 - pytest 使用新的 basetemp；不要触碰历史故障临时目录。
-- 本阶段之外的待办：地址策略回退问题、历史改动分组提交、默认关闭的 M2 真机航点路径，均不在本轮扩张。
+- 本阶段之外的待办：地址策略回退问题、默认关闭的 M2 真机航点路径，均不在本轮扩张。
+- 本轮验证：`ruff` 全绿；`mypy` 3 个错误全部是既有基线（在 `b3a7842` 的干净 worktree 上逐条复现，非本轮引入）；全量 `pytest` **714 passed**；三项文档自检 consistent / sound / handoff 全绿。
