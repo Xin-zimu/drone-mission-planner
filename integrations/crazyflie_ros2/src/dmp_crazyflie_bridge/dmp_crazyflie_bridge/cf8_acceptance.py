@@ -908,7 +908,13 @@ class HardwareFlightAcceptanceRunner:
             return CF8AcceptanceError("status_lost", "status telemetry is not fresh")
         if telemetry.get("pose_stream_available") is False:
             return CF8AcceptanceError("pose_lost", "pose telemetry is not fresh")
-        if telemetry.get("battery_critical") is True:
+        if telemetry.get("battery_critical_airborne") is True:
+            # Airborne judgement: a LOW, LOADED voltage sustained over consecutive samples.
+            # Deliberately NOT `battery_critical`, which compares the loaded in-flight voltage
+            # against the 3.7 V rested/ground-clearance threshold and therefore fired on a
+            # healthy official pack (4.048 -> 3.552 V within 0.7 s of motor spin-up,
+            # 2026-10-14). The ground recheck still enforces the rested threshold via the
+            # readiness issues; see _preflight_recheck.
             return CF8AcceptanceError("battery_critical", "battery reached critical threshold")
         supervisor = telemetry.get("supervisor")
         if isinstance(supervisor, dict):
@@ -1079,6 +1085,16 @@ def _failure_telemetry_snapshot(
         "battery_voltage": _float_or_none(telemetry.get("battery_voltage")),
         "battery_critical": _bool_or_none(telemetry.get("battery_critical")),
         "battery_critical_voltage": _float_or_none(telemetry.get("battery_critical_voltage")),
+        # The airborne (loaded-voltage) judgement that actually gates an in-flight abort, plus
+        # the streak length that satisfied its debounce. Recording all three makes a battery
+        # abort auditable: which threshold fired, and on how many consecutive samples.
+        "battery_critical_airborne": _bool_or_none(telemetry.get("battery_critical_airborne")),
+        "battery_critical_airborne_voltage": _float_or_none(
+            telemetry.get("battery_critical_airborne_voltage")
+        ),
+        "battery_critical_consecutive_samples": _int_or_none(
+            telemetry.get("battery_critical_consecutive_samples")
+        ),
         "pm_state": _int_or_none(telemetry.get("pm_state")),
         "z_m": _float_or_none(telemetry.get("z_m")),
         "x_m": _float_or_none(telemetry.get("x_m")),

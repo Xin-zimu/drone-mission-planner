@@ -23,10 +23,12 @@ from .protocol_models import (
     encode_message,
 )
 from .telemetry import (
+    DEFAULT_BATTERY_CRITICAL_AIRBORNE_V,
     DEFAULT_ESTIMATOR_MAX_COVARIANCE,
     DEFAULT_ESTIMATOR_SATURATION_FRACTION,
     DEFAULT_MAX_RELIABLE_ZRANGE_M,
     DEFAULT_MIN_RELIABLE_ZRANGE_M,
+    DEFAULT_MINIMUM_BATTERY_CRITICAL_SAMPLES,
     DEFAULT_RANGE_GROUND_ADVISORY_M,
     ReadinessPolicy,
     ReadinessStage,
@@ -157,6 +159,19 @@ class BridgeProtocolServer:
                 inclusive=False,
             ),
             minimum_estimator_sample_count=_config_int(config, "minimum_estimator_sample_count", 5, minimum=1),
+            # Airborne battery judgement on the LOADED voltage. See
+            # DEFAULT_BATTERY_CRITICAL_AIRBORNE_V for why this is separate from the
+            # rested/ground `battery_critical_voltage` above.
+            battery_critical_airborne_voltage=_config_float(
+                config,
+                "battery_critical_airborne_voltage",
+                DEFAULT_BATTERY_CRITICAL_AIRBORNE_V,
+                minimum=0.0,
+                inclusive=False,
+            ),
+            minimum_battery_critical_samples=_config_int(
+                config, "minimum_battery_critical_samples", DEFAULT_MINIMUM_BATTERY_CRITICAL_SAMPLES, minimum=1
+            ),
         )
         if readiness_policy.max_reliable_zrange_m <= readiness_policy.min_reliable_zrange_m:
             raise ValueError("max_reliable_zrange_m must be greater than min_reliable_zrange_m")
@@ -178,6 +193,15 @@ class BridgeProtocolServer:
             ),
         )
         battery_critical_voltage = _config_float(config, "battery_critical_voltage", 3.7, minimum=0.0, inclusive=False)
+        # Fail closed on an inverted battery pair: an airborne threshold at or above the ground
+        # threshold would make the loaded in-flight check stricter than launch clearance, which
+        # is physically backwards (a loaded pack always reads lower than a rested one) and would
+        # abort healthy flights. Declared here because it needs both values.
+        if readiness_policy.battery_critical_airborne_voltage >= battery_critical_voltage:
+            raise ValueError(
+                "battery_critical_airborne_voltage must be below battery_critical_voltage "
+                "(the loaded in-flight threshold must be lower than the rested ground threshold)"
+            )
         hardware_flight_enabled = _config_bool(config, "hardware_flight_enabled", False)
         self._cf8_policy = CF8AcceptancePolicy(
             takeoff_delta_m=_config_float(

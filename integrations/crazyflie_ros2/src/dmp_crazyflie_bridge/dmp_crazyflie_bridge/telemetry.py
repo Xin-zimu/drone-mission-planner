@@ -14,7 +14,32 @@ from typing import Any
 
 DEFAULT_STATUS_STALE_TIMEOUT_S = 2.5
 DEFAULT_POSE_STALE_TIMEOUT_S = 0.75
+# GROUND battery threshold (rested/launch clearance). A pack that cannot hold this while
+# stationary must not be cleared to launch, so this value is deliberately NOT lowered.
 DEFAULT_BATTERY_CRITICAL_V = 3.7
+# AIRBORNE battery threshold, applied to the LOADED in-flight measurement.
+#
+# Why a second, lower threshold exists (2026-10-14): the bridge used to compare the loaded
+# in-flight voltage against the 3.7 V *rested* figure. The official 250 mAh 1S pack sags about
+# 0.5 V the instant the motors draw current, so that comparison is guaranteed to fail for a
+# healthy official pack and made flight impossible. Measured on cf231: 4.048 V resting ->
+# 3.552 V within 0.7 s of motor spin-up, which aborted the takeoff before the aircraft left
+# the ground, and 4.043 -> 3.457 V on 2026-09-22.
+#
+# 3.3 V is anchored on the FIRMWARE's own protection, read live from this aircraft:
+#   pm.lowVoltage       = 3.2 V  (firmware "battery low" warning)
+#   pm.criticalLowVoltage = 3.0 V  (firmware hard power-off)
+# Sitting 0.1 V above the firmware warning and 0.3 V above hard cutoff keeps the intended
+# layering: the DMP detects a low pack first and lands under control, and the firmware's hard
+# cutoff remains the last resort rather than the primary protection.
+DEFAULT_BATTERY_CRITICAL_AIRBORNE_V = 3.3
+# Consecutive low status samples required before the airborne threshold is believed.
+#
+# A single sagging sample must not abort a flight: the measured sag is a transient (3.552 V for
+# ~0.7 s, recovering to 3.658 V and then 4.006 V). Requiring N consecutive low samples uses the
+# same "continuous streak, any good sample resets it" idiom as AirborneStabilizationWindow /
+# PoseStabilityPolicy. At the 1 Hz status rate N=3 is roughly 3 s of sustained low voltage.
+DEFAULT_MINIMUM_BATTERY_CRITICAL_SAMPLES = 3
 DEFAULT_MINIMUM_ACCEPTABLE_POSE_RATE_HZ = 8.0
 DEFAULT_VELOCITY_STALE_TIMEOUT_S = 0.75
 DEFAULT_RANGE_STALE_TIMEOUT_S = 0.75
@@ -302,6 +327,10 @@ class ReadinessPolicy:
     # however stable they look. This only catches the degenerate "stably saturated" case.
     estimator_max_covariance: float = DEFAULT_ESTIMATOR_MAX_COVARIANCE
     estimator_saturation_fraction: float = DEFAULT_ESTIMATOR_SATURATION_FRACTION
+    # Airborne battery judgement (see DEFAULT_BATTERY_CRITICAL_AIRBORNE_V): the loaded
+    # in-flight threshold and how many consecutive low status samples it takes to believe it.
+    battery_critical_airborne_voltage: float = DEFAULT_BATTERY_CRITICAL_AIRBORNE_V
+    minimum_battery_critical_samples: int = DEFAULT_MINIMUM_BATTERY_CRITICAL_SAMPLES
 
 
 class ReadinessStage(StrEnum):
@@ -454,6 +483,12 @@ class TelemetrySnapshot:
     flight_readiness: FlightReadiness
     diagnostics: tuple[str, ...] = ()
     battery_critical_voltage: float = DEFAULT_BATTERY_CRITICAL_V
+    # Airborne judgement (loaded voltage). ``battery_critical_airborne`` is already debounced by
+    # the collector; ``battery_critical_consecutive_samples`` is exposed so the trigger can be
+    # audited from the telemetry payload without re-deriving it.
+    battery_critical_airborne_voltage: float = DEFAULT_BATTERY_CRITICAL_AIRBORNE_V
+    battery_critical_airborne: bool = False
+    battery_critical_consecutive_samples: int = 0
     status_source: str | None = None
     pose_source: str | None = None
     velocity_source: str | None = None
@@ -517,6 +552,12 @@ class TelemetrySnapshot:
             "battery_voltage": None if status is None else status.battery_voltage,
             "battery_critical": self.battery_critical,
             "battery_critical_voltage": self.battery_critical_voltage,
+            # Airborne judgement on the LOADED voltage, debounced over consecutive samples.
+            # Consumers deciding whether an in-flight flight must abort use THIS, not
+            # `battery_critical`, which is the rested/ground clearance threshold.
+            "battery_critical_airborne": self.battery_critical_airborne,
+            "battery_critical_airborne_voltage": self.battery_critical_airborne_voltage,
+            "battery_critical_consecutive_samples": self.battery_critical_consecutive_samples,
             "pm_state": None if status is None else status.pm_state,
             "supervisor_info_raw": None if status is None else status.supervisor_info_raw,
             "supervisor": None if status is None else decode_supervisor_info(status.supervisor_info_raw).to_payload(),
@@ -568,6 +609,9 @@ class TelemetryCollector:
     _latest_range: RangeTelemetry | None = None
     _latest_estimator_variance: EstimatorVarianceTelemetry | None = None
     _status_times: deque[float] = field(default_factory=lambda: deque(maxlen=50))
+    # Airborne battery debounce state: consecutive status samples at or below the airborne
+    # threshold. Any sample above it resets the streak to zero (see the constant's comment).
+    _battery_low_streak: int = 0
     _pose_samples: deque[PoseTelemetry] = field(default_factory=lambda: deque(maxlen=200))
     _velocity_samples: deque[VelocityTelemetry] = field(default_factory=lambda: deque(maxlen=100))
     _estimator_variance_samples: deque[EstimatorVarianceTelemetry] = field(default_factory=lambda: deque(maxlen=100))
@@ -596,6 +640,12 @@ class TelemetryCollector:
         with self._lock:
             self._latest_status = sample
             self._status_times.append(sample.monotonic_s)
+            # Debounce the airborne threshold: count consecutive low samples, reset on any
+            # sample at or above it. See DEFAULT_MINIMUM_BATTERY_CRITICAL_SAMPLES.
+            if sample.battery_voltage <= self.readiness_policy.battery_critical_airborne_voltage:
+                self._battery_low_streak += 1
+            else:
+                self._battery_low_streak = 0
             self._status_source = source or f"/{self.robot_id}/status"
 
     def record_pose(self, msg: Any, *, source: str | None = None) -> None:
@@ -715,6 +765,7 @@ class TelemetryCollector:
             estimator_source = self._estimator_source
             readiness_log_source = self._readiness_log_source
             latest_readiness_log_s = self._latest_readiness_log_s
+            battery_low_streak = self._battery_low_streak
         status_age = None if status is None else max(0.0, now - status.monotonic_s)
         pose_age = None if pose is None else max(0.0, now - pose.monotonic_s)
         connected = status_age is not None and status_age <= self.status_stale_timeout_s
@@ -768,6 +819,11 @@ class TelemetryCollector:
             flight_readiness=flight_readiness,
             diagnostics=diagnostics,
             battery_critical_voltage=self.battery_critical_voltage,
+            battery_critical_airborne_voltage=self.readiness_policy.battery_critical_airborne_voltage,
+            battery_critical_airborne=(
+                battery_low_streak >= self.readiness_policy.minimum_battery_critical_samples
+            ),
+            battery_critical_consecutive_samples=battery_low_streak,
             status_source=status_source,
             pose_source=pose_source,
             velocity_source=velocity_source,
@@ -1053,6 +1109,14 @@ def _flight_readiness(
             ReadinessIssue(
                 "battery_critical",
                 f"battery {status.battery_voltage:.3f} V is at or below critical {battery_critical_voltage:.3f} V",
+                # GROUND, not BOTH: this compares against the rested/launch-clearance threshold,
+                # which is only meaningful before the motors load the pack. The airborne
+                # judgement is a separate, lower, debounced signal
+                # (``battery_critical_airborne``); reporting this 3.7 V comparison as an
+                # *airborne* blocking issue would claim a fault on a healthy loaded pack
+                # (4.048 -> 3.552 V in flight, 2026-10-14) and permanently pin
+                # ``airborne_passed`` to False. The ground gate still consumes it.
+                stage=ReadinessStage.GROUND,
             )
         )
     if supervisor is None:

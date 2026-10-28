@@ -8,6 +8,24 @@ hardware_flight_enabled: false
 capability_snapshot_path: ../runtime/cf231_capabilities.json
 capability_snapshot_max_age_s: 3600
 battery_critical_voltage: 3.7
+# Airborne battery threshold, applied to the LOADED in-flight measurement.
+#
+# `battery_critical_voltage` above is the GROUND/rested launch-clearance threshold and stays
+# 3.7 V: a pack that cannot hold 3.7 V while stationary must not be cleared to launch.
+#
+# The official 250 mAh 1S pack, however, sags ~0.5 V the instant the motors load it. Measured
+# on cf231: 4.048 V resting -> 3.552 V within 0.7 s of motor spin-up (and 4.043 -> 3.457 V on
+# 2026-09-22). Comparing that LOADED voltage against the 3.7 V RESTED figure therefore fails
+# for a healthy official pack and made flight impossible -- it aborted the 2026-10-14 takeoff
+# before the aircraft left the ground.
+#
+# 3.3 V is anchored on this aircraft's own firmware protection, read live:
+#   pm.lowVoltage = 3.2 V (warning),  pm.criticalLowVoltage = 3.0 V (hard power-off)
+# Sitting above the firmware warning keeps the intended layering: the DMP detects a low pack
+# first and lands under control; the firmware's hard cutoff stays the last resort.
+# `minimum_battery_critical_samples` debounces it so one sagging sample cannot abort a flight.
+battery_critical_airborne_voltage: 3.3
+minimum_battery_critical_samples: 3
 nominal_pose_rate_hz: 10
 minimum_acceptable_pose_rate_hz: 8
 velocity_stale_timeout_s: 0.75

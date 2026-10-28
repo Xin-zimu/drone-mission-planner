@@ -128,6 +128,31 @@ enforced by the post-takeoff stabilization gate rather than by a ground gate.
 Issues without a `stage` (legacy payloads) are treated as `both` — fail-closed.
 See `../../docs/v1.3-cf81-ground-airborne-readiness-split.md`.
 
+### Battery: two thresholds (ground/rested vs airborne/loaded)
+
+Battery voltage is judged by **two** thresholds, because a LiPo's loaded voltage is not its
+rested voltage:
+
+| key | default | role |
+|---|---|---|
+| `battery_critical_voltage` | 3.7 V | **ground/rested** launch clearance |
+| `battery_critical_airborne_voltage` | 3.3 V | **airborne**, on the loaded measurement |
+| `minimum_battery_critical_samples` | 3 | debounce: consecutive low samples required |
+
+The official 250 mAh 1S pack sags ~0.5 V on motor spin-up (measured on cf231: 4.048 V resting ->
+3.552 V within 0.7 s). Comparing that loaded value against the rested 3.7 V figure therefore
+fails for a healthy official pack, so the single-threshold rule aborted a healthy takeoff on
+2026-10-14. The airborne threshold is anchored above the firmware's own protection
+(`pm.lowVoltage` 3.2 V, `pm.criticalLowVoltage` 3.0 V) so the DMP lands under control before the
+firmware cuts power. The debounce exists because the sag is a transient (3.552 V for ~0.7 s, then
+recovery), and uses the same continuous-streak idiom as `AirborneStabilizationWindow`.
+
+Telemetry exposes `battery_critical` (ground/rested), `battery_critical_airborne` (debounced,
+loaded) and `battery_critical_consecutive_samples`. **An in-flight abort is gated by
+`battery_critical_airborne`**, never by `battery_critical`. The readiness issue is `ground` stage
+for the same reason. Constructing a server whose airborne threshold is >= the ground threshold
+raises `ValueError` (inverted, physically backwards).
+
 Supervisor codes are staged too. `supervisor_not_flyable`, `supervisor_armed`,
 `supervisor_flying` and `supervisor_high_level_active` describe the supervisor's
 *handover* state ("may a supervised flight start from here?") and are **`ground`
@@ -348,6 +373,9 @@ learn what tripped it.
   "battery_voltage": 3.69,
   "battery_critical": true,
   "battery_critical_voltage": 3.7,
+  "battery_critical_airborne": true,
+  "battery_critical_airborne_voltage": 3.3,
+  "battery_critical_consecutive_samples": 3,
   "pm_state": 0,
   "z_m": 0.004, "x_m": 0.59, "y_m": -1.75,
   "velocity": {"vx_mps": 0.0, "vy_mps": 0.0, "vz_mps": 0.0, "speed_mps": 0.0},
@@ -367,6 +395,9 @@ Contract:
   detected, so it cannot influence any verdict. No threshold, the
   `battery_critical` rule, the controlled-landing path, the CF8 state machine and
   the retry semantics are unchanged by it.
+- The three battery keys let a battery abort be audited: which threshold fired,
+  and on how many consecutive samples. See the battery section above for why the
+  airborne threshold is the one that gates an in-flight abort.
 - Every key is always present. A value that was unavailable at the triggering
   instant is `null` rather than omitted, so a `status_lost` or `pose_lost` fault
   still carries whatever telemetry was left.

@@ -779,7 +779,8 @@ def test_cf8_battery_critical_during_stabilizing_lands_immediately(
 
     def telemetry(**kwargs: Any) -> dict[str, Any]:
         payload = original(**kwargs)
-        payload["battery_critical"] = kwargs.get("flight_state") == "stabilizing"
+        # An in-flight abort is gated by the debounced airborne (loaded-voltage) judgement.
+        payload["battery_critical_airborne"] = kwargs.get("flight_state") == "stabilizing"
         return payload
 
     monkeypatch.setattr(adapter, "telemetry_payload", telemetry)
@@ -966,6 +967,9 @@ def test_cf8_battery_critical_failure_telemetry_saves_the_triggering_value(
         # A deliberately distinctive value: nothing in the policy is 3.604 V.
         adapter.battery_voltage = 3.604
         adapter.battery_critical = True
+        # The trigger for an in-flight abort is the debounced airborne judgement.
+        adapter.battery_critical_airborne = True
+        adapter.battery_critical_consecutive_samples = 3
 
     result, adapter = _run_cf8_with_stabilizing_fault(monkeypatch, fault)
 
@@ -976,6 +980,10 @@ def test_cf8_battery_critical_failure_telemetry_saves_the_triggering_value(
     assert snapshot["battery_voltage"] == pytest.approx(3.604)
     assert snapshot["battery_critical"] is True
     assert snapshot["battery_critical_voltage"] == pytest.approx(3.7)
+    # The airborne threshold that actually fired, and the streak length that satisfied it.
+    assert snapshot["battery_critical_airborne"] is True
+    assert snapshot["battery_critical_airborne_voltage"] == pytest.approx(3.3)
+    assert snapshot["battery_critical_consecutive_samples"] == 3
     assert snapshot["pm_state"] == 0
     # The rest of the fault instant is preserved next to it.
     assert snapshot["z_m"] == pytest.approx(_FAKE_AIRBORNE_Z_M)
@@ -1436,6 +1444,11 @@ class FakeAcceptanceAdapter:
         self.zrange_m: float | None = None
         self.estimator_converged = True
         self.battery_critical = False
+        # Airborne battery judgement on the LOADED voltage. This is what gates an in-flight
+        # abort; `battery_critical` is the rested 3.7 V ground-clearance comparison.
+        self.battery_critical_airborne = False
+        self.battery_critical_airborne_voltage = 3.3
+        self.battery_critical_consecutive_samples = 0
         self.flying = False
         self.armed = False
         self.auto_arm = False
@@ -1541,6 +1554,10 @@ class FakeAcceptanceAdapter:
         self.telemetry_reads += 1
         if self.fail_after_takeoff == "battery_critical" and self.takeoff_calls and self.telemetry_reads > 6:
             self.battery_critical = True
+            # An in-flight abort requires the debounced airborne judgement (the loaded-voltage
+            # threshold), not the rested 3.7 V `battery_critical` flag.
+            self.battery_critical_airborne = True
+            self.battery_critical_consecutive_samples = 3
         if self.zrange_m is not None:
             zrange_m = self.zrange_m
         elif self.flying:
@@ -1559,6 +1576,10 @@ class FakeAcceptanceAdapter:
             "battery_voltage": self.reported_battery_voltage(),
             "battery_critical": self.battery_critical,
             "battery_critical_voltage": self.battery_critical_voltage,
+            # The debounced LOADED-voltage judgement that actually gates an in-flight abort.
+            "battery_critical_airborne": self.battery_critical_airborne,
+            "battery_critical_airborne_voltage": self.battery_critical_airborne_voltage,
+            "battery_critical_consecutive_samples": self.battery_critical_consecutive_samples,
             "pm_state": self.pm_state,
             "positioning_mode": self.positioning_mode,
             "status_age_s": self.status_age_s,

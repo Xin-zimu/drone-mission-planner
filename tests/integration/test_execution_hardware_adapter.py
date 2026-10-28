@@ -1852,6 +1852,151 @@ def test_new_range_band_keys_are_read_from_config(monkeypatch: Any, tmp_path: Pa
     assert policy.max_reliable_zrange_m == pytest.approx(0.45)
 
 
+def test_airborne_battery_threshold_defaults_below_the_ground_threshold() -> None:
+    """The two battery thresholds must have the physically correct ordering by default.
+
+    A LOADED pack always reads lower than a rested one, so the airborne threshold has to be the
+    lower number. If this ever inverts, in-flight checks become stricter than launch clearance
+    and healthy flights abort (the 2026-10-14 failure).
+    """
+    policy = telemetry.ReadinessPolicy()
+    ground = telemetry.DEFAULT_BATTERY_CRITICAL_V
+
+    assert ground == pytest.approx(3.7)
+    assert policy.battery_critical_airborne_voltage == pytest.approx(3.3)
+    assert policy.battery_critical_airborne_voltage < ground
+    # Anchored above this aircraft's own firmware protection (pm.lowVoltage = 3.2 V), so the
+    # DMP detects a low pack first and lands under control before the firmware cuts power.
+    assert policy.battery_critical_airborne_voltage > 3.2
+    assert policy.minimum_battery_critical_samples == 3
+
+
+def test_airborne_battery_keys_are_read_from_config(monkeypatch: Any, tmp_path: Path) -> None:
+    policy = _capture_readiness_policy(
+        monkeypatch,
+        "battery_critical_airborne_voltage: 3.35\nminimum_battery_critical_samples: 5\n",
+        tmp_path,
+    )
+
+    assert policy.battery_critical_airborne_voltage == pytest.approx(3.35)
+    assert policy.minimum_battery_critical_samples == 5
+
+
+@pytest.mark.parametrize(
+    "config_text",
+    [
+        # Inverted pair: the loaded in-flight threshold must never be the higher one.
+        "battery_critical_voltage: 3.7\nbattery_critical_airborne_voltage: 3.7\n",
+        "battery_critical_voltage: 3.5\nbattery_critical_airborne_voltage: 3.6\n",
+        "battery_critical_airborne_voltage: nan\n",
+        "battery_critical_airborne_voltage: 0\n",
+        "minimum_battery_critical_samples: 0\n",
+        "minimum_battery_critical_samples: not-a-number\n",
+    ],
+)
+def test_invalid_airborne_battery_config_fails_closed(config_text: str, tmp_path: Path) -> None:
+    config_path = tmp_path / "bad-battery.yaml"
+    config_path.write_text(config_text, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        protocol_server.BridgeProtocolServer(backend="sim", config_path=str(config_path))
+
+
+def test_repo_config_ships_the_airborne_battery_threshold() -> None:
+    """The shipped config must carry the airborne threshold, not just the ground one."""
+    config_text = (BRIDGE_SRC / "config" / "bridge.yaml").read_text(encoding="utf-8")
+
+    assert "battery_critical_voltage: 3.7" in config_text
+    assert "battery_critical_airborne_voltage: 3.3" in config_text
+    assert "minimum_battery_critical_samples: 3" in config_text
+
+
+def test_airborne_battery_flag_requires_consecutive_low_samples() -> None:
+    """A single sagging sample must not raise the airborne battery flag.
+
+    Reproduces the measured 2026-10-14 profile: 4.048 V resting, a 3.552 V transient on motor
+    spin-up, then recovery. With the old single-sample 3.7 V comparison this aborted a healthy
+    takeoff; the debounced 3.3 V judgement must ignore it.
+    """
+    clock = FakeClock()
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+
+    # Resting, healthy.
+    collector.record_status(FakeStatus(4.048, 0, 37, 6, 10, 10))
+    clock.advance(1.0)
+    assert collector.snapshot().battery_critical_airborne is False
+
+    # The 3.552 V sag: below the OLD 3.7 V ground line, above the new 3.3 V airborne line.
+    collector.record_status(FakeStatus(3.552, 0, 37, 6, 10, 10))
+    clock.advance(1.0)
+    snapshot = collector.snapshot()
+    assert snapshot.battery_critical_airborne is False
+    # The rested/ground comparison still flags it, which is why the airborne signal is separate.
+    assert snapshot.battery_critical is True
+
+
+def test_airborne_battery_flag_raises_after_sustained_low_voltage() -> None:
+    clock = FakeClock()
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+
+    for _ in range(2):
+        collector.record_status(FakeStatus(3.25, 0, 37, 6, 10, 10))
+        clock.advance(1.0)
+    assert collector.snapshot().battery_critical_airborne is False, "2 samples is under the debounce"
+
+    collector.record_status(FakeStatus(3.25, 0, 37, 6, 10, 10))
+    clock.advance(1.0)
+    snapshot = collector.snapshot()
+    assert snapshot.battery_critical_airborne is True
+    assert snapshot.battery_critical_consecutive_samples == 3
+
+
+def test_airborne_battery_flag_resets_on_any_healthy_sample() -> None:
+    """The streak is continuous: one good sample clears it, exactly like the settle windows."""
+    clock = FakeClock()
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+
+    for _ in range(2):
+        collector.record_status(FakeStatus(3.25, 0, 37, 6, 10, 10))
+        clock.advance(1.0)
+    # Recovery, then two more low samples: the streak must start over, not carry over.
+    collector.record_status(FakeStatus(3.90, 0, 37, 6, 10, 10))
+    clock.advance(1.0)
+    for _ in range(2):
+        collector.record_status(FakeStatus(3.25, 0, 37, 6, 10, 10))
+        clock.advance(1.0)
+
+    snapshot = collector.snapshot()
+    assert snapshot.battery_critical_airborne is False
+    assert snapshot.battery_critical_consecutive_samples == 2
+
+
+def test_ground_battery_issue_is_ground_stage_not_airborne() -> None:
+    """The 3.7 V comparison must not masquerade as an airborne blocking fault.
+
+    It compares a LOADED voltage against a RESTED number, so in flight it is meaningless. If it
+    were reported as an airborne blocking issue, ``airborne_passed`` would be permanently False
+    on a healthy loaded pack.
+    """
+    clock = FakeClock()
+    collector = telemetry.TelemetryCollector("cf231", clock=clock)
+    collector.record_status(FakeStatus(3.55, 0, 37, 6, 10, 10))
+    for index in range(60):
+        collector.record_pose(FakePose(float(index) * 0.001, 0.0, 0.01))
+        clock.advance(0.1)
+
+    readiness = collector.snapshot().flight_readiness
+    battery = [issue for issue in readiness.issues if issue.code == "battery_critical"]
+
+    assert len(battery) == 1
+    assert battery[0].stage is telemetry.ReadinessStage.GROUND
+    assert readiness.ground_passed is False
+    # The ground gate must still consume it...
+    assert battery[0] in readiness.ground_issues
+    # ...but it must not be treated as an airborne blocking fault.
+    assert battery[0] not in readiness.airborne_issues
+
+
 def test_repo_bridge_config_is_migrated_and_keeps_hardware_flight_disabled(
     monkeypatch: Any,
 ) -> None:
