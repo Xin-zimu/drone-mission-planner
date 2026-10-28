@@ -34,12 +34,14 @@
 | 新 manifest | 覆盖全部 11 个自定义话题；可供现有 `cf85_pid_diagnostics.py record` 做地面日志检查。保存命名字段、宿主到达时间、原始 24 位机载时间戳 |
 | `cf85_end_state.py` | **结束判定的唯一实现**。`evaluate()` 在窗口末段分别测新鲜度/静止/电机归零/未侧躺；`termination_verdict()` 测"停机被观测到"。探针调用它，不再各留副本 |
 | `cf85_onboard_time.py` | **统一时间基**：解 24 位回绕 → 单一 epoch → host↔机载斜率与残差 → 按容差合并。跨块比较前必过 |
-| `cf85_termination_probe.py` | **拆桨停机测量唯一入口**：只发 `/<robot>/emergency`，不调 takeoff/arm；要求 `--confirm-props-removed`，**不接受** `--confirm-restrained`；`--dry-run` 零发射 |
+| `cf85_termination_probe.py` | **拆桨停机测量唯一入口**：cflib 直连独占电台（**ROS 栈须先停**）；先 arming+对称油门转机，再发 CRTP emergency-stop，再观察归零并保持。要求 `--confirm-props-removed`，**不接受** `--confirm-restrained`；`--dry-run` 零发射；拒绝也落盘 |
 | 旧起飞探针 | `cf85_takeoff_probe.py` 已改为调用共享判定，并补上机载时间戳与**拒绝也落盘**。它仍是有推力的限位探针，不能移除限位开关后直接用于 2b |
 | 原 PID 预设 | `cf_evidence_runs/20261026-preset/preset-live/`，曾机载验证。新增三块不继承该次实机通过结论 |
 | 验证边界 | 已通过保存 TOC 的变量/字节核验、离线模拟采集、真实历史数据回放；尚未验证当前机载参数、块分配和无线负载。20 Hz 不足以重建每个控制周期 |
 
-本轮定向验证：`cf85_end_state_test` **17 项**、`test_cf85_termination_online` **16 项**、`test_cf85_probe_evidence` **9 项**、既有 `test_cf85_pid_2b_prepare` **13 passed**；Ruff 与 mypy 通过（ROS 依赖模块用 `--ignore-missing-imports`）；三项文档自检 consistent / sound / handoff（证据目录 19/19）。结果写在本轮 `validation-summary-2.json`，不替代物理验证。
+本轮定向验证：`cf85_end_state_test` **17 项**、`test_cf85_termination_online` **20 项**、`test_cf85_probe_evidence` **9 项**、既有 `test_cf85_pid_2b_prepare` **13 passed**；Ruff 与 mypy 通过（ROS 依赖模块用 `--ignore-missing-imports`）；三项文档自检 consistent / sound / handoff（证据目录 19/19）。
+
+**停机探针的一个前提性缺陷已修**：初版只发 stop、不转机，拆桨后输出恒为 0，判定必然返回"这次什么都没证明"——即它**永远不可能通过**。已改为 cflib 直连先转机再停止（ROS 栈须先停，原因见 `cf8-operations.md` §5）。
 
 ## 4. 硬件与环境事实
 

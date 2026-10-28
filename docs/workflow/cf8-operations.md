@@ -193,12 +193,12 @@ READY_FOR_CF8
 | `cf85_recovery_assess.sh` / `cf85_recovery_release.sh` | 释放 `recovery_required` 互锁前逐项证明无飞行状态；释放时**归档**标记而非删除 | 自检 |
 | `cf85_preset_check.sh` / `cf85_preset_semdiff.sh` | 证明 PID preset 只差 controller 2→1 与新增日志块（语义级 diff，不受 YAML 重排干扰） | 自检 |
 | `cf85_pid_preset_check.sh` | **离线**预设闸门：拿永久 `crazyflies.yaml` + 已存的活动清单核验预设，并证明永久配置仍与回滚副本逐字节一致。`--rebuild` 只生成新目录、不安装。零射频、零 ROS | 自检 |
-| `cf85_termination_probe.py` | **拆桨远程停机测量探针（唯一接受的终止验证入口）**：只发 `/<robot>/emergency`，**不调用 takeoff/arm/setpoint**，因此要求 `--confirm-props-removed` 而**不接受** `--confirm-restrained`（后者保护的是推力，这里不命令推力）。先观察 `--settle-s` 证明电机在转，再发停机，再观察 `--watch-s` 证明输出归零并保持。判据见 `cf85_end_state.termination_verdict`：服务应答只记为"应答"，不当作停机。`--dry-run` 零发射。**边界**：与遥测共用无线链路，测不出"失链后能否停机"。 | 终止 |
+| `cf85_termination_probe.py` | **拆桨远程停机测量探针（唯一接受的终止验证入口）**：**cflib 直连独占电台，ROS 栈必须先停**。流程 = 空闲基线 → arming + 对称油门转机 `--spin-s`（上限 20000 / 10 s）→ 发 CRTP localization emergency-stop（type 3）→ 观察 `--watch-s`。要求 `--confirm-props-removed`，**不接受** `--confirm-restrained`（这里不该有推力）。判据见 `cf85_end_state.termination_verdict`：转机前必须非零、指令后归零并保持到窗末，三条全中才算 `stopped=True`。`finally` 与退出路径都会重发停止并 disarm。拒绝也落盘。`--dry-run` 零发射。**边界**：与遥测共用无线链路，测不出"失链后能否停机"；转机用了 arming，所以测的是"已解锁状态下的停止"，不是未解锁状态。 | 终止 |
 | `cf85_end_state.py` | **结束判定的唯一实现**（被探针调用，不再各自维护副本）：`evaluate()` 在**窗口末段**分别测新鲜度/静止/电机归零/机体未侧躺，`termination_verdict()` 测"停机被观测到"。修掉旧实现四处漏洞：不看倾角、不查新鲜度、按整窗取电机峰值（正常降落反被拒）、无法区分"停稳"与"落地"。`range.zrange` 按**毫米**换算。`--self-test` 离线 | 自检 |
 | `cf85_onboard_time.py` | **跨块统一时间基**：按块解 24 位回绕 → 解算**单一 epoch**偏移 → 用最小二乘给出 host↔机载斜率与残差（本机计数器快 6–9%，只记录不隐藏）→ 按容差合并各块。用在任何跨块比较之前。`--self-test` 离线 | 自检 |
 | `cf85_takeoff_probe.py` | **限位低空探针，仍不能用于 2b 自由飞行**：有 `--confirm-restrained`；调用 takeoff/land 后由 `cf85_end_state.evaluate()` 判定结束（不再自带副本），未确认返回码 3。2026-10-29 修：保存机载时间戳、**早期拒绝也落盘**（此前 refuse 直接 return，不留任何证据）。仍未验证：异常路径下的 land 重试、自由飞行下的适用性。 | 推力（待审） |
 | `cf85_end_state_test.py` | **离线反例集**（17 项，零射频）：侧躺/悬停/恒速偏航/缺通道/NaN/变量数不符必须拒绝，通道提前停更不算末期证据，并断言探针**确实委托**共享判定；24 位回绕 `16777166→0→50`、真倒退仍判失败 | 自检 |
-| `test_cf85_termination_online.py` | 离线回归 16 项：拒绝路径零发射且不落盘、应答≠停机、真停机被接受、10-27 形状不判结束、mm 单位、跨块对齐 | 自检 |
+| `test_cf85_termination_online.py` | 离线回归 20 项：拒绝路径零发射但**必须落盘并记原因**、空测（全程为零）不算停机、应答≠停机、真停机被接受、10-27 形状不判结束、mm 单位、跨块对齐 | 自检 |
 | `test_cf85_probe_evidence.py` | 离线回归：拒绝也写证据、退出码 1/3/0 分义、机载时间戳保留、报告只有一个写入口 | 自检 |
 | `cf85_stack_for_takeoff.sh` | 起 Crazyswarm2(PID preset) 并**保持运行**，供起飞探针驱动（`cf85_pid_ground_run.sh` 跑完会停栈） | 推力 |
 | `cf85_takeoff_analyse.py` / `cf85_takeoff_raw.py` / `cf85_takeoff_verdict.py` | 起飞数据三级解读：粗汇总 / 原始时间序 / 逐项裁决（电压 vs 姿态 vs 电机） | 推力 |
