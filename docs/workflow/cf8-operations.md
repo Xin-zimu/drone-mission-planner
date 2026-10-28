@@ -102,6 +102,8 @@ READY_FOR_CF8
 3. **周围 ≥2 m 空地**
 4. **`supervisor` 无 `crashed` / `tumbled` 锁存位** —— 有则**给飞机断电重启**（重启 ROS 栈不够）
 5. **全程盯机，随时能拔电**
+6. **起栈前跑 `cf85_level_check.py`**：`tumbled` 未锁存、倾斜 < 5°、`|acc|≈1 g`。
+   飞机被碰倒/侧躺时起栈，会伪造出“EKF 发散 + 位置漂移”的假故障（见 F15），整轮数据作废
 
 ## 4. 电池电压政策（会话级，非生产阈值）
 
@@ -178,14 +180,21 @@ READY_FOR_CF8
 | `cf85_radio_paths_test.sh` | 电台"正常短路/异常重连"两路径自检（零射频） | 链路 |
 | `cf85_diagnose_bringup.sh` | 只读 bring-up 诊断（内核 USB/IP 日志等） | 链路 |
 | `cf85_battery.sh` | 只读电池读数 + 政策裁决（用 runtime URI） | 电池 |
-| `cf85_pid_diagnostics.py` | inventory：独占电台只读 TOC/参数/供电；build：生成独立 PID 配置和原文件备份；record：ROS 六组控制诊断订阅。无参数写入或飞行 API。**2026-10-20 三段均已实测**（record 30 s 地面通过） | 诊断 |
-| `cf85_pid_ground_run.sh` | **地面 PID 诊断唯一入口**：resolve → 电池闸门 → 用独立 PID preset 生成 runtime 配置 → bring-up + 30 s 链路健康 → record → 停栈 → 只读回读。**不跑 preflight、不开 bridge、不起桨**，因此不产出 READY 令牌 | 诊断 |
+| `cf85_pid_diagnostics.py` | inventory：独占电台只读 TOC/参数/供电；build：生成独立 PID 配置和原文件备份；**verify**：对活动固件清单核验预设（控制器优先级、未发布变量、单块 ≤26 字节、诊断链覆盖、只允许两处语义差异）；**readback**：把机载回读与预设逐项比对（整数精确、浮点按 float32 容差）；record：ROS 六组控制诊断订阅 + **机载日志时钟**判据。无参数写入或飞行 API。`--self-test` 离线。**2026-10-20 实测 record 30 s 地面通过；verify/readback 于 2026-10-26 加入** | 诊断 |
+| `cf85_pid_2b_prepare.py` | **纯离线候选生成**：读取已保存的 PID 预设和 2a TOC；增加按轴配对的双环 P/I/D 三块（各 24 B），计算含默认话题的总日志预算；manifest 覆盖全部自定义块，可交给现有只读 record 做后续地面检查。拒绝覆盖、缺变量、超载块和未审阅的配置覆盖。无射频/ROS/参数写入；不产出 `preset-live*`，不接入起飞流程。pytest：`test_cf85_pid_2b_prepare.py` | 离线 |
+| `cf85_pid_ground_run.sh` | **地面 PID 诊断唯一入口**：预设核验闸门 → resolve → 电池闸门 → 回滚副本一致性 → 用独立 PID preset 生成 runtime 配置 → bring-up + 30 s 链路健康 → record → 停栈 → 机载回读**并逐项比对**（回读失败即整轮失败）。自动选最新的 `preset-live*`，可用 `CF_PID_PRESET_DIR` 固定。**不跑 preflight、不开 bridge、不起桨**，因此不产出 READY 令牌 | 诊断 |
 | `cf85_pid_analyze.py` | 汇总一次地面记录：目标／实际姿态、角速度、电机输出、推力、电压、位置 | 诊断 |
 | `cf85_pid_state_check.py` / `cf85_pid_state_seq.py` | 位置估计体检：识别"平滑斜坡 vs 跳变 vs 冻结"，定位 ESTKALMAN 钳位时刻（见 F6） | 诊断 |
 | `cf85_gate_check.sh` | 确认会话闸门与 `cf85_lib.sh` 一致，并核对生产阈值/`MIN_BATTERY_V` 未被连带修改 | 自检 |
+| `cf8_token.py` | READY 令牌校验/消费（`inspect`/`claim`）。**只由 `run_cf8_acceptance.sh` 调用**；不连电台、不飞行 | 自检 |
+| `cf85_link_diag_harness.sh` | 受控链路实验入口：`usb-open-probe`（测一次 cflib open/close 的内核代价）、`stack-idle`（栈空闲 N 秒 + dmesg 前后对比）。**不发飞行命令** | 链路 |
+| `cf85_link_ab.sh` | A/B 链路对照：给定 crazyflies YAML + 保持时长，跑一次栈并输出 `link-ab-summary.json`（丢包次数、最大延迟、EKF 次数、USB reset 次数、各流 Hz）。**不发飞行命令** | 链路 |
+| `cf85_link_diag_harness.py` | 上面 harness 的 open/close 探针本体（只读一次 `pm.vbat`） | 链路 |
 | `cf85_recovery_assess.sh` / `cf85_recovery_release.sh` | 释放 `recovery_required` 互锁前逐项证明无飞行状态；释放时**归档**标记而非删除 | 自检 |
 | `cf85_preset_check.sh` / `cf85_preset_semdiff.sh` | 证明 PID preset 只差 controller 2→1 与新增日志块（语义级 diff，不受 YAML 重排干扰） | 自检 |
-| `cf85_takeoff_probe.py` | **限位下低空起飞**（默认 0.10 m / 3 s，硬上限 0.20 m / 5 s）：调 `/cf231/takeoff`+`/cf231/land`，采集 `dmp_pid_*` 遥测。要求 `--confirm-restrained`；`finally` 必发 land。**不是 CF8 验收** | 推力 |
+| `cf85_pid_preset_check.sh` | **离线**预设闸门：拿永久 `crazyflies.yaml` + 已存的活动清单核验预设，并证明永久配置仍与回滚副本逐字节一致。`--rebuild` 只生成新目录、不安装。零射频、零 ROS | 自检 |
+| `cf85_takeoff_probe.py` | **旧限位低空探针，不能直接用于 2b 自由飞行**：有 `--confirm-restrained`；调用 takeoff/land 后观察 motion/motors/attitude，正常结束路径未确认则返回码 3。源码审阅仍有缺口：仅订阅旧四块且不保存机载时间戳、结束时窗新鲜度未严格校验、整个观察窗电机峰值可能误拒已正常降落、前置失败/异常路径的 land 与落盘需再审。服务应答、打印警告或 `landed=True` 都不是独立的落地/停机证明。 | 推力（待审） |
+| `cf85_end_state_test.py` | **离线反例集**（13 项，零射频）：结束状态的三项判据（含"陀螺缺失""电机仍在转""59°/s 恒速偏航"必须拒绝）、24 位时间戳回绕（`16777166→0→50`）、真倒退仍需判失败 | 自检 |
 | `cf85_stack_for_takeoff.sh` | 起 Crazyswarm2(PID preset) 并**保持运行**，供起飞探针驱动（`cf85_pid_ground_run.sh` 跑完会停栈） | 推力 |
 | `cf85_takeoff_analyse.py` / `cf85_takeoff_raw.py` / `cf85_takeoff_verdict.py` | 起飞数据三级解读：粗汇总 / 原始时间序 / 逐项裁决（电压 vs 姿态 vs 电机） | 推力 |
 | `cf85_flight_aligned.py` | **按起飞时刻对齐**看 z(EKF) vs zrange、链路丢包、ESTKALMAN 时刻。判断"是否真离地/真飘"必用它 | 推力 |
@@ -204,6 +213,7 @@ READY_FOR_CF8
 | `cf85_battery_policy_test.py` | 上面判据的回归测试 9 项，含**真实事故 payload 回放**；离线可跑 | 电池 |
 | `cf85_incident_check.py` | 事故后只读体检：pm.state / 姿态 / z / supervisor（判断是否翻倒、是否还挂着线） | 飞后 |
 | `cf85_level_check.py` | **加速度计独立验证姿态**（不信任估计器）+ 供电 + supervisor 锁存位；上电前必跑 | 飞前 |
+| `cf85_mechanical_baseline.py` / `cf85_mechanical_run.sh` | 静止机械基线：连续记录 acc/gyro、估计姿态、四电机输出与供电，报告均值/离散度/断档；**并核验机载 `firmware_ms` 时钟**（冻结/停顿/回绕/偏快），不再只看宿主到达率。时间戳按实际 **24 位**（cflib 以 3 字节解包）解绕。不写参数、不启 ROS、不起桨。仅能测 IMU 相对重力，不能识别单个电机轴；需人工确认上电静放。`--self-test` 为离线检查 | 诊断 |
 | `flow_deck_live.py --duration 5` | **决定性**：Flow Deck 五路变量（deltaX/deltaY/motion/squal/zrange）是否有真实数据 | deck |
 | `flow_raw.py` | 完整故障签名（含 `motion.motion`、`TYPE_1W` 普查）+ 与 09-22 对照 | deck |
 | `deck_inspect.py` / `deck_diag.py` / `param_meta.py` / `param_access.py` | deck 参数/1-wire 身份/access 证明（deck.* 全 RO） | deck |
@@ -235,6 +245,42 @@ bash _dsh_scratch/cf85_smoke_test.sh              # 121 项，零射频
 bash _dsh_scratch/cf85_run_offline_tests.sh       # + pytest
 bash _dsh_scratch/cf85_radio_paths_test.sh        # 电台路径自检（零射频、不连 cf231）
 ```
+
+## 5.4 PID 地面诊断的证据要求（2026-10-26 新增）
+
+**这条回答的是"地面诊断要留下什么才算做完了"，不回答"能不能飞"。**
+结论仍然是：地面零电机输出无法测出控制余量，也无法证明形变被补偿（见 `STAGE.md` §2.2、§4）。
+
+一次地面 PID 诊断必须同时满足下面四类要求，缺任一项即判整轮无效：
+
+| 类别 | 要求 | 谁检查 |
+|---|---|---|
+| 可回退 | 永久 `crazyflies.yaml` 与保存的 `crazyflies.original.yaml` **逐字节一致**；预设只改 `all.firmware_params.stabilizer.controller` 与新增日志块 | `cf85_pid_preset_check.sh` |
+| 可加载 | 每个日志块 <= **26 字节**（固件上限）；块内变量本机固件确实发布；控制器优先级 `all` -> `robot_types` -> `robots` 逐级解析后**最终值为 1** | 同上 |
+| 覆盖完整 | 诊断链的九个问题都能被某个日志块回答，特别是 **`pm.state`**（区分挂外电与自由供电，F1 类） | 同上，`READ_ONLY_EVIDENCE` |
+| 机载生效 | 回读不是"看到日志有数就行"：逐项比对预设与机载值；**同时**校验固件日志时钟（`LogDataGeneric.timestamp`）覆盖的机载时间不少于宿主时间的 80% | `cf85_pid_ground_run.sh` 第 7 步 |
+
+**为什么单独需要机载日志时钟判据**：Crazyswarm2 侧订阅速率只证明 ROS 话题在发消息，
+不证明固件每次回调都在采样。日志块被固件冻结时，ROS 侧的 Hz 可以完全正常。
+判据取 `timestamp` 一阶差分的覆盖比例，并先做 uint32 回绕展开——回绕不是断流。
+
+**已知易错点（都已入代码，不要再靠记忆）**：
+
+1. `cflib` 的参数值是**字符串**（`'1'`）。整数参数按整数精确比较，浮点参数必须给 float32 容差：
+   `1e-3` 会读回 `0.0010000000474974513`，用等值或字符串比较会误报不一致。
+2. `cf_generate_runtime_config.py` 的 `permanent_*_sha256` 描述的是**传进去的那份 YAML**。
+   地面诊断传的是预设，所以那几个字段**不能**当作"永久配置未被改动"的证据；
+   回滚一致性必须另外用 `cmp` 对保存的原始副本单独证明。
+3. 2026-10-20 的预设**缺 `pm.state`**，且第 7 步回读曾经写成 `|| true`——
+   即电台掉了、飞机断电也会得到"成功"的结论。两处均已于 2026-10-26 修正。
+4. **机载毫秒计数器偏快（2026-10-26 实测）**：固件 `LogDataGeneric.timestamp` 走完 32.8 s 时，
+   宿主 `monotonic` 只过了 30.86 s（两次独立测量分别快 6.3% / 9.2%）。同区间 `/proc/uptime`
+   与 `monotonic` 只差 0.5 ms，**宿主侧是正常的**。所以按固件秒算恰好是标称 20.00 Hz，
+   按真实秒算是 21.83 Hz。**任何 Hz 与时长都要注明时间基**；切片、对齐、判定间隔一律用固件时间戳，
+   不要用宿主 wall 时间戳（本轮 wall 还出现过两次约 2.97 s 跳变，见 §7「WSL 时钟域不一致」）。
+
+**边界**：以上四项全绿只表示"控制器选择与日志确实落到机体上、并且持续出数"。
+它不表示 PID 调得好，不表示电源能供起飞电流，也不表示歪支脚造成的推力偏斜被补偿。
 
 ## 6. 已知故障库（先对照签名，再动手；禁止跳过对照直接"重新排查"）
 
@@ -424,6 +470,11 @@ bash _dsh_scratch/cf85_radio_paths_test.sh        # 电台路径自检（零射�
 - **修复**：`cf_ops_source_env()` 自动激活 `~/crazyswarm-env`；`cf_ops_radio_busid()` 运行时解析。
 - **发生**：2026-10-13（首次真机跑 cf_prepare.sh 暴露；此前只有离线验证）。
 - **教训**：**离线验证过的脚本不等于真机跑过**；入口首次上真机前先走一遍只读路径。
+- **2026-10-20 同族第二例（已修）**：`cf8_token.py` 把"binding 内容变了（sha/robot）"与
+  "binding 完好但地址与 token 授权的不一致"合并成同一句 `runtime binding changed after prepare`。
+  后果：`run_cf8_acceptance.sh` 第 67 行的 URI 锁永远不可达，`cf85_smoke_test.sh` 的
+  `token authorises` 检查恒 FAIL（121 项里唯一一项）。修复 = 拆成两条独立报错，sha/robot 仍先判。
+  **教训**：两个不同故障合并成一句报错，等于让后一个闸门变成死代码；smoke 里那条 FAIL 就是它的探针。
 
 ### F11 判读陷阱：汇总指标的时间窗口（把落地后的 EKF 漂移算成飞行漂移）
 
@@ -464,6 +515,74 @@ bash _dsh_scratch/cf85_radio_paths_test.sh        # 电台路径自检（零射�
   3. 该轮 `cf85_level_check.py` 自带的宽泛解码（如"can_fly=YES"）同样**不可**作为适航证明。
 - **发生**：2026-10-20。教训：**"我以为是这个含义"不等于"固件是这个含义"。**
 
+### F14 `Low unicast receive rate` 与 `Unexpected number of unicast packets`
+
+- **签名**：`launch.log` 里成对出现
+  `Unexpected number of unicast packets. Sent: 808. Received: 35912`（Received 是 Sent 的几十倍）
+  与 `Low unicast receive rate (0.84 < 0.90). Sent: 179. Received: 149`。
+- **判据（必须分开看，二者来源不同）**：
+  - **开头那条 “Received 几十倍” 是软件伪影，不是重传。**
+    `crazyflie_server.cpp` 第 1085–1086 行 `uint16_t previous_numRxBc/previous_numRxUc;`
+    **没有默认初始化**，构造函数初始化列表也未包含它们。首次回调里
+    `deltaRxUc = data->numRxUc - <未初始化值>` 下溢，再被 `+= 65535` 的“溢出修正”放大。
+    实测比率 82.9× / 44.4× / 47.1× / 48.8× 随机分布，正是未初始化内存的特征。
+    **不要用它推断“重传放大”或“机体收到更多包”。**
+  - **`Low unicast` 方向可信、幅度不可信。** 它用同一回调的
+    `num_tx_unicast`（dongle 发送数）与 `num_rx_unicast`（机体 `radio.numRxUc` 增量），
+    分母干净、分子受上面那个偏移污染一次后即自洽，所以“确实丢了一些”成立，
+    但 0.84 / 0.87 这类具体值不能当精确测量用。
+- **判据（与硬件无关的部分）**：
+  - 丢包与**起飞负载无关**（2026-10-21 00:03 地面零飞行命令即复现）；
+  - 丢包与 **USB 设备复位无因果**（200 s 窗口 0 reset 仍有 4 次；反向亦成立——
+    告警在前，`usb 1-1: reset` 晚 21 s）；
+  - `vhci_hcd: urb->status -104` 出现在告警**之后** 47 s，属后果不是原因。
+- **已验证的缓解（非修复）**：把日志频率从 10/20 Hz 降到 5/10 Hz 后，935 s **零丢包**；
+  但原频率 936 s 也只有 1 次，**样本量不足以判定因果**，只能算弱证据。
+- **仍存假设**：主机侧调度/USB 提交延迟、射频 ACK 丢失、dongle 重传策略。
+  未排除的物理变量：USB 口（是否经 hub）、USB 线长、信道占用。
+- **修复**：**不得**改 `warnings.communication.min_unicast_receive_rate`（默认 0.9）来让告警消失。
+  若确需消除伪影，正确做法是给那两个成员加 `{0}` 初始化（上游代码，需单独评估）。
+- **发生**：2026-10-20（起飞后 2.64 s）；2026-10-21（地面多次复现）。
+- **教训**：**先读源码再解释统计量。** 一个未初始化变量能让整条归因链走错方向。
+
+### F15 机体侧躺/`tumbled` 锁存时起栈，会伪造出“EKF 发散 + 位置漂移”
+
+- **签名**：`launch.log` 里 `ESTKALMAN: State out of bounds, resetting` **高频连续**（本次 156 次 / 8 min）；
+  `stateEstimate.y` 平滑单调涨到 10 m 以上；`odom.twist.linear.y` 稳定在 4–9 m/s；
+  但 `zrange` 全程 0.015–0.026 m（机体根本没离地）；`squal` 正常 50–90。
+- **判据**：**先看 `supervisor.info`**。本次 `548 = 0x0224`（`tumbled` 锁存，`can_fly` 消失）。
+  再用**加速度计独立验证**（`cf85_level_check.py`）：本次 `acc=(−0.004, +0.970, −0.279)`、
+  机体 Z 轴偏离重力 **74.0°** → **飞机侧躺着**。侧躺时光流芯片看到的是墙面/侧向运动，
+  EKF 把它积分成“水平飞出去”，数字看着像漂移，其实是物理姿态。
+- **区分**：F6（EKF 真的发散）发生在机体**水平**时；本条发生在机体**倾斜**时。
+  两者 `ESTKALMAN` 行一模一样，**只能靠姿态读数区分**。
+- **修复**：把机体摆正 → **给飞机断电重启**（`tumbled` 锁存重启 ROS 不清，见 F1 残余）→
+  重跑 `cf85_level_check.py` 确认 `tumbled: no` 且倾斜 < 5°。
+- **发生**：2026-10-21 14:09（换 USB 口期间飞机被碰倒）。同轮 13:46 那次 `zrange` 冲到
+  0.218 m 又落回，是同一件事的前兆，当时没认出来。
+- **教训**：**起栈前必须验姿态，不能只看“连上了”。** 一次侧躺能产出 8 分钟看起来
+  “很像真故障”的数据，并让整轮实验作废。
+
+### F16 突发型链路劣化（26 秒内连续丢包 + 延迟冲到 923 ms）
+
+- **签名**（2026-10-21 15:03–15:04，`20261021-144819-link-port2c-900`）：
+  正常跑了 **900 s**（延迟 ≤16 ms），随后在 **t+904…930 的 26 秒内**连续 4 条
+  `Low unicast`（0.66 / 0.30 / 0.68 / 0.84），伴随 `High latency` 574 → 923 → 141 → 435 → 226 ms；
+  之后**自行恢复**（t+953 起又回到 10–12 ms）。
+- **判据（关键鉴别）**：
+  1. 爆发窗口内 `dmesg --time-format=iso` **一条内核 USB 事件都没有**；
+  2. `urb->status -104` 在停栈前只有 14:37 那 2 条，其余 37 条**全部在 15:05:05 停栈之后**；
+  3. recorder 侧出现 **0.9–1.1 s 的采样断档**（5 次），而 `squal` 全程 13–50 正常、`z` 稳定在 0.015–0.018 m；
+  4. `Sent` 数值在爆发期间是 **132–419**（正常约 300–870），说明 dongle 侧发包节奏也被拖慢。
+  → **不是 USB 复位、不是 deck、不是姿态**。是**主机或 dongle 侧的瞬时调度/提交停顿**，
+  持续约 26 s 后自愈。
+- **与 F14 的关系**：F14 说的是“`Received ≫ Sent` 那条是未初始化伪影”；本条讲的是**真实的**
+  `Low unicast`，二者的 `Sent/Received` 量级不同（伪影是几十倍，本条是 0.3–0.84）。
+- **修复**：**尚无**。可试：换短 USB 线、避免主机进入低功耗、`usbipd` 直通模式。
+  **不得**改 `min_unicast_receive_rate`。
+- **发生**：2026-10-21 15:03（新 USB 口）；2026-10-20 21:32（起飞后 2.64 s，可能同源）。
+- **教训**：**“900 s 跑完没事”不等于稳定**——劣化可以是 26 秒的突发，只看总数会把它平均掉。
+
 ## 7. 环境坑（每坑只写一次；新坑先验证再入表）
 
 | 坑 | 现象 | 处理 |
@@ -481,6 +600,9 @@ bash _dsh_scratch/cf85_radio_paths_test.sh        # 电台路径自检（零射�
 | Windows 改文件 CRLF | `write_text` 产生整文件假 diff | 字节读写 + `replace(b"\r\n", b"\n")` |
 | WSL 重启后 attach | 显示 `already attached to a client` | 先显式 `usbipd detach --busid <B>` 再 attach |
 | 探针挂死 | 被后台 job 占电台 | 先清进程再跑；绝不并行两个探针（见 F12） |
+| **WSL 时钟域不一致** | 用 `boot_epoch + dmesg时间戳` 推算墙钟，会**偏 2 s 以上**，足以把因果判反 | **不要推算**。用 `dmesg --time-format=iso`（本机已支持）直接拿 CST 墙钟。实测：`time.time()` 在 60 s 内跳变 +2.335 s，而 `/proc/uptime` 与 `time.monotonic()` 同步 |
+| **WSL 墙钟阶梯跳变** | 2026-10-26 23:05 那轮约 67 s 内，`wall - monotonic` 偏移量先后跳了**约 2.97 s 两次**；不是匀速漂移，采样段内几乎恒定 | 只用 `time.monotonic()` 做间隔与排序，墙钟只用来**标注**时刻。判是否跳变看 `wall - monotonic` 呈阶跃 |
+| **机体毫秒计数器偏快** | 不是宿主问题：同区间 `/proc/uptime` 与 `monotonic` 差 0.5 ms，而固件 `timestamp` 快 6.3–9.2% | 日志按固件时间戳排序与切片；报 Hz、时长必须注明时间基（固件秒 vs 真实秒）。判据见 §5.4 第 4 条 |
 
 ## 8. 证据布局（每次运行一个目录，永不覆盖历史）
 

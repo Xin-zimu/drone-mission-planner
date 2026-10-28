@@ -1,100 +1,74 @@
 # 会话日志（当前状态快照）
 
-> **这是一份快照，不是编年史。** 只写"现在是什么"，不写"以前以为是什么"。
-> 历史过程见 `docs/archive/session-history-*.md`；本文件每次会话**重写**，不追加。
-> 新会话读完本文件即可开工；发现本文件与现实不符 → 先改本文件，再动手。
->
-> **不在这里重复完成判据** —— 它们只在 `STAGE.md` §2，那里直接挂实测证据。
-> 本文件只回答：现在能不能飞、飞机是什么状态、环境有什么坑、下一步做什么。
+> **这是一份快照，不是编年史。** 判据与实测证据只在 `STAGE.md` §2，推进顺序只在 §5。
+> 历史过程已归档到 `docs/archive/session-history-2026-10-29-before-pid2b-offline.md`。
 
-- 最近重写：2026-10-20 23:2x
-- 当前阶段：**CF8 单机真实 hover**（目标与判据见 `STAGE.md`）
-- **一句话状态：不可飞。** 四条判据中三条不成立、一条未测
+- 最近重写：2026-10-29，2b 离线日志准备。
+- 当前阶段：CF8 单机真实 hover。
+- **一句话状态：不可飞。** 电源判据通过；链路 ❌、定位 ❌、姿态 ❌ 尚未通过。2a 静态筛查已完成，不再重复。
+- 用户目标：用飞控缓解机架歪斜。当前无法判断可补偿程度，尚未决定调增益、积分或混控。
 
----
+## 1. 当前阻断与下一步
 
-## 1. 为什么现在不能飞
+用户已确认场地没有问题，并明确目前只有软件 `land` 可用。2026-10-27 的 `land` 服务应答后飞机仍继续飞，最终撞椅翻倒，不能把同一路 `land` 当作已验证的失控终止手段。
 
-判据原文与证据**只在 `STAGE.md` §2**，此处不复制数值。三条不成立的简述：
+本地 Crazyswarm2 源码存在 `emergency()` → `cf_.emergencyStop()` → CRTP 发送路径。这里只核验了软件入口，未验证当前固件的电机停转效果，也未验证失链行为。它与普通命令、日志共用无线链路，不能当作独立备份。
 
-| 判据 | 状态 | 一句话 |
-|---|---|---|
-| 电源 | ❌ | 本包 sag 超标，跌破固件硬断电 |
-| 链路 | ❌ | 起飞后约 2.6 s 开始丢包 |
-| 定位 | ❌ | 起飞后约 5 s EKF 发散，`z` 与 `zrange` 差一个量级 |
+**下一次实机步骤先拆桨验证终止通路，并检查新增日志负载；不是直接起飞。** 具体顺序见 `STAGE.md` §5。上电、转电机和后续带载分别按当次范围确认；本轮未获得这些授权。系留不是唯一方式，场地也不能替代结束机制。
 
-**形变问题未触及**：以上任一条不成立，"飞控能否补偿形变"就无法判断——
-不是形变太严重，是别的问题先发生。三次翻倒（10-14 两次 + 10-20 一次）都不能再归因于
-"单一机械根因"。
+## 2. 已核实的诊断边界
 
----
+- 2a 已通过静态筛查（证据见 `STAGE.md` §2.4），不能排除起桨后的振动、采样、估计或机械问题。
+- 带载日志里最先钳位的是 pitch，之后 yaw、roll；pitch 首次钳位时未见电机限幅，只说明该时刻不同步。
+- 对角电机差主要对应偏航，不能作为横滚配平负担的直接量度。控制输出饱和不能证明积分饱和。
+- `stabilizer.yaw` 和 `stateEstimate.yaw` 同源；`gyro.z` 是机体系角速度，净积分还会正负抵消。不能据此单独证明估计器漂移。
+- `roll_kff/pitch_kff` 不是常值 trim，降低 `thrustBase` 不能直接创造悬停余量；不用 `motorPowerSet` 当闭环 trim。
+- 根因仍未分离。下一份带载数据应围绕 pitch 首次钳位对齐目标、实测、双环 P/I/D、电机与机载时间，不预设偏航是起因。
 
-## 2. 当前飞机与设备状态（实测）
+## 3. 当前工具准备状态
 
-| 项 | 值 |
+| 工具或产物 | 当前状态与限制 |
 |---|---|
-| 电池 | 官方 250 mAh 1S；**本包已劣化**（sag 1.081 V）。静置读数会回升，**静置正常不代表能飞** |
-| 电台 | Crazyradio 2.0 `1915:7777`，busid 会变（历史 1-3 → 1-4 → 3-1）；WSL 内需 USB/IP 转接 |
-| 固件 | `a54f11eb6d00`；`pm.lowVoltage=3.2`、`pm.criticalLowVoltage=3.0` |
-| Flow Deck | 正常（`bcFlow2=1`、`bcZRanger2=1`、`squal` 有数据）。**会因上电抖动掉枚举**，见 §5 F3 |
-| 机载控制 | `stabilizer.controller=1`(PID)、`estimator=2`(Kalman)、`motorPowerSet.enable=0` |
-| `commander.enHighLevel` | **仅由 Crazyswarm2 启动时写为 1**。单独探针读到 0 是固件默认，不是故障 |
-| 机架 | 用户确认：电机塑料支脚**固定歪斜、无裂纹**、可更换。倾斜量未测量 |
-| 最近姿态 | 静置 roll 2.77° / pitch 4.26°（加速度计与估计器大体一致） |
+| `cf85_pid_2b_prepare.py` | 纯离线生成器；根据已保存 TOC，在既有 PID 预设副本上新增按轴配对的双环 P/I/D 三块。无射频、ROS、参数写入或指令 API |
+| 候选产物 | `cf_evidence_runs/20261029-pid2b-offline/candidate/`。名称避开 `preset-live*` 自动发现；不是起飞配置，不改变原有起栈脚本 |
+| 新 manifest | 覆盖全部 11 个自定义话题；可供现有 `cf85_pid_diagnostics.py record` 做地面日志检查。保存命名字段、宿主到达时间、原始 24 位机载时间戳 |
+| 验证边界 | 已通过保存 TOC 的变量/字节核验和离线模拟采集；尚未验证当前机载参数、块分配和无线负载。20 Hz 不足以重建每个控制周期 |
+| 旧起飞探针 | `cf85_takeoff_probe.py` 只采旧四块且丢弃机载时间戳；结束观察的新鲜度、完整落盘与正常降落窗口仍需修正。不能删除限位开关后直接用于 2b |
+| 原 PID 预设 | `cf_evidence_runs/20261026-preset/preset-live/`，曾机载验证。新增三块不继承该次实机通过结论 |
 
----
+本轮定向验证：`test_cf85_pid_2b_prepare.py` **13 passed**（包括缺变量/超块长/配置覆盖拒绝、文件隔离、完整 manifest、模拟 ROS 采集与 24 位回绕）；Ruff 与 mypy（两个新文件）通过。三项文档自检通过（consistent / sound / handoff，证据目录 19/19）；结果保存在本轮 `validation-summary.json`，不替代物理验证。
 
-## 3. 安全不变量（违反即停）
+## 4. 硬件与环境事实
 
-| 项 | 当前值 | 位置 |
-|---|---|---|
-| `hardware_flight_enabled` | **false** | `bridge.yaml` L7 |
-| `battery_critical_voltage` | **3.7 V**（地面/静置放行判据） | bridge.yaml |
-| `battery_critical_airborne_voltage` | **3.3 V**（空中/带载判据） | bridge.yaml |
-| `minimum_battery_critical_samples` | **3**（去抖） | bridge.yaml |
-| preflight `MIN_BATTERY_V` | **4.00 V**（飞行放行线） | `cf84_preflight.py` L41 |
-| 会话闸门 `BATTERY_FORBID_V` | **3.50 V**（地面诊断，**非**飞行放行线） | `cf_ops_lib.sh` + `cf85_lib.sh`（两处必须一致） |
-| 外电互锁 | `pm_state≠0` 或充电电流 >0.01 A → **一律禁飞**，电压不可覆盖 | `cf85_battery_policy.py` |
-
-**会话闸门 3.50 V 的边界**：它只放行**不起桨**的地面诊断。飞行仍由 preflight 4.00 V 和空中 3.3 V 把关。
-两个 lib 曾因只改一个导致子进程静默覆盖——`cf85_gate_check.sh` 用于防漂移。
-
----
-
-## 4. 仓库状态
-
-| 项 | 值 |
+| 项 | 最近已知状态（不是本轮实机回读） |
 |---|---|
-| 分支 | `codex/v1.3-crazyflie-execution` |
-| **验证基线** | **`f3189f1`**（文档体系重构完成、三项自检全绿的那次提交）。<br>**这不是"实时 HEAD"**——本字段只记录"最后一次经过验证的代码基线"，允许落后于 HEAD |
-| push | ahead 10，未 push（默认不 push，除非用户明确要求） |
-| 工作树 | **仍未提交**：2026-10-14 的电池判据分级（5 个产品文件 + 2 个测试）；根目录 3 份 10-14 报告（未跟踪）。`_dsh_scratch/` 与 `cf_evidence_runs/` 在**仓库外** |
-| 文档自检 | `python scripts/docs/cf85_{doc_consistency,stage_audit,handoff_sim}.py`（已入仓库，可移植） |
-| 证据可获取性 | 证据目录在仓库**外**（`D:\Deepseek WorkSpace\cf_evidence_runs\`）。**全新克隆不含证据**，届时自检会报"证据缺失"，那是正确行为，不是通过 |
+| 固件 | 2a 保存的清单：`a54f11eb6d00`，`revision0=2773422571`、`revision1=27904`、`modified=0` |
+| 电池/静态姿态/supervisor | 最近一次观测为 2026-10-28 的 2a，见 `STAGE.md` §2.4。当前是否上电未知，本轮未连接 |
+| 机架 | 用户确认塑料支脚固定歪斜、无裂纹、可更换；单个电机轴倾斜尚未量化 |
+| 电台 | Crazyradio 2.0 `1915:7777`；最后报告已 detach。busid 随插拔变化，后续须运行时解析，不沿用旧值 |
+| 机载时间 | 日志时间戳实际为 **24 位**；历史 onboard/host 比值偏离 1，报告速率和时长必须明确时间基 |
+| Flow Deck | 有掉枚举/冻结历史（F5），必须看实时 flow/range，不能只看 `deck.bc*` 参数 |
+| 链路历史 | 无电机负载时也复现过丢包；USB 复位与低 unicast 告警没有已证因果。计数器统计伪影及长窗口对照见故障库与 `cf_evidence_runs/20261021-003500-link-diagnosis/LINK_DIAGNOSIS_2026-10-21.md` |
 
----
+## 5. 安全不变量
 
-## 5. 环境事实（每坑只记一次）
-
-| 项 | 值 |
+| 项 | 当前配置基线 |
 |---|---|
-| 仓库真路径 | `D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main`；`D:\dmp` 是 junction |
-| WSL | Ubuntu 24.04 + ROS 2 Jazzy；cflib/ruff/mypy 都在 venv `~/crazyswarm-env`（系统 python3 没有） |
-| 电台掉线 | WSL 空闲会关机 → USB/IP 失效；`usbipd list` 显示 Attached 可能是陈旧状态。**一律用 `run_probe.sh`** |
-| pytest | 必须 `--basetemp=<新目录>`；5 个 `test_ui_*.py` 因缺 PySide6 需 `--ignore` |
-| ROS 发现域 | 必须 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` |
-| **DDS 假 Link FAIL 真因** | **启动顺序**，不是发现域：recorder 先起 → 0/4 通过；Crazyswarm2 先起 → 4/4 通过 |
-| 探针与栈互斥 | cflib 探针与 Crazyswarm2 **永不同时占电台** |
-| cflib `get_value()` | 返回**字符串**（如 `'1'`），`== 1` 恒 False。判定前必须数值归一化 |
+| `hardware_flight_enabled` | **false** |
+| 地面/空中低压阈值 | `battery_critical_voltage=3.7` / `battery_critical_airborne_voltage=3.3`，连续 3 样本 |
+| 飞行 preflight | `MIN_BATTERY_V=4.00` |
+| 地面诊断会话闸门 | 两个 lib 的 `BATTERY_FORBID_V=3.50`，仅用于不起桨诊断，不是飞行放行线 |
+| 外电互锁 | `pm.state≠0` 或充电电流 >0.01 A 禁飞，电压不能覆盖 |
 
----
+本轮 arm / takeoff / land / go_to / emergency **均未发送**；未 attach 电台、未启动飞行栈、未写参数或 NVM、未改阈值。后续授权不由离线报告自动获得。
 
-## 6. 下一步
+## 6. 仓库与运行注意
 
-**推进顺序只在 `STAGE.md` §5**，此处不复制。当前卡在第 1 步：换健康电池、复测 sag。
-
-本阶段之外的待办（不阻塞 CF8）：
-
-- [ ] `FALLBACK_ADDRESS_IN_USE`：机体答 `E7E7E7E7E7`，`cf_identity.yaml` 偏好 `...E705` 无应答
-- [ ] 提交未提交改动（产品代码与规范文档分开提交）
-- [ ] 软件线 M2（真机航点执行，默认关闭）—— 阶段启动时再展开，见 `PLAN.md` §4
+- 分支 `codex/v1.3-crazyflie-execution`；最后一次记录的验证基线仍为 `f3189f1`，不是实时 HEAD。
+- 工作树已有历史产品代码、测试、文档与未跟踪报告改动；本轮只改离线工具和相关文档，没有提交或 push。
+- 仓库真路径 `D:\Deepseek WorkSpace\drone-mission-planner-main\drone-mission-planner-main`，`D:\dmp` 为 junction。
+- `_dsh_scratch/` 和 `cf_evidence_runs/` 在仓库外，全新克隆不含工具与证据；缺失应如实报错。
+- WSL Ubuntu 24.04 / ROS 2 Jazzy；Python、cflib、ruff、mypy 在 `~/crazyswarm-env`。ROS 发现域须为 `LOCALHOST`；Crazyswarm2 先起，再启动 recorder。
+- cflib 探针与 Crazyswarm2 不同时占用电台；`get_value()` 返回字符串，比较前归一化。
+- pytest 使用新的 basetemp；不要触碰历史故障临时目录。
+- 本阶段之外的待办：地址策略回退问题、历史改动分组提交、默认关闭的 M2 真机航点路径，均不在本轮扩张。

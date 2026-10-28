@@ -48,7 +48,11 @@ GROUND_TRUTH = {
     "flyable": False,
     "blocking_count": 3,
     "airframe_question_answered": False,
-    "next_action_mentions_battery": True,
+    # 2026-10-27: criterion 1 PASSED (sag 0.552 V), so the gated next step is no longer
+    # "change the battery" -- it is separating the roll limit-cycle root cause. Keep this in
+    # step with STAGE section 5: a checker that still demands the old step passed on stale
+    # struck-through text once, which is exactly the drift this file exists to catch.
+    "next_action_is_attitude": True,
 }
 
 
@@ -79,18 +83,21 @@ def main() -> int:
     if not unanswered:
         fails.append("docs imply the airframe question is settled")
 
-    # 4. Next action must be the gated step 1, not a flight.
+    # 4. The next action must be the gated live step, not a flight.
     order = re.search(r"## 5\. 推进顺序(.+?)(?=\n## )", stage, re.DOTALL)
-    first_step = ""
+    # A step may be struck through (~~...~~) once it is DONE; the live next step is the first
+    # one that is not struck through. Reading a completed step as the next action would let a
+    # cold session repeat work that is already finished.
+    live_step = ""
     if order:
         for line in order.group(1).splitlines():
-            if re.match(r"\s*1\.\s", line):
-                first_step = line.strip()
+            if re.match(r"\s*\d+\.\s", line) and "~~" not in line:
+                live_step = line.strip()
                 break
-    step1_battery = "换健康电池" in first_step
-    print(f"  4. 下一步是换电池而非起飞      : {step1_battery}  ({first_step[:60]})")
-    if not step1_battery:
-        fails.append("next action is not the gated first step")
+    step_is_attitude = ("姿态" in live_step) and ("起飞" not in live_step.split("**")[0][:20])
+    print(f"  4. 下一步是查姿态而非起飞      : {step_is_attitude}  ({live_step[:60]})")
+    if not step_is_attitude:
+        fails.append("next action is not the gated live step (attitude)")
 
     # 5. Must warn against repeating rejected routes.
     warns_repeat = "重新考虑" in stage and "已检验的假设" in stage

@@ -137,6 +137,8 @@ The final suite covers geometry, rasterization, A*, smoothing, energy, assignmen
 - [会话工作流协议](docs/workflow/session-protocol.md) — 会话启动/收尾节奏、报告格式、通用铁律
 - [会话日志](docs/workflow/session-log.md) — **唯一**当前状态页（git HEAD、硬件、阻断点、待办）
 - [CF8 真机操作规范](docs/workflow/cf8-operations.md) — 真机 SOP、已知故障库、工具索引、环境坑
+- 静止机械基线可用操作规范中的 `cf85_mechanical_baseline.py` 采集；IMU 倾斜不代表单个电机轴倾斜，当前测量条件与证据见 [阶段记录](docs/workflow/STAGE.md)。
+- 2b 的 PID 分项日志候选由 `cf85_pid_2b_prepare.py` 离线生成；保存的 TOC 核验不代表当前机载验证，拆桨停机验证与日志负载检查见 [推进顺序](docs/workflow/STAGE.md#5-推进顺序前一条不绿不进下一条)。
 - [软件研发线工作流](docs/workflow/dev-workflow.md) — 开发循环、验证命令、提交纪律、环境坑
 - [历史交接归档](docs/archive/README.md) — 旧 handoff 只查历史，不作为事实基线
 
